@@ -1,0 +1,1010 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>LB</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <div id="app">
+
+    <!-- ═══ LOADING SCREEN ═══ -->
+    <div id="loading-screen" class="loading-screen">
+      <div class="loading-content">
+        <div class="loading-logo-wrap">
+          <span class="loading-logo-l">L</span><span class="loading-logo-b">B</span>
+        </div>
+        <div class="loading-subtitle">Localization Editor</div>
+        <div class="loading-dots">
+          <span class="loading-dot"></span>
+          <span class="loading-dot"></span>
+          <span class="loading-dot"></span>
+        </div>
+        <div class="loading-label">ЗАВАНТАЖЕННЯ</div>
+      </div>
+    </div>
+
+    <!-- ═══ WELCOME SCREEN ═══ -->
+    <div id="welcome-screen" class="welcome-screen">
+      <div class="welcome-inner">
+
+        <div class="welcome-header">
+          <h1 class="welcome-title">LB</h1>
+          <p class="welcome-subtitle">Localization Editor</p>
+        </div>
+
+        <div class="welcome-open-row">
+          <button class="welcome-card" id="welcome-open-other">
+            <span class="welcome-card-icon">&#x1F4C1;</span>
+            <span class="welcome-card-label">Відкрити теку</span>
+            <span class="welcome-card-hint">.txt файли</span>
+          </button>
+          <button class="welcome-card" id="welcome-open-json">
+            <span class="welcome-card-icon">&#x1F4C4;</span>
+            <span class="welcome-card-label">Відкрити JSON</span>
+            <span class="welcome-card-hint">Авт. визначення</span>
+          </button>
+        </div>
+
+        <div class="welcome-recent-section">
+          <h2 class="welcome-section-title">Останні файли</h2>
+          <div class="welcome-recent-list" id="welcome-recent-list">
+            <div class="welcome-empty">Немає останніх файлів</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div id="split-container" class="hidden">
+
+      <!-- ═══ LEFT PANEL ═══ -->
+      <div id="left-panel">
+        <div class="search-box">
+          <span class="search-icon">&#x2315;</span>
+          <input type="text" id="search-input" placeholder="Фільтр записів...">
+          <button class="search-clear" id="search-clear">&times;</button>
+        </div>
+
+        <div id="entry-list-row">
+          <div id="entry-list-container">
+            <div id="entry-list"></div>
+          </div>
+          <canvas id="minimap" title="Мінімапа"></canvas>
+        </div>
+
+        <div id="count-label">Записів: 0</div>
+
+        <div class="progress-compact">
+          <div class="progress-bar-track">
+            <div class="progress-bar-fill" id="progress-bar"></div>
+          </div>
+          <div class="progress-labels">
+            <span id="prog-label-entries">&mdash;</span>
+            <span class="progress-pct" id="progress-pct">0%</span>
+            <span id="prog-label-lines">&mdash;</span>
+            <button class="schema-btn" id="schema-btn" title="Схема підрахунку"></button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ SPLIT HANDLE ═══ -->
+      <div id="split-handle"></div>
+
+      <!-- ═══ RIGHT PANEL ═══ -->
+      <div id="right-panel">
+        <div class="meta-line">
+          <span class="meta-file" id="meta-file">&mdash;</span>
+          <span class="meta-sep">&middot;</span>
+          <span id="meta-text-n">text: &mdash;</span>
+          <span class="meta-sep">&middot;</span>
+          <span id="meta-sp-n">sp: &mdash;</span>
+          <span class="meta-sep meta-chars-sep">&middot;</span>
+          <span id="meta-words" class="meta-chars"></span>
+          <span class="meta-sep meta-chars-sep">&middot;</span>
+          <span id="meta-chars" class="meta-chars" title="Символи: усього / без розмітки"></span>
+          <span id="meta-dirty"></span>
+          <span class="meta-shortcut-hint" id="meta-hint"></span>
+        </div>
+
+        <div class="editor-toolbar" id="editor-toolbar">
+          <button class="tb-btn tb-icon-save" id="tb-save" title="Зберегти (Ctrl+S)"></button>
+          <button class="tb-btn tb-icon-save-as" id="tb-save-as" title="Зберегти як... (Ctrl+Shift+S)"></button>
+          <span class="tb-sep"></span>
+          <button class="tb-btn tb-icon-find" id="tb-find" title="Знайти (Ctrl+F)"></button>
+          <button class="tb-btn tb-icon-replace" id="tb-replace" title="Замінити (Ctrl+H)"></button>
+          <span class="tb-sep"></span>
+          <button class="tb-btn tb-icon-wrap" id="tb-wrap" title="Автоперенос тексту (Ctrl+Shift+W)"></button>
+          <span class="tb-sep"></span>
+          <button class="tb-btn tb-icon-migrate" id="tb-migrate" title="Перенесення"></button>
+          <span class="tb-sep"></span>
+          <button class="tb-btn tb-icon-show-all" id="tb-show-all" title="Показати всі символи"></button>
+          <span class="tb-sep"></span>
+          <button class="tb-btn tb-icon-undo" id="tb-undo" title="Скасувати (Ctrl+Z)"></button>
+          <button class="tb-btn tb-icon-redo" id="tb-redo" title="Повторити (Ctrl+Y)"></button>
+        </div>
+
+        <div id="tab-bar"></div>
+
+        <div id="flat-editor-container">
+          <div class="editor-highlight-wrapper" id="flat-wrapper">
+            <div class="line-gutter" id="flat-gutter"></div>
+            <div class="editor-highlight" id="flat-highlight"></div>
+            <textarea id="flat-edit" spellcheck="false" placeholder="Ctrl+O &mdash; відкрити JSON&#10;Перетягніть файл у вікно&#10;F1 &mdash; палітра команд"></textarea>
+            <button class="scroll-btn scroll-top hidden" title="На початок">&uarr;</button>
+            <button class="scroll-btn scroll-bottom hidden" title="В кінець">&darr;</button>
+          </div>
+        </div>
+
+        <div id="split-editor-container" style="display:none;">
+          <label class="editor-label">Text</label>
+          <div class="editor-highlight-wrapper" id="text-wrapper" style="flex:3;">
+            <div class="line-gutter" id="text-gutter"></div>
+            <div class="editor-highlight" id="text-highlight"></div>
+            <textarea id="text-edit" spellcheck="false"></textarea>
+            <button class="scroll-btn scroll-top hidden" title="На початок">&uarr;</button>
+            <button class="scroll-btn scroll-bottom hidden" title="В кінець">&darr;</button>
+          </div>
+          <label class="editor-label">Speakers</label>
+          <div class="editor-highlight-wrapper" id="sp-wrapper" style="flex:1;">
+            <div class="line-gutter" id="sp-gutter"></div>
+            <div class="editor-highlight" id="sp-highlight"></div>
+            <textarea id="sp-edit" spellcheck="false"></textarea>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Status Bar -->
+    <div id="status-bar" class="hidden">
+      <span id="status-text">Готово. Ctrl+O відкрити · F1 клавіші</span>
+      <span id="status-cursor" class="status-cursor"></span>
+      <span id="status-hint">F1 &mdash; клавіші</span>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════
+       MODALS
+       ═══════════════════════════════════════════════════════ -->
+
+  <!-- Ask / Confirm -->
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div id="ask-modal" class="modal hidden">
+      <div class="modal-header">
+        <h3 id="ask-title">Підтвердження</h3>
+        <button class="modal-close" data-modal-close>&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="ask-text" id="ask-text"></div>
+      </div>
+      <div class="modal-footer ask-buttons" id="ask-buttons"></div>
+    </div>
+  </div>
+
+  <!-- Settings -->
+  <div id="settings-overlay" class="modal-overlay hidden">
+    <div id="settings-modal" class="modal hidden">
+      <div class="modal-header">
+        <h3>Налаштування</h3>
+        <button class="modal-close" id="settings-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="tab-bar">
+          <button class="tab-btn active" data-tab="look">Вигляд</button>
+          <button class="tab-btn" data-tab="editor">Редактор</button>
+          <button class="tab-btn" data-tab="save">Збереження</button>
+          <button class="tab-btn" data-tab="plugins">Плагіни</button>
+          <button class="tab-btn" data-tab="themes">Теми</button>
+        </div>
+
+        <!-- Tab: Вигляд -->
+        <div class="tab-content active" data-tab="look">
+          <div class="form-row">
+            <label>Тема:</label>
+            <select id="set-theme">
+              <option value="dark">Темна</option>
+              <option value="light">Світла</option>
+              <option value="blue-night">Синя ніч</option>
+              <option value="green-forest">Зелений ліс</option>
+              <option value="warm-amber">Тепла амбра</option>
+              <option value="rose">Рожева</option>
+              <option value="github-dark">GitHub Dark</option>
+              <option value="notepadpp">Notepad++</option>
+              <option value="dracula">Dracula</option>
+              <option value="alucard">Alucard</option>
+              <option value="nier">NieR: Automata</option>
+              <option value="nier-replicant">NieR Replicant</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>Шрифт:</label>
+            <select id="set-font">
+              <option>Consolas</option>
+              <option>Cascadia Code</option>
+              <option>Cascadia Mono</option>
+              <option>Courier New</option>
+              <option>JetBrains Mono</option>
+              <option>Fira Code</option>
+              <option>Source Code Pro</option>
+              <option>Lucida Console</option>
+              <option>DejaVu Sans Mono</option>
+              <option>Ubuntu Mono</option>
+              <option>Noto Sans Mono</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>Розмір шрифту:</label>
+            <input type="number" id="set-font-size" min="8" max="32" value="11">
+            <span style="color:var(--text-muted)">пт</span>
+          </div>
+          <div class="form-row">
+            <label>Перенос рядків:</label>
+            <label><input type="checkbox" id="set-wrap"> Увімкнено</label>
+          </div>
+          <div class="form-row">
+            <label>Візуальні ефекти:</label>
+            <select id="set-visual-fx">
+              <option value="full">Повні</option>
+              <option value="reduced">Зменшені</option>
+              <option value="minimal">Мінімальні</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>Розкладка:</label>
+            <select id="set-layout">
+              <option value="list-left">Список ліворуч</option>
+              <option value="list-right">Список праворуч</option>
+              <option value="list-top">Список зверху</option>
+              <option value="editor-only">Тільки редактор</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>Закладки:</label>
+            <label><input type="checkbox" id="set-show-bookmarks" checked> Відображати</label>
+          </div>
+        </div>
+
+        <!-- Tab: Редактор -->
+        <div class="tab-content" data-tab="editor">
+          <div class="form-row">
+            <label>Розділювач:</label>
+            <label><input type="checkbox" id="set-sep-default" checked> Між text / speakers</label>
+          </div>
+          <div class="form-row">
+            <label>Режим:</label>
+            <label><input type="checkbox" id="set-split-default"> Роздільний (Ctrl+T)</label>
+          </div>
+          <div class="form-row">
+            <label>Підтвердження:</label>
+            <label><input type="checkbox" id="set-confirm" checked> При переході</label>
+          </div>
+          <div class="form-row">
+            <label>Орфографія:</label>
+            <label><input type="checkbox" id="set-spellcheck"> Перевіряти (UA)</label>
+          </div>
+          <div class="form-row">
+            <label>Розширення (теки):</label>
+            <input type="text" id="set-other-ext" placeholder=".txt .json .csv" style="width:180px" title="Розширення файлів для режиму «Інші» (через пробіл)">
+          </div>
+          <div class="form-row" style="align-items:flex-start">
+            <label>Кодові слова:</label>
+            <textarea id="set-code-words" rows="3" style="width:180px;resize:vertical;font-size:11px" placeholder="Одне слово/фраза на рядок" title="Рядки що збігаються з кодовими словами рахуються як перекладені"></textarea>
+          </div>
+        </div>
+
+        <!-- Tab: Збереження -->
+        <div class="tab-content" data-tab="save">
+          <div class="form-row">
+            <label>Автозбереження:</label>
+            <label><input type="checkbox" id="set-autosave"> Увімкнено</label>
+          </div>
+          <div class="form-row">
+            <label>Інтервал (сек):</label>
+            <input type="number" id="set-interval" min="10" value="30">
+          </div>
+          <div class="form-row">
+            <label>Бекап:</label>
+            <label><input type="checkbox" id="set-backup" checked> .bak перед збереженням</label>
+          </div>
+          <div class="form-row">
+            <label>Періодичний бекап:</label>
+            <label><input type="checkbox" id="set-periodic-backup"> Увімкнено</label>
+          </div>
+          <div class="form-row">
+            <label>Інтервал (сек):</label>
+            <input type="number" id="set-periodic-interval" min="60" value="300">
+          </div>
+          <div class="power-schedule">
+            <div class="power-schedule-header">
+              <label>Графік світла:</label>
+              <div class="power-brush-bar">
+                <button class="power-brush active" data-brush="on" title="Є світло">&#x26A1;</button>
+                <button class="power-brush" data-brush="off" title="Немає світла"><span class="power-icon-off">&#x1F4A1;</span></button>
+                <button class="power-brush" data-brush="maybe" title="Можливе відключення">?</button>
+              </div>
+            </div>
+            <div class="power-days" id="power-days">
+              <button class="power-day" data-day="0">Пн</button>
+              <button class="power-day" data-day="1">Вт</button>
+              <button class="power-day" data-day="2">Ср</button>
+              <button class="power-day" data-day="3">Чт</button>
+              <button class="power-day" data-day="4">Пт</button>
+              <button class="power-day" data-day="5">Сб</button>
+              <button class="power-day" data-day="6">Нд</button>
+            </div>
+            <div class="power-grid" id="power-grid"></div>
+            <div class="power-legend">
+              <span class="pl-item"><span class="pl-dot pl-current"></span> поточний час</span>
+              <span class="pl-item"><span class="pl-dot pl-on"></span> є світло</span>
+              <span class="pl-item"><span class="pl-dot pl-off"></span> немає світла</span>
+              <span class="pl-item"><span class="pl-dot pl-maybe"></span> можливе відключення</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab: Плагіни -->
+        <div class="tab-content" data-tab="plugins">
+          <div class="plugin-card">
+            <div class="plugin-header">
+              <div class="plugin-info">
+                <span class="plugin-name">Словник</span>
+                <span class="plugin-desc">Підсвітка термінів, підказки та автозаміна зі словника</span>
+              </div>
+              <label class="plugin-toggle">
+                <input type="checkbox" id="set-plugin-glossary" checked>
+                <span class="plugin-toggle-label">Увімкнено</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab: Теми -->
+        <div class="tab-content" data-tab="themes">
+          <div id="theme-editor-list">
+            <div style="margin-bottom:10px">
+              <button class="btn-primary" id="theme-create-btn">+ Створити тему</button>
+            </div>
+            <div id="theme-presets-list"></div>
+          </div>
+          <div id="theme-editor-panel" class="hidden">
+            <div class="theme-editor-header">
+              <button class="theme-editor-back" id="theme-editor-back">&larr;</button>
+              <input type="text" id="theme-editor-name" placeholder="Назва теми..." maxlength="40">
+              <select id="theme-editor-base">
+                <option value="dark">Темна</option>
+                <option value="light">Світла</option>
+                <option value="blue-night">Синя ніч</option>
+                <option value="green-forest">Зелений ліс</option>
+                <option value="warm-amber">Тепла амбра</option>
+                <option value="rose">Рожева</option>
+                <option value="github-dark">GitHub Dark</option>
+                <option value="notepadpp">Notepad++</option>
+                <option value="dracula">Dracula</option>
+                <option value="alucard">Alucard</option>
+                <option value="nier">NieR: Automata</option>
+                <option value="nier-replicant">NieR Replicant</option>
+              </select>
+            </div>
+            <div class="theme-editor-groups" id="theme-editor-groups"></div>
+            <div class="theme-editor-actions">
+              <button class="btn-primary" id="theme-editor-save">Зберегти тему</button>
+              <button id="theme-editor-delete" class="hidden">Видалити</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-primary" id="settings-save">Зберегти</button>
+        <button id="settings-cancel">Скасувати</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Glossary -->
+  <div id="glossary-overlay" class="modal-overlay hidden">
+    <div id="glossary-modal" class="modal hidden">
+      <div class="modal-header">
+        <h3>Словник</h3>
+        <button class="modal-close" id="glossary-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">
+          <select id="gloss-dict-select" style="flex:1;padding:4px 8px;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:4px;">
+            <option value="global">Глобальний словник</option>
+          </select>
+          <button id="gloss-import" style="padding:4px 10px;font-size:12px;white-space:nowrap;" title="Імпортувати з іншого словника">Імпорт...</button>
+        </div>
+        <div class="search-box" style="margin-bottom:10px;">
+          <span class="search-icon">&#x2315;</span>
+          <input type="text" id="gloss-search" placeholder="Пошук у словнику...">
+        </div>
+        <div id="gloss-table-container">
+          <table id="gloss-table">
+            <thead style="display:none;">
+              <tr><th></th><th></th></tr>
+            </thead>
+            <tbody id="gloss-tbody"></tbody>
+          </table>
+        </div>
+        <div class="gloss-btn-row">
+          <button id="gloss-add">+ Додати</button>
+          <button id="gloss-delete">Видалити</button>
+          <span id="gloss-count">0</span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-primary" id="glossary-save">Зберегти</button>
+        <button id="glossary-cancel">Скасувати</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Diff -->
+  <div id="diff-overlay" class="modal-overlay hidden">
+    <div id="diff-modal" class="modal hidden">
+      <div class="modal-header">
+        <h3 id="diff-title">Diff</h3>
+        <button class="modal-close" id="diff-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="diff-content"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="diff-close-btn">Закрити</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Compare (side-by-side) -->
+  <div id="compare-overlay" class="modal-overlay hidden">
+    <div id="compare-modal" class="modal hidden">
+      <div class="modal-header">
+        <h3 id="compare-title">Порівняння</h3>
+        <div class="compare-nav">
+          <button id="compare-prev" title="Попередня зміна">&uarr;</button>
+          <span id="compare-pos">0/0</span>
+          <button id="compare-next" title="Наступна зміна">&darr;</button>
+        </div>
+        <button class="modal-close" id="compare-close">&times;</button>
+      </div>
+      <div class="modal-body" style="padding:0;">
+        <div id="compare-panels">
+          <div class="compare-panel" id="compare-left">
+            <div class="compare-panel-header" id="compare-left-title"></div>
+            <div class="compare-panel-content" id="compare-left-content"></div>
+          </div>
+          <div class="compare-panel" id="compare-right">
+            <div class="compare-panel-header" id="compare-right-title"></div>
+            <div class="compare-panel-content" id="compare-right-content"></div>
+          </div>
+        </div>
+        <div id="compare-log">
+          <div class="compare-log-header" id="compare-log-toggle">Лог змін &#x25BE;</div>
+          <div id="compare-log-content"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Migrate (Translation Transfer) -->
+  <div id="migrate-overlay" class="modal-overlay hidden">
+    <div id="migrate-modal" class="modal hidden">
+      <div class="modal-header">
+        <h3>Перенесення</h3>
+        <button class="modal-close" id="migrate-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="migrate-slots">
+          <div class="migrate-slot" id="migrate-slot-old" data-key="old">
+            <div class="migrate-slot-icon">&#x1F4C4;</div>
+            <div class="migrate-slot-hint">Перетягніть або клікніть</div>
+            <div class="migrate-slot-file" id="migrate-old-file"></div>
+            <div class="migrate-slot-label">Старий текст</div>
+          </div>
+          <div class="migrate-slot" id="migrate-slot-new" data-key="new">
+            <div class="migrate-slot-icon">&#x1F4C4;</div>
+            <div class="migrate-slot-hint">Перетягніть або клікніть</div>
+            <div class="migrate-slot-file" id="migrate-new-file"></div>
+            <div class="migrate-slot-label">Новий текст</div>
+          </div>
+          <div class="migrate-slot" id="migrate-slot-ua" data-key="ua">
+            <div class="migrate-slot-icon">&#x1F4C4;</div>
+            <div class="migrate-slot-hint">Перетягніть або клікніть</div>
+            <div class="migrate-slot-file" id="migrate-ua-file"></div>
+            <div class="migrate-slot-label">Український текст</div>
+          </div>
+        </div>
+        <div class="migrate-actions">
+          <button class="btn-primary" id="migrate-run" disabled>Перенести</button>
+        </div>
+        <div id="migrate-results" class="hidden">
+          <div id="migrate-stats"></div>
+          <div id="migrate-preview"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-primary hidden" id="migrate-save">Зберегти результат</button>
+        <button id="migrate-close-btn">Закрити</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Info -->
+  <div id="info-overlay" class="modal-overlay hidden">
+    <div id="info-modal" class="modal hidden">
+      <div class="modal-header">
+        <h3 id="info-title">Інформація</h3>
+        <button class="modal-close" id="info-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="info-text" id="info-text"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="info-close-btn">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Find Dialog (floating, Notepad++ style) -->
+  <div id="find-dialog" class="find-dialog hidden">
+    <div class="find-dialog-titlebar" id="find-dialog-titlebar">
+      <span class="find-dialog-title" id="find-dialog-title">Пошук</span>
+      <button class="find-dialog-close" id="find-dialog-close">&times;</button>
+    </div>
+    <div class="find-dialog-tabs">
+      <button class="find-tab-btn active" data-find-tab="find" id="find-tab-find">Знайти</button>
+      <button class="find-tab-btn" data-find-tab="replace" id="find-tab-replace">Замінити</button>
+      <button class="find-tab-btn" data-find-tab="goto" id="find-tab-goto">Рядок</button>
+    </div>
+
+    <!-- Tab: Знайти -->
+    <div class="find-tab-content active" data-find-tab="find">
+      <div class="find-field-row">
+        <label>Що знайти:</label>
+        <div class="find-input-wrapper">
+          <input type="text" id="find-input" placeholder="Текст для пошуку...">
+          <button class="find-history-btn" data-history="find" tabindex="-1" title="Історія пошуку">&#x25BE;</button>
+        </div>
+      </div>
+      <div class="find-options">
+        <label><input type="checkbox" id="find-match-case"> Враховувати регістр</label>
+        <label><input type="checkbox" id="find-whole-words"> Лише цілі слова</label>
+        <label><input type="checkbox" id="find-wrap-around" checked> Циклічний пошук</label>
+      </div>
+      <div class="find-mode">
+        <label><input type="radio" name="find-mode" value="normal" checked> Звичайний</label>
+        <label><input type="radio" name="find-mode" value="regex"> Регулярний вираз</label>
+      </div>
+      <div class="find-regex-hint hidden" id="find-regex-hint">
+        <code>.</code> будь-який &nbsp; <code>\d</code> цифра &nbsp; <code>\w</code> слово &nbsp; <code>.*</code> будь-що &nbsp; <code>()</code> група &nbsp; <code>$1</code> підстановка
+      </div>
+      <div class="find-buttons">
+        <button class="btn-primary" id="find-next-btn">Знайти далі</button>
+        <button id="find-prev-btn">Знайти попередній</button>
+        <button id="find-count-btn">Підрахунок</button>
+        <button id="find-all-btn">Знайти все в документі</button>
+      </div>
+      <div class="find-result" id="find-result"></div>
+    </div>
+
+    <!-- Tab: Замінити -->
+    <div class="find-tab-content" data-find-tab="replace">
+      <div class="find-field-row">
+        <label>Що знайти:</label>
+        <div class="find-input-wrapper">
+          <input type="text" id="find-replace-input" placeholder="Текст для пошуку...">
+          <button class="find-history-btn" data-history="find" tabindex="-1" title="Історія пошуку">&#x25BE;</button>
+        </div>
+      </div>
+      <div class="find-field-row">
+        <label>Замінити на:</label>
+        <div class="find-input-wrapper">
+          <input type="text" id="find-replace-with" placeholder="Замінити на...">
+          <button class="find-history-btn" data-history="replace" tabindex="-1" title="Історія замін">&#x25BE;</button>
+        </div>
+      </div>
+      <div class="find-options">
+        <label><input type="checkbox" id="find-replace-match-case"> Враховувати регістр</label>
+        <label><input type="checkbox" id="find-replace-whole-words"> Лише цілі слова</label>
+        <label><input type="checkbox" id="find-replace-wrap-around" checked> Циклічний пошук</label>
+      </div>
+      <div class="find-mode">
+        <label><input type="radio" name="find-replace-mode" value="normal" checked> Звичайний</label>
+        <label><input type="radio" name="find-replace-mode" value="regex"> Регулярний вираз</label>
+      </div>
+      <div class="find-regex-hint hidden" id="find-replace-regex-hint">
+        <code>.</code> будь-який &nbsp; <code>\d</code> цифра &nbsp; <code>\w</code> слово &nbsp; <code>.*</code> будь-що &nbsp; <code>()</code> група &nbsp; <code>$1</code> підстановка
+      </div>
+      <div class="find-replace-scope">
+        <label><input type="radio" name="find-replace-scope" value="current" checked> Поточний запис</label>
+        <label><input type="radio" name="find-replace-scope" value="all"> Усі записи</label>
+      </div>
+      <div class="find-options">
+        <label><input type="checkbox" id="find-replace-names-only"> Лише імена (словник)</label>
+      </div>
+      <div class="find-buttons">
+        <button class="btn-primary" id="find-replace-next-btn">Знайти далі</button>
+        <button id="find-replace-one-btn">Замінити</button>
+        <button id="find-replace-all-btn">Замінити все</button>
+      </div>
+      <div class="find-result" id="find-replace-result"></div>
+    </div>
+
+    <!-- Tab: Рядок -->
+    <div class="find-tab-content" data-find-tab="goto">
+      <div class="find-field-row">
+        <label>Номер рядка:</label>
+        <input type="number" id="goto-line-input" min="1" placeholder="Наприклад, 2466">
+      </div>
+      <div class="goto-line-info" id="goto-line-info"></div>
+      <div class="find-buttons">
+        <button class="btn-primary" id="goto-line-btn">Перейти</button>
+      </div>
+    </div>
+
+    <!-- Results panel (Find All) -->
+    <div id="find-results-panel" class="find-results-panel hidden">
+      <div class="find-results-header">
+        <span id="find-results-title">Результати</span>
+        <button class="find-results-close" id="find-results-close">&times;</button>
+      </div>
+      <div class="find-results-list" id="find-results-list"></div>
+    </div>
+  </div>
+
+  <!-- Frequent Words Analysis -->
+  <div id="freq-overlay" class="modal-overlay hidden">
+    <div id="freq-modal" class="modal hidden">
+      <div class="modal-header">
+        <h3>Часті слова</h3>
+        <button class="modal-close" id="freq-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="freq-options">
+          <label>Мін. повторів: <input type="number" id="freq-min" min="2" value="3" style="width:60px;"></label>
+          <label><input type="checkbox" id="freq-case"> Враховувати регістр</label>
+          <label><input type="checkbox" id="freq-whole-line"> Враховувати рядок</label>
+          <button id="freq-scan-btn" class="btn-primary">Сканувати</button>
+        </div>
+        <div id="freq-result-container" style="max-height:400px; overflow-y:auto; margin-top:10px;">
+          <div id="freq-result" style="font-size:12px; color:var(--text-secondary);"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="freq-close-btn">Закрити</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Extended Stats -->
+  <div id="stats-overlay" class="modal-overlay hidden">
+    <div id="stats-modal" class="modal hidden" style="max-width:480px;">
+      <div class="modal-header">
+        <h3>Статистика перекладу</h3>
+        <button class="modal-close" id="stats-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="stats-grid" id="stats-grid">
+          <div class="stats-section">
+            <div class="stats-section-title">Загальна</div>
+            <div class="stats-row"><span>Записів (файлів):</span><span id="st-total-entries" class="stats-val">—</span></div>
+            <div class="stats-row"><span>Рядків (непустих):</span><span id="st-total-lines" class="stats-val">—</span></div>
+            <div class="stats-row"><span>Слів:</span><span id="st-total-words" class="stats-val">—</span></div>
+            <div class="stats-row"><span>Символів:</span><span id="st-total-chars" class="stats-val">—</span></div>
+            <div class="stats-row" style="opacity:0.6"><span>Нейтральних (числа, теги):</span><span id="st-neutral-lines" class="stats-val">—</span></div>
+          </div>
+          <div class="stats-section stats-ua">
+            <div class="stats-section-title">🇺🇦 Українська</div>
+            <div class="stats-row"><span>Рядків:</span><span id="st-ua-lines" class="stats-val">—</span></div>
+            <div class="stats-row"><span>Слів:</span><span id="st-ua-words" class="stats-val">—</span></div>
+            <div class="stats-row"><span>Символів:</span><span id="st-ua-chars" class="stats-val">—</span></div>
+            <div class="stats-row stats-pct-row"><span>Готовність:</span><span id="st-ua-pct" class="stats-val stats-pct">—</span></div>
+          </div>
+          <div class="stats-section stats-en">
+            <div class="stats-section-title">🇬🇧 Англійська / Інше</div>
+            <div class="stats-row"><span>Рядків:</span><span id="st-en-lines" class="stats-val">—</span></div>
+            <div class="stats-row"><span>Слів:</span><span id="st-en-words" class="stats-val">—</span></div>
+            <div class="stats-row"><span>Символів:</span><span id="st-en-chars" class="stats-val">—</span></div>
+            <div class="stats-row stats-pct-row"><span>Залишилось:</span><span id="st-en-pct" class="stats-val stats-pct-en">—</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="stats-close-btn">Закрити</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Schema Selector -->
+  <div id="schema-overlay" class="modal-overlay hidden">
+    <div id="schema-modal" class="modal hidden" style="max-width:520px;">
+      <div class="modal-header">
+        <h3>Схема підрахунку</h3>
+        <button class="modal-close" id="schema-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="schema-info" id="schema-info"></div>
+        <div class="schema-parse-row">
+          <label class="schema-parse-label">Тип даних:</label>
+          <select id="schema-parse-type" class="schema-parse-select">
+            <option value="auto">Авто</option>
+            <option value="json">JSON</option>
+            <option value="xml">XML</option>
+          </select>
+          <button id="schema-reparse-btn" class="schema-reparse-btn" title="Перечитати з обраним типом">&#x21bb;</button>
+        </div>
+        <div class="schema-hint">Оберіть поля, які містять текст для перекладу:</div>
+        <input type="text" id="schema-search" class="schema-search" placeholder="Пошук ключа...">
+        <div class="schema-tree" id="schema-tree"></div>
+      </div>
+      <div class="modal-footer" style="gap:8px;">
+        <button id="schema-save-btn" class="btn-primary">Зберегти</button>
+        <button id="schema-reset-btn">Скинути</button>
+        <button id="schema-close-btn">Закрити</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Translator Reference -->
+  <div id="ref-overlay" class="modal-overlay hidden">
+    <div id="ref-modal" class="modal hidden" style="max-width:620px;">
+      <div class="modal-header">
+        <h3>Довідка перекладача</h3>
+        <button class="modal-close" id="ref-close">&times;</button>
+      </div>
+      <div class="modal-body" style="max-height:70vh; overflow-y:auto; font-size:13px; line-height:1.6;">
+        <h4 style="margin:0 0 6px;">Підказки</h4>
+        <ul style="margin:0 0 12px; padding-left:20px;">
+          <li>Назви існуючих коктейлів — транслітерацією у лапках «»</li>
+          <li>Назви закладів (ресторани, бари тощо) — транслітерація у лапках «»</li>
+          <li>Використовуємо українські лапки-ялинки «» замість англійських</li>
+        </ul>
+
+        <h4 style="margin:0 0 6px;">Графічні скорочення</h4>
+        <ul style="margin:0 0 12px; padding-left:20px;">
+          <li>Після скорочення ставимо крапку. Скорочуємо після приголосного. Не скорочуємо на голосний (крім початкового) і на ь.</li>
+          <li>Збіг однакових приголосних — скорочуємо після першого: настін. календар, ден. норма</li>
+          <li>Збіг різних приголосних — можна після першого або останнього: власноруч. або власноручн., але тільки власт.</li>
+        </ul>
+
+        <h4 style="margin:0 0 6px;">Поширені скорочення</h4>
+        <div style="columns:2; column-gap:16px; margin-bottom:12px;">
+          <div>авт. — автор; арк. — аркуш; бібл. — бібліотечний</div>
+          <div>буд. — будинок; бульв. — бульвар; вид. — видання</div>
+          <div>вип. — випуск; вул. — вулиця; гр. — громадянин</div>
+          <div>д. — доктор; див. — дивись; дол. — долар</div>
+          <div>доц. — доцент; журн. — журнал; зб. — збірник</div>
+          <div>ім. — імені; ін. — інші; кв. — квартира</div>
+          <div>м. — місто; напр. — наприклад; нац. — національний</div>
+          <div>н. е. — нашої ери; обл. — область; пл. — площа</div>
+          <div>проф. — професор; р. — рік; ред. — редактор</div>
+          <div>с. — село/сторінка; св. — святий; ст. — станція/стаття</div>
+          <div>т. — том; тис. — тисяча; укр. — український</div>
+          <div>і т. д. — і так далі; і т. ін. — і таке інше</div>
+          <div>т. зв. — так званий; у т. ч. — у тому числі</div>
+        </div>
+
+        <h4 style="margin:0 0 6px;">Одиниці вимірювання (без крапок)</h4>
+        <div style="margin-bottom:12px;">
+          г, кг, т, м, см, мм, км, дм, га, л, Вт, кВт, Б, кБ, грн, млн, млрд, трлн, смт
+        </div>
+
+        <h4 style="margin:0 0 6px;">Дефіс і скісна риска</h4>
+        <ul style="margin:0; padding-left:20px;">
+          <li>Пропущена середина — дефіс без крапки: гр-н, вид-во, ін-т, ун-т, р-н</li>
+          <li>Складні слова — букви частин з крапкою: с.-д., с.-г., ст.-сл., півн.-сх.</li>
+          <li>Скісна риска без крапок: п/в, а/с, р/р, км/год, м/хв</li>
+        </ul>
+      </div>
+      <div class="modal-footer">
+        <button id="ref-close-btn">Закрити</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Progress Sync -->
+  <div id="progress-overlay" class="modal-overlay hidden">
+    <div id="progress-modal" class="modal hidden" style="max-width:520px;">
+      <div class="modal-header">
+        <h3>Оновити прогрес на сайті</h3>
+        <button class="modal-close" id="progress-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <label>Файл games.ts:</label>
+          <div style="display:flex;gap:6px;flex:1;">
+            <input type="text" id="progress-games-path" style="flex:1;font-size:11px;" readonly>
+            <button id="progress-browse-btn" style="white-space:nowrap;">Огляд...</button>
+          </div>
+        </div>
+        <div class="form-row">
+          <label>Гра:</label>
+          <select id="progress-game-select" style="flex:1;">
+            <option value="">— оберіть гру —</option>
+          </select>
+        </div>
+        <div class="progress-sync-stats" id="progress-sync-stats">
+          <div class="progress-sync-row">
+            <span class="progress-sync-label">Рядків усього:</span>
+            <span class="progress-sync-value" id="ps-total-lines">—</span>
+          </div>
+          <div class="progress-sync-row">
+            <span class="progress-sync-label">Перекладено (кирилиця):</span>
+            <span class="progress-sync-value" id="ps-translated-lines">—</span>
+          </div>
+          <div class="progress-sync-row">
+            <span class="progress-sync-label">Прогрес:</span>
+            <span class="progress-sync-value progress-sync-pct" id="ps-progress">—</span>
+          </div>
+          <div class="progress-sync-row">
+            <span class="progress-sync-label">Символів:</span>
+            <span class="progress-sync-value" id="ps-total-chars">—</span>
+          </div>
+        </div>
+        <div class="progress-sync-current" id="progress-sync-current"></div>
+        <div class="replace-result" id="progress-result"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-primary" id="progress-update-btn">Оновити прогрес</button>
+        <button id="progress-cancel">Закрити</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Auto Wrap Tool -->
+  <div id="wrap-overlay" class="modal-overlay hidden">
+    <div id="wrap-modal" class="modal hidden">
+      <div class="modal-header">
+        <h3>Автоперенесення тексту</h3>
+        <button class="modal-close" id="wrap-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <label>Символ переносу:</label>
+          <input type="text" id="wrap-break-char" value="\n" style="width:120px;" placeholder="\n">
+          <span style="color:var(--text-muted);font-size:11px;margin-left:6px;">\n, &lt;br&gt;, або інший</span>
+        </div>
+        <div class="form-row">
+          <label>Макс. символів у рядку:</label>
+          <input type="number" id="wrap-line-width" min="10" max="500" value="40" style="width:80px;">
+        </div>
+        <div class="form-row">
+          <label>Область:</label>
+          <div class="wrap-scope">
+            <label><input type="radio" name="wrap-scope" value="current" checked> Поточний запис</label>
+            <label><input type="radio" name="wrap-scope" value="all"> Усі записи</label>
+          </div>
+        </div>
+        <div class="wrap-preview" id="wrap-preview">
+          <div class="wrap-preview-label">Попередній перегляд:</div>
+          <pre class="wrap-preview-text" id="wrap-preview-text"></pre>
+        </div>
+        <div class="replace-result" id="wrap-result"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-primary" id="wrap-apply-btn">Застосувати</button>
+        <button id="wrap-preview-btn">Оновити перегляд</button>
+        <button id="wrap-cancel">Закрити</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Power outage warning overlay -->
+  <div id="power-warning-overlay" class="power-warning-overlay hidden">
+    <div class="power-warning-panel">
+      <div class="power-warning-icon">&#x26A1;</div>
+      <h2 class="power-warning-title">Увага!</h2>
+      <p class="power-warning-text">
+        Зараз <span id="power-warning-time"></span> — от-от можливо мають вимкнути світло.<br>
+        Усі зміни щойно збережено автоматично.<br><br>
+        Рекомендуємо вимкнути пристрій для безпеки.
+      </p>
+      <button class="btn-primary" id="power-warning-dismiss">Зрозуміло</button>
+    </div>
+  </div>
+
+  <!-- ═══ BOOKMARKS PANEL ═══ -->
+  <div id="bookmarks-overlay" class="modal-overlay hidden">
+    <div id="bookmarks-modal" class="modal hidden" style="max-width:520px">
+      <div class="modal-header">
+        <h3>Закладки</h3>
+        <button class="modal-close" id="bookmarks-close">&times;</button>
+      </div>
+      <div class="modal-body" style="padding:0">
+        <div id="bookmarks-list" class="bookmarks-list"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="bookmarks-clear-all">Очистити все</button>
+        <button id="bookmarks-close-btn">Закрити</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ HISTORY PANEL ═══ -->
+  <div id="history-overlay" class="modal-overlay hidden">
+    <div id="history-modal" class="modal hidden" style="max-width:560px">
+      <div class="modal-header">
+        <span>Історія змін</span>
+        <span class="modal-header-sub" id="history-entry-label"></span>
+        <button class="modal-close" id="history-close">&times;</button>
+      </div>
+      <div class="modal-body" style="padding:0">
+        <div id="history-list" class="history-list"></div>
+        <div id="history-empty" class="hidden" style="text-align:center;padding:40px;color:var(--text-secondary)">Змін ще не було</div>
+      </div>
+      <div class="modal-footer">
+        <button id="history-clear-btn" class="btn-secondary">Очистити історію</button>
+        <button id="history-close-btn">Закрити</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ COMMAND PALETTE ═══ -->
+  <div id="cmd-palette-overlay" class="cmd-palette-overlay hidden">
+    <div id="cmd-palette" class="cmd-palette">
+      <input type="text" id="cmd-input" class="cmd-input" placeholder="Введіть команду...">
+      <div id="cmd-results" class="cmd-results"></div>
+    </div>
+  </div>
+
+  <!-- Entry context menu -->
+  <div id="entry-context-menu" class="entry-context-menu hidden">
+    <div class="ctx-item ctx-translated" id="ctx-translated">
+      <span class="ctx-dot ctx-dot-translated"></span> Перекладено
+    </div>
+    <div class="ctx-item ctx-edited" id="ctx-edited">
+      <span class="ctx-dot ctx-dot-edited"></span> Зредаговано
+    </div>
+    <div class="ctx-sep"></div>
+    <div class="ctx-item" id="ctx-note">Примітка&#x2026;</div>
+    <div class="ctx-sep"></div>
+    <div class="ctx-item ctx-clear" id="ctx-clear-tag">Зняти все</div>
+    <div class="ctx-sep"></div>
+    <div class="ctx-item" id="ctx-bookmark"><span class="ctx-dot ctx-dot-bookmark"></span> Закладка</div>
+    <div class="ctx-item" id="ctx-entry-history">Історія змін&#x2026;</div>
+    <div class="ctx-sep" id="ctx-compare-sep"></div>
+    <div class="ctx-item" id="ctx-compare">Порівняти&#x2026;</div>
+    <div class="ctx-item hidden" id="ctx-compare-cancel">Скасувати порівняння</div>
+  </div>
+
+  <!-- Note prompt mini-dialog -->
+  <div id="note-prompt-overlay" class="note-prompt-overlay hidden">
+    <div class="note-prompt">
+      <div class="note-prompt-title">Примітка</div>
+      <input type="text" id="note-prompt-input" placeholder="Напр.: Субтитри, Відеоролики..." maxlength="60">
+      <div class="note-prompt-buttons">
+        <button class="btn-primary" id="note-prompt-ok">OK</button>
+        <button id="note-prompt-cancel">Скасувати</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Shortcuts overlay (F1) -->
+
+  <!-- Glossary tooltip -->
+  <div id="gloss-tooltip" class="gloss-tooltip hidden"></div>
+
+  <!-- Glossary cloud (click on highlighted term) -->
+  <div id="gloss-cloud" class="gloss-cloud hidden">
+    <div class="gloss-cloud-orig" id="gloss-cloud-orig"></div>
+    <div class="gloss-cloud-trans" id="gloss-cloud-trans"></div>
+    <div class="gloss-cloud-actions">
+      <button class="btn-primary btn-sm" id="gloss-cloud-replace">Замінити</button>
+      <button class="btn-sm" id="gloss-cloud-close">&times;</button>
+    </div>
+  </div>
+
+  <!-- Add to glossary popup -->
+  <div id="add-gloss-popup" class="add-gloss-popup hidden">
+    <div class="add-gloss-header" id="add-gloss-orig-text"></div>
+    <input type="text" id="add-gloss-trans-input" placeholder="Переклад (UA)...">
+    <div class="add-gloss-actions">
+      <button class="btn-primary" id="add-gloss-confirm">Додати</button>
+      <button id="add-gloss-dismiss">&times;</button>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

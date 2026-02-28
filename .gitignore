@@ -1,0 +1,13 @@
+node_modules/
+dist/
+__pycache__/
+.claude/
+
+# User-specific settings/sessions
+editor_settings.json
+editor_sessions.json
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store

@@ -1,0 +1,63 @@
+{
+  "name": "lb-tool",
+  "version": "1.0.0",
+  "description": "LB",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.littlebit.lb-tool",
+    "productName": "LB",
+    "files": [
+      "main.js",
+      "renderer.js",
+      "highlight-worker.js",
+      "analysis-worker.js",
+      "index.html",
+      "styles.css",
+      "node_modules/nspell/**/*",
+      "node_modules/is-buffer/**/*"
+    ],
+    "asarUnpack": [
+      "highlight-worker.js",
+      "analysis-worker.js",
+      "io-worker.js",
+      "node_modules/nspell/**/*",
+      "node_modules/is-buffer/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "dicts",
+        "to": "dicts"
+      },
+      {
+        "from": "editor_glossary.json",
+        "to": "editor_glossary.json"
+      }
+    ],
+    "win": {
+      "target": [
+        "portable",
+        "nsis"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "portable": {
+      "artifactName": "LB.exe"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "artifactName": "LB-Setup.exe"
+    }
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^26.8.1"
+  },
+  "dependencies": {
+    "nspell": "^2.1.5"
+  }
+}
