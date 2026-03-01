@@ -676,8 +676,6 @@ body {
   opacity: 0.85;
 }
 .hide-bookmarks .entry-item.entry-bookmark::after { content: none; }
-.hide-bookmarks .line-gutter-line.bookmarked .line-gutter-bookmark::after { content: none; }
-.hide-bookmarks .line-gutter-line.bookmarked { color: inherit; font-weight: inherit; }
 
 /* ═══ Bookmarks Panel ═══ */
 .bookmarks-list { max-height: 50vh; overflow-y: auto; }
@@ -930,6 +928,8 @@ body {
 }
 
 .ctx-clear { color: var(--text-muted); }
+.ctx-danger { color: #e06060; }
+.ctx-danger:hover { background: rgba(224, 96, 96, 0.15) !important; color: #ff7070; }
 
 /* ─── Note Prompt ─── */
 .note-prompt-overlay {
@@ -1375,11 +1375,7 @@ body {
   border-radius: 2px; padding: 0 1px;
 }
 
-/* Find match highlight in editor (only current match) */
-.editor-highlight mark.find-match-current {
-  background: rgba(255, 140, 0, 0.35);
-  border-bottom: 2px solid rgba(255, 140, 0, 0.9);
-}
+/* Find match highlight in editor (only current match — used in find-results-text) */
 
 /* ─── Split Handle ─── */
 
@@ -1757,12 +1753,13 @@ textarea.editor-dirty {
   box-shadow: 0 0 0 1px var(--dirty-glow);
 }
 
-/* ─── Highlight Wrapper (textarea + highlights) ─── */
+/* ─── Monaco Editor Containers ─── */
 
-.editor-highlight-wrapper {
+.monaco-container {
   position: relative;
   flex: 1;
-  display: flex;
+  width: 100%;
+  min-height: 200px;
   background: var(--bg-glass);
   backdrop-filter: blur(var(--glass-blur));
   -webkit-backdrop-filter: blur(var(--glass-blur));
@@ -1772,179 +1769,69 @@ textarea.editor-dirty {
   overflow: hidden;
 }
 
-.editor-highlight-wrapper:focus-within {
+.monaco-container:focus-within {
   border-color: var(--border-focus);
   box-shadow: 0 0 0 2px var(--border-glow);
 }
 
-
-.editor-highlight-wrapper.editor-dirty {
+.monaco-container.editor-dirty {
   border-color: var(--dirty);
   box-shadow: 0 0 0 1px var(--dirty-glow);
 }
 
-.editor-highlight-wrapper textarea {
-  position: relative;
-  z-index: 1;
-  will-change: scroll-position;
+/* Make Monaco editor background transparent for glass morphism */
+.monaco-container .monaco-editor,
+.monaco-container .monaco-editor .overflow-guard,
+.monaco-container .monaco-editor-background,
+.monaco-container .monaco-editor .margin {
   background: transparent !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
+}
+
+/* Reset global textarea styles on Monaco's internal hidden textarea */
+.monaco-editor textarea.inputarea {
+  background: transparent !important;
   border: none !important;
   border-radius: 0 !important;
+  padding: 0 !important;
   box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
   outline: none !important;
 }
 
-/* ─── Scroll to Top/Bottom Buttons ─── */
-
-.scroll-btn {
-  position: absolute;
-  right: 18px;
-  z-index: 5;
-  width: 26px;
-  height: 26px;
-  border: 1px solid var(--border-glass);
-  border-radius: 6px;
-  background: var(--bg-surface);
-  color: var(--text-secondary);
-  font-size: 14px;
-  line-height: 24px;
-  text-align: center;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.2s, background 0.15s, color 0.15s;
-  pointer-events: none;
-  padding: 0;
-}
-.scroll-btn.visible { opacity: 1; pointer-events: auto; }
-.scroll-btn:hover { background: var(--bg-glass-hover); color: var(--accent); }
-.scroll-btn:active { background: var(--bg-glass-active); }
-.scroll-top { top: 6px; }
-.scroll-bottom { bottom: 6px; }
-
-/* ─── Line Gutter ─── */
-
-.line-gutter {
-  position: absolute;
-  top: 0; left: 0; bottom: 0;
-  width: 44px;
-  z-index: 2;
-  overflow: hidden;
-  padding: 10px 0;
-  background: var(--bg-surface);
-  border-right: 1px solid var(--border-glass);
-  user-select: none;
-  cursor: default;
-  flex-shrink: 0;
-}
-
-.line-gutter-line {
-  display: flex;
-  align-items: center;
-  height: var(--editor-line-height, 1.2em);
-  padding: 0 2px 0 0;
-  font-family: 'Consolas', 'Cascadia Code', monospace;
-  font-size: 10px;
-  color: var(--text-muted);
-  text-align: right;
-  box-sizing: border-box;
-  position: relative;
-}
-
-.line-gutter-line:hover {
-  color: var(--text-secondary);
-}
-
-.line-gutter-num {
-  flex: 1;
-  text-align: right;
-  padding-right: 6px;
-  min-width: 0;
-}
-
-.line-gutter-bookmark {
-  width: 10px;
-  height: 10px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.line-gutter-line.bookmarked .line-gutter-bookmark::after {
-  content: '';
-  display: block;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 4px var(--accent);
-}
-
-.line-gutter-line.bookmarked {
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.line-gutter-line.current-line {
-  color: var(--text-primary);
-  background: var(--bg-glass-hover);
-}
-
-.line-gutter-line.modified {
-  border-left: 3px solid #e8a838;
-}
-.line-gutter-line.modified .line-gutter-num {
-  color: #e8a838;
-}
-
-/* Offset textarea and highlight for gutter */
-.editor-highlight-wrapper .line-gutter ~ .editor-highlight,
-.editor-highlight-wrapper .line-gutter ~ textarea {
-  margin-left: 44px;
-}
-
-.editor-highlight-wrapper .line-gutter ~ textarea {
-  width: calc(100% - 44px);
-}
-
-.editor-highlight {
-  position: absolute;
-  top: 0; left: 0; right: 0; bottom: 0;
-  padding: 10px 12px;
-  font-family: 'Consolas', 'Cascadia Code', monospace;
-  font-size: 11pt;
-  contain: layout style;
-  will-change: transform;
-  line-height: 1.4;
-  white-space: pre;
-  overflow: hidden;
-  pointer-events: none;
-  color: transparent;
-  tab-size: 4;
-}
-
-.editor-highlight.word-wrap {
-  white-space: pre-wrap;
-  word-wrap: break-word;
-}
-
-.editor-highlight mark {
-  color: transparent;
+/* ─── Monaco Decoration: Glossary Highlights ─── */
+.glossary-highlight {
   background: var(--accent-subtle);
   border-bottom: 2px solid var(--accent);
   border-radius: 2px 2px 0 0;
 }
 
-.editor-highlight mark.spell-error {
-  background: var(--spell-error);
-  border-bottom: 2px wavy var(--spell-error-line);
+/* ─── Monaco Decoration: Find Match ─── */
+.find-match {
+  background: rgba(255, 213, 0, 0.2);
+  border: 1px solid rgba(255, 213, 0, 0.5);
+}
+.find-match-current {
+  background: rgba(255, 213, 0, 0.45);
+  border: 1px solid rgba(255, 213, 0, 0.8);
 }
 
-#flat-edit { width: 100%; height: 100%; flex: 1; }
-#text-edit { width: 100%; height: 100%; flex: 1; }
-#sp-edit   { width: 100%; height: 100%; flex: 1; }
+/* ─── Monaco Decoration: Bookmark Glyph ─── */
+.bookmark-glyph {
+  background: var(--accent);
+  border-radius: 50%;
+  width: 8px !important;
+  height: 8px !important;
+  margin-left: 4px;
+  margin-top: 5px;
+  box-shadow: 0 0 4px var(--accent);
+}
+
+/* ─── Monaco Decoration: Modified Lines ─── */
+.modified-line-deco {
+  background: #e8a838;
+  width: 3px !important;
+}
 
 /* ─── Status Bar ─── */
 
@@ -2003,21 +1890,7 @@ textarea.editor-dirty {
 }
 ::-webkit-scrollbar-corner { background: transparent; }
 
-/* Wider scrollbar for editor textareas to prevent accidental text selection */
-.editor-highlight-wrapper textarea::-webkit-scrollbar { width: 12px; }
-.editor-highlight-wrapper textarea::-webkit-scrollbar-track { background: var(--bg-surface); }
-.editor-highlight-wrapper textarea::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
-  border: 3px solid var(--bg-surface);
-  border-radius: 6px;
-  transition: background 0.2s;
-}
-.editor-highlight-wrapper textarea::-webkit-scrollbar-thumb:hover {
-  background: var(--accent-subtle, rgba(128,128,128,0.35));
-}
-.editor-highlight-wrapper textarea::-webkit-scrollbar-thumb:active {
-  background: var(--accent-glow, rgba(128,128,128,0.45));
-}
+/* Monaco editor uses its own scrollbar — no custom scrollbar needed */
 
 .hidden { display: none !important; }
 
@@ -3544,13 +3417,6 @@ select option:checked {
   text-shadow: none !important;
 }
 
-.minimal-fx .line-gutter-line.modified {
-  border-left-color: transparent !important;
-}
-
-.minimal-fx .line-gutter-line.modified .line-gutter-num {
-  color: inherit !important;
-}
 
 /* ─── Power Outage Warning ─── */
 

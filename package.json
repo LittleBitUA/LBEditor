@@ -13,19 +13,22 @@
     "files": [
       "main.js",
       "renderer.js",
+      "monaco-loader.js",
       "highlight-worker.js",
       "analysis-worker.js",
       "index.html",
       "styles.css",
       "node_modules/nspell/**/*",
-      "node_modules/is-buffer/**/*"
+      "node_modules/is-buffer/**/*",
+      "node_modules/monaco-editor/**/*"
     ],
     "asarUnpack": [
       "highlight-worker.js",
       "analysis-worker.js",
       "io-worker.js",
       "node_modules/nspell/**/*",
-      "node_modules/is-buffer/**/*"
+      "node_modules/is-buffer/**/*",
+      "node_modules/monaco-editor/min/**"
     ],
     "extraResources": [
       {
@@ -58,6 +61,7 @@
     "electron-builder": "^26.8.1"
   },
   "dependencies": {
+    "monaco-editor": "^0.55.1",
     "nspell": "^2.1.5"
   }
 }

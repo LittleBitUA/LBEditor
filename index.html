@@ -128,30 +128,14 @@
         <div id="tab-bar"></div>
 
         <div id="flat-editor-container">
-          <div class="editor-highlight-wrapper" id="flat-wrapper">
-            <div class="line-gutter" id="flat-gutter"></div>
-            <div class="editor-highlight" id="flat-highlight"></div>
-            <textarea id="flat-edit" spellcheck="false" placeholder="Ctrl+O &mdash; відкрити JSON&#10;Перетягніть файл у вікно&#10;F1 &mdash; палітра команд"></textarea>
-            <button class="scroll-btn scroll-top hidden" title="На початок">&uarr;</button>
-            <button class="scroll-btn scroll-bottom hidden" title="В кінець">&darr;</button>
-          </div>
+          <div id="flat-monaco" class="monaco-container"></div>
         </div>
 
         <div id="split-editor-container" style="display:none;">
           <label class="editor-label">Text</label>
-          <div class="editor-highlight-wrapper" id="text-wrapper" style="flex:3;">
-            <div class="line-gutter" id="text-gutter"></div>
-            <div class="editor-highlight" id="text-highlight"></div>
-            <textarea id="text-edit" spellcheck="false"></textarea>
-            <button class="scroll-btn scroll-top hidden" title="На початок">&uarr;</button>
-            <button class="scroll-btn scroll-bottom hidden" title="В кінець">&darr;</button>
-          </div>
+          <div id="text-monaco" class="monaco-container" style="flex:3;"></div>
           <label class="editor-label">Speakers</label>
-          <div class="editor-highlight-wrapper" id="sp-wrapper" style="flex:1;">
-            <div class="line-gutter" id="sp-gutter"></div>
-            <div class="editor-highlight" id="sp-highlight"></div>
-            <textarea id="sp-edit" spellcheck="false"></textarea>
-          </div>
+          <div id="sp-monaco" class="monaco-container" style="flex:1;"></div>
         </div>
       </div>
     </div>
@@ -731,6 +715,7 @@
             <option value="auto">Авто</option>
             <option value="json">JSON</option>
             <option value="xml">XML</option>
+            <option value="keyvalue">Key=Value</option>
           </select>
           <button id="schema-reparse-btn" class="schema-reparse-btn" title="Перечитати з обраним типом">&#x21bb;</button>
         </div>
@@ -966,6 +951,8 @@
     <div class="ctx-sep" id="ctx-compare-sep"></div>
     <div class="ctx-item" id="ctx-compare">Порівняти&#x2026;</div>
     <div class="ctx-item hidden" id="ctx-compare-cancel">Скасувати порівняння</div>
+    <div class="ctx-sep hidden" id="ctx-remove-sep"></div>
+    <div class="ctx-item ctx-danger hidden" id="ctx-remove-entry">Видалити зі списку</div>
   </div>
 
   <!-- Note prompt mini-dialog -->

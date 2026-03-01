@@ -5,6 +5,20 @@ const nodePath = require('path');
 const { ipcRenderer, clipboard } = require('electron');
 const nspell = require('nspell');
 const { Worker } = require('worker_threads');
+const { initMonaco } = require('./monaco-loader');
+
+// ── Monaco Editor state ──────────────────────────────────────
+let _monaco = null;       // monaco namespace
+let _monacoFlat = null;   // monaco.editor.IStandaloneCodeEditor — flat/other/jojo
+let _monacoText = null;   // split mode — text editor
+let _monacoSp = null;     // split mode — speakers editor
+let _glossDecorationIds = [];
+let _spellDecorationIds = [];
+let _findDecorationIds = [];
+let _bookmarkDecoIds = [];
+let _modifiedDecoIds = [];
+let _monacoReady = false;
+let _suppressMonacoChange = false; // suppress onDidChangeModelContent during setValue
 
 // ── Worker thread state ────────────────────────────────────
 let _highlightWorker = null;
@@ -24,6 +38,150 @@ function getWorkerPath(filename) {
   const devPath = nodePath.join(__dirname, filename);
   const unpackedPath = devPath.replace('app.asar', 'app.asar.unpacked');
   return fs.existsSync(unpackedPath) ? unpackedPath : devPath;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Monaco Editor — init & helpers
+// ═══════════════════════════════════════════════════════════
+
+function registerLBTheme(monaco) {
+  monaco.editor.defineTheme('lb-theme', {
+    base: 'vs-dark',
+    inherit: true,
+    rules: [],
+    colors: {
+      'editor.background': '#00000000',
+      'editor.foreground': '#e0e0e0',
+      'editor.lineHighlightBackground': '#ffffff10',
+      'editorLineNumber.foreground': '#888888',
+      'editorCursor.foreground': '#ffffff',
+      'editor.selectionBackground': '#5555ff44',
+      'editorGutter.background': '#00000000',
+    }
+  });
+}
+
+async function initMonacoEditors() {
+  _monaco = await initMonaco();
+  registerLBTheme(_monaco);
+
+  const commonOpts = {
+    language: 'plaintext',
+    theme: 'lb-theme',
+    minimap: { enabled: false },
+    lineNumbers: 'on',
+    wordWrap: (state.settings && state.settings.word_wrap) ? 'on' : 'off',
+    scrollBeyondLastLine: false,
+    automaticLayout: true,
+    fontSize: (state.settings && state.settings.font_size) || 14,
+    fontFamily: (state.settings && state.settings.font_family) || 'Consolas, monospace',
+    renderWhitespace: (state.settings && state.settings.show_whitespace) ? 'all' : 'none',
+    glyphMargin: true,
+    folding: false,
+    contextmenu: false,
+    quickSuggestions: false,
+    suggestOnTriggerCharacters: false,
+    parameterHints: { enabled: false },
+    overviewRulerLanes: 0,
+    lineDecorationsWidth: 5,
+    readOnly: false,
+    scrollbar: {
+      verticalScrollbarSize: 10,
+      horizontalScrollbarSize: 10,
+    },
+    unicodeHighlight: {
+      ambiguousCharacters: false,
+      invisibleCharacters: false,
+      nonBasicASCII: false,
+    },
+    bracketPairColorization: { enabled: false },
+    matchBrackets: 'never',
+    guides: { bracketPairs: false, indentation: false, highlightActiveBracketPair: false },
+    occurrencesHighlight: 'off',
+    selectionHighlight: false,
+    renderLineHighlight: 'none',
+  };
+
+  _monacoFlat = _monaco.editor.create(
+    document.getElementById('flat-monaco'), commonOpts
+  );
+  _monacoText = _monaco.editor.create(
+    document.getElementById('text-monaco'), commonOpts
+  );
+  _monacoSp = _monaco.editor.create(
+    document.getElementById('sp-monaco'), { ...commonOpts, lineNumbers: 'off' }
+  );
+
+  // Redirect Monaco's built-in Find/Replace to our own dialogs
+  for (const ed of [_monacoFlat, _monacoText, _monacoSp]) {
+    ed.addCommand(_monaco.KeyMod.CtrlCmd | _monaco.KeyCode.KeyF, () => { showFindDialog('find'); });
+    ed.addCommand(_monaco.KeyMod.CtrlCmd | _monaco.KeyCode.KeyH, () => { showFindDialog('replace'); });
+    ed.addCommand(_monaco.KeyMod.CtrlCmd | _monaco.KeyCode.KeyL, () => { showFindDialog('goto'); });
+  }
+
+  // Event listeners
+  for (const ed of [_monacoFlat, _monacoText, _monacoSp]) {
+    ed.onDidChangeModelContent(() => {
+      if (!_suppressMonacoChange) onEditorChanged({ target: ed, isTrusted: true });
+    });
+    ed.onDidChangeCursorPosition(() => {
+      updateCursorPosition();
+      scheduleDecorationUpdate();
+    });
+  }
+
+  _monacoReady = true;
+}
+
+function getActiveEditor() {
+  if (state.appMode === 'other' || state.appMode === 'jojo') return _monacoFlat;
+  if (state.splitMode) return _monacoText;
+  return _monacoFlat;
+}
+
+/** Convert character offset pair to Monaco Range */
+function offsetToRange(model, startOffset, endOffset) {
+  const startPos = model.getPositionAt(startOffset);
+  const endPos = model.getPositionAt(endOffset);
+  return new _monaco.Range(startPos.lineNumber, startPos.column, endPos.lineNumber, endPos.column);
+}
+
+/** Schedule decoration updates (bookmarks, modified lines) */
+let _decoUpdateTimer = null;
+function scheduleDecorationUpdate() {
+  if (_decoUpdateTimer) return;
+  _decoUpdateTimer = requestAnimationFrame(() => {
+    _decoUpdateTimer = null;
+    updateBookmarkDecorations();
+    updateModifiedLineDecorations();
+  });
+}
+
+function updateBookmarkDecorations() {
+  if (!_monacoReady || state.currentIndex < 0) return;
+  const editor = getActiveEditor();
+  const bSet = state.bookmarks[state.currentIndex] || new Set();
+  const decs = [...bSet].map(lineNum => ({
+    range: new _monaco.Range(lineNum, 1, lineNum, 1),
+    options: { glyphMarginClassName: 'bookmark-glyph' }
+  }));
+  _bookmarkDecoIds = editor.deltaDecorations(_bookmarkDecoIds, decs);
+}
+
+function updateModifiedLineDecorations() {
+  if (!_monacoReady || state.currentIndex < 0) return;
+  const editor = getActiveEditor();
+  const current = editor.getValue().split('\n');
+  const decs = [];
+  for (let i = 0; i < current.length; i++) {
+    if (i >= _originalEditorLines.length || current[i] !== _originalEditorLines[i]) {
+      decs.push({
+        range: new _monaco.Range(i + 1, 1, i + 1, 1),
+        options: { linesDecorationsClassName: 'modified-line-deco' }
+      });
+    }
+  }
+  _modifiedDecoIds = editor.deltaDecorations(_modifiedDecoIds, decs);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -620,20 +778,11 @@ function cacheDom() {
   dom.metaDirty = document.getElementById('meta-dirty');
   dom.metaChars = document.getElementById('meta-chars');
   dom.metaHint = document.getElementById('meta-hint');
-  dom.flatGutter = document.getElementById('flat-gutter');
-  dom.textGutter = document.getElementById('text-gutter');
-  dom.spGutter = document.getElementById('sp-gutter');
-  dom.flatEdit = document.getElementById('flat-edit');
   dom.flatContainer = document.getElementById('flat-editor-container');
-  dom.textEdit = document.getElementById('text-edit');
-  dom.spEdit = document.getElementById('sp-edit');
   dom.splitContainer = document.getElementById('split-editor-container');
-  dom.flatHighlight = document.getElementById('flat-highlight');
-  dom.textHighlight = document.getElementById('text-highlight');
-  dom.spHighlight = document.getElementById('sp-highlight');
-  dom.flatWrapper = document.getElementById('flat-wrapper');
-  dom.textWrapper = document.getElementById('text-wrapper');
-  dom.spWrapper = document.getElementById('sp-wrapper');
+  dom.flatMonaco = document.getElementById('flat-monaco');
+  dom.textMonaco = document.getElementById('text-monaco');
+  dom.spMonaco = document.getElementById('sp-monaco');
   dom.statusText = document.getElementById('status-text');
   dom.statusCursor = document.getElementById('status-cursor');
   dom.statusHint = document.getElementById('status-hint');
@@ -1077,6 +1226,15 @@ function toggleEntryBookmark(idx) {
   updateVisibleEntry(idx);
   _minimapDirty = true;
   renderMinimap();
+  updateMinimapVisibility();
+}
+
+/** Show minimap only when bookmarks exist */
+function updateMinimapVisibility() {
+  const canvas = document.getElementById('minimap');
+  if (!canvas) return;
+  const hasBookmarks = getBookmarkIndices().length > 0;
+  canvas.style.display = hasBookmarks ? '' : 'none';
 }
 
 let _bmIndicesCache = null;
@@ -1453,6 +1611,10 @@ function renderMinimap() {
   _minimapDirty = false;
   const canvas = document.getElementById('minimap');
   if (!canvas) return;
+  // Auto-hide minimap when no bookmarks exist or bookmarks disabled
+  const hasBookmarks = state.settings.show_bookmarks !== false && getBookmarkIndices().length > 0;
+  canvas.style.display = hasBookmarks ? '' : 'none';
+  if (!hasBookmarks) return;
   const entries = state.entries;
   const n = entries.length;
   const h = canvas.parentElement.clientHeight;
@@ -2522,12 +2684,10 @@ function applySettingsToUI() {
 }
 
 function applyFont(family, size) {
-  const els = [dom.flatEdit, dom.textEdit, dom.spEdit, dom.flatHighlight, dom.textHighlight, dom.spHighlight];
-  for (const el of els) {
-    if (el) {
-      el.style.fontFamily = `'${family}', monospace`;
-      el.style.fontSize = `${size}pt`;
-    }
+  const fontFamily = `'${family}', monospace`;
+  const fontSize = Math.round(size * 1.333); // pt → px
+  for (const ed of [_monacoFlat, _monacoText, _monacoSp]) {
+    if (ed) ed.updateOptions({ fontFamily, fontSize });
   }
 }
 
@@ -2538,9 +2698,11 @@ function applyVisualEffects(level) {
 }
 
 function applyWordWrap(wrap) {
-  const els = [dom.flatEdit, dom.textEdit, dom.spEdit, dom.flatHighlight, dom.textHighlight, dom.spHighlight];
-  for (const el of els) {
-    if (el) el.classList.toggle('word-wrap', wrap);
+  if (_monacoReady) {
+    const option = wrap ? 'on' : 'off';
+    _monacoFlat.updateOptions({ wordWrap: option });
+    _monacoText.updateOptions({ wordWrap: option });
+    _monacoSp.updateOptions({ wordWrap: option });
   }
 }
 
@@ -4031,19 +4193,17 @@ async function onListItemDblClick(idx) {
 }
 
 function jumpToTextInEditor(query) {
-  const ta = getActiveTextarea();
-  if (!ta) return;
-  const text = ta.value.toLowerCase();
+  const editor = getActiveEditor();
+  if (!editor) return;
+  const text = editor.getValue().toLowerCase();
   const pos = text.indexOf(query.toLowerCase());
   if (pos < 0) return;
-  ta.focus();
-  ta.setSelectionRange(pos, pos + query.length);
-  // Scroll to match
-  const before = ta.value.substring(0, pos);
-  const linesBefore = before.split('\n').length - 1;
-  const lineH = measureLineHeight(ta);
-  ta.scrollTop = Math.max(0, linesBefore * lineH - ta.clientHeight / 3);
-  scheduleGutterUpdate();
+  const model = editor.getModel();
+  const startPos = model.getPositionAt(pos);
+  const endPos = model.getPositionAt(pos + query.length);
+  editor.setSelection(new _monaco.Range(startPos.lineNumber, startPos.column, endPos.lineNumber, endPos.column));
+  editor.revealRangeInCenter(new _monaco.Range(startPos.lineNumber, startPos.column, endPos.lineNumber, endPos.column));
+  editor.focus();
 }
 
 let _activeListEl = null;
@@ -4190,9 +4350,9 @@ let _originalEditorLines = [];
 
 function loadEditor(deferHeavy) {
   if (state.currentIndex < 0 || state.currentIndex >= state.entries.length) return;
+  if (!_monacoReady) return;
   const entry = state.entries[state.currentIndex];
   state.loadingEditor = true;
-  _gutterLineCount = 0; // Force full gutter rebuild on entry change
 
   // Always clear find state when switching entries
   _find.matches = [];
@@ -4203,35 +4363,39 @@ function loadEditor(deferHeavy) {
   if (frEl) frEl.textContent = '';
   if (frrEl) frrEl.textContent = '';
 
-  if (state.appMode === 'other' || state.appMode === 'jojo') {
-    dom.flatEdit.value = entry.toFlat();
-  } else if (state.splitMode) {
-    dom.textEdit.value = entry.text.join('\n');
-    dom.spEdit.value = entry.visibleSpeakers().join('\n');
-  } else {
-    dom.flatEdit.value = entry.toFlat(state.useSeparator);
-  }
+  // Clear old decorations
+  _glossDecorationIds = getActiveEditor().deltaDecorations(_glossDecorationIds, []);
+  _findDecorationIds = getActiveEditor().deltaDecorations(_findDecorationIds, []);
+  _bookmarkDecoIds = getActiveEditor().deltaDecorations(_bookmarkDecoIds, []);
+  _modifiedDecoIds = getActiveEditor().deltaDecorations(_modifiedDecoIds, []);
+  if (_monaco) _monaco.editor.setModelMarkers(getActiveEditor().getModel(), 'spellcheck', []);
 
-  // Store original lines for change tracking in gutter
-  _originalEditorLines = getActiveTextarea().value.split('\n');
+  // Set editor content (suppress change events during programmatic setValue)
+  _suppressMonacoChange = true;
+  if (state.appMode === 'other' || state.appMode === 'jojo') {
+    _monacoFlat.setValue(entry.toFlat());
+  } else if (state.splitMode) {
+    _monacoText.setValue(entry.text.join('\n'));
+    _monacoSp.setValue(entry.visibleSpeakers().join('\n'));
+  } else {
+    _monacoFlat.setValue(entry.toFlat(state.useSeparator));
+  }
+  _suppressMonacoChange = false;
+
+  // Store original lines for change tracking decorations
+  _originalEditorLines = getActiveEditor().getValue().split('\n');
 
   state.loadingEditor = false;
-  // Invalidate highlight cache so stale content doesn't flash
-  _highlightCache = new WeakMap();
-  // Clear old highlight HTML immediately to prevent stale visual
-  if (dom.flatHighlight) dom.flatHighlight.innerHTML = '';
-  if (dom.textHighlight) dom.textHighlight.innerHTML = '';
-  if (dom.spHighlight) dom.spHighlight.innerHTML = '';
   updateMeta();
   updateEditorDirtyVisual();
 
   if (deferHeavy) {
-    // Bookmark navigation: defer highlights to next frame for instant feel
     updateHighlights(false);
   } else {
-    updateHighlights(true); // immediate — no debounce on entry switch
+    updateHighlights(true);
   }
-  scheduleGutterUpdate();
+  updateBookmarkDecorations();
+  updateModifiedLineDecorations();
   if (state.appMode === 'ishin') checkGlossaryHints();
 }
 
@@ -4248,13 +4412,7 @@ function countChars(rawText) {
 
 function getActiveEditorText() {
   if (state.currentIndex < 0 || state.currentIndex >= state.entries.length) return '';
-  if (state.appMode === 'other' || state.appMode === 'jojo') {
-    return dom.flatEdit.value;
-  }
-  if (state.splitMode) {
-    return dom.textEdit.value;
-  }
-  return dom.flatEdit.value;
+  return getActiveEditor().getValue();
 }
 
 function updateCharCount() {
@@ -4327,22 +4485,24 @@ function updateHint() {
 
 function editorDirty() {
   if (state.currentIndex < 0 || state.currentIndex >= state.entries.length) return false;
+  if (!_monacoReady) return false;
   const entry = state.entries[state.currentIndex];
 
   if (state.appMode === 'other' || state.appMode === 'jojo') {
-    return dom.flatEdit.value !== entry.toFlat();
+    return _monacoFlat.getValue() !== entry.toFlat();
   }
   if (state.splitMode) {
-    return dom.textEdit.value !== entry.text.join('\n') || dom.spEdit.value !== entry.visibleSpeakers().join('\n');
+    return _monacoText.getValue() !== entry.text.join('\n') || _monacoSp.getValue() !== entry.visibleSpeakers().join('\n');
   }
-  return dom.flatEdit.value !== entry.toFlat(state.useSeparator);
+  return _monacoFlat.getValue() !== entry.toFlat(state.useSeparator);
 }
 
 function updateEditorDirtyVisual() {
   const dirty = editorDirty();
-  const wrappers = (state.splitMode && state.appMode === 'ishin') ? [dom.textWrapper, dom.spWrapper] : [dom.flatWrapper];
-  for (const w of wrappers) {
-    if (w) w.classList.toggle('editor-dirty', dirty);
+  const containers = (state.splitMode && state.appMode === 'ishin')
+    ? [dom.textMonaco, dom.spMonaco] : [dom.flatMonaco];
+  for (const c of containers) {
+    if (c) c.classList.toggle('editor-dirty', dirty);
   }
 }
 
@@ -4354,85 +4514,71 @@ let _editorHeavyDebounce = null;
 function onEditorChanged(e) {
   if (state.loadingEditor) return;
   if (e && e.isTrusted) {
-    _programmaticEdit = false;  // Reset on manual typing
-    // Auto-pin preview tab when user starts editing
+    _programmaticEdit = false;
     if (_previewTabIdx === state.currentIndex) pinCurrentTab();
   }
-  // Invalidate find match positions (text changed)
   if (_find.currentIdx >= 0) { _find.currentIdx = -1; }
 
-  // Cheap immediate ops
   hideAddGlossPopup();
   markRecoveryDirty();
 
-  // Debounce expensive ops (dirty check, char count, highlights)
   if (_editorHeavyDebounce) clearTimeout(_editorHeavyDebounce);
   _editorHeavyDebounce = setTimeout(() => {
     updateEditorDirtyVisual();
     updateHint();
     updateCharCount();
     updateHighlights();
+    updateModifiedLineDecorations();
   }, 150);
 
-  // Auto-suggest glossary replacement when a full word is typed
   if (_autoGlossDebounce) clearTimeout(_autoGlossDebounce);
   _autoGlossDebounce = setTimeout(() => checkAutoGlossSuggestion(e), 200);
 }
 
 function checkAutoGlossSuggestion(e) {
-  const textarea = e && e.target;
-  if (!textarea || !textarea.value) return;
+  if (!_monacoReady) return;
   if (Object.keys(state.glossary).length === 0) return;
 
-  const pos = textarea.selectionStart;
-  const text = textarea.value;
+  const editor = getActiveEditor();
+  const monacoPos = editor.getPosition();
+  if (!monacoPos) return;
+  const model = editor.getModel();
+  const text = model.getValue();
+
+  // Get cursor offset
+  const offset = model.getOffsetAt(monacoPos);
 
   // Find the word that just ended (to the left of cursor)
-  // Word boundary: cursor is right after a word, and the char at cursor is whitespace/punctuation/end
-  const charAtCursor = pos < text.length ? text[pos] : ' ';
-  if (/[\p{L}\p{N}]/u.test(charAtCursor)) return; // Still mid-word
+  const charAtCursor = offset < text.length ? text[offset] : ' ';
+  if (/[\p{L}\p{N}]/u.test(charAtCursor)) return;
 
-  // Extract the word before cursor
-  let wordStart = pos - 1;
+  let wordStart = offset - 1;
   while (wordStart >= 0 && /[\p{L}\p{N}\u0027\u2019\u0301]/u.test(text[wordStart])) {
     wordStart--;
   }
   wordStart++;
 
-  if (wordStart >= pos) return;
-  const word = text.slice(wordStart, pos);
+  if (wordStart >= offset) return;
+  const word = text.slice(wordStart, offset);
   if (word.length < 2) return;
 
-  // Check if this word is a glossary key
   const trans = state.glossary[word];
   if (!trans) return;
-
-  // Don't suggest if word and translation are the same
   if (word === trans) return;
 
-  // Calculate position for the cloud popup near the cursor
-  const rect = textarea.getBoundingClientRect();
-  // Approximate cursor position using character measurements
-  const lines = text.slice(0, pos).split('\n');
-  const lineIdx = lines.length - 1;
-  const colIdx = lines[lineIdx].length;
-
-  const style = window.getComputedStyle(textarea);
-  const lineHeight = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.2;
-  const charWidth = parseFloat(style.fontSize) * 0.6;
-
-  const scrollTop = textarea.scrollTop;
-  const scrollLeft = textarea.scrollLeft;
-  const padTop = parseFloat(style.paddingTop);
-  const padLeft = parseFloat(style.paddingLeft);
-
-  const mx = rect.left + padLeft + (colIdx * charWidth) - scrollLeft;
-  const my = rect.top + padTop + ((lineIdx + 1) * lineHeight) - scrollTop + 4;
+  // Calculate popup position using Monaco API
+  const coords = editor.getScrolledVisiblePosition(monacoPos);
+  if (!coords) return;
+  const domNode = editor.getDomNode();
+  if (!domNode) return;
+  const editorRect = domNode.getBoundingClientRect();
+  const mx = editorRect.left + coords.left;
+  const my = editorRect.top + coords.top + coords.height + 4;
 
   showGlossCloud(
     Math.min(mx, window.innerWidth - 260),
     Math.min(my, window.innerHeight - 100),
-    word, trans, textarea, wordStart, pos
+    word, trans, editor, wordStart, offset
   );
 }
 
@@ -4454,9 +4600,9 @@ function checkGlossaryHints() {
   // Fallback: sync scan (only if worker hasn't precomputed yet)
   let combined;
   if (state.splitMode) {
-    combined = dom.textEdit.value + '\n' + dom.spEdit.value;
+    combined = _monacoText.getValue() + '\n' + _monacoSp.getValue();
   } else {
-    combined = dom.flatEdit.value;
+    combined = _monacoFlat.getValue();
   }
 
   _ensureGlossaryRegexMap();
@@ -4495,9 +4641,9 @@ async function applyChanges() {
   const entry = state.entries[state.currentIndex];
 
   if (state.appMode === 'jojo') {
-    // JoJo mode: single string
-    recordHistory(entry, entry.text, dom.flatEdit.value, undefined, undefined, 'edit');
-    entry.applyChanges(dom.flatEdit.value);
+    const val = _monacoFlat.getValue();
+    recordHistory(entry, entry.text, val, undefined, undefined, 'edit');
+    entry.applyChanges(val);
     _navHintsCache.delete(entry.index);
     updateVisibleEntry(entry.index);
     updateMeta();
@@ -4509,8 +4655,7 @@ async function applyChanges() {
   }
 
   if (state.appMode === 'other') {
-    // TXT mode: simple text apply
-    const newText = dom.flatEdit.value.split('\n');
+    const newText = _monacoFlat.getValue().split('\n');
     recordHistory(entry, entry.text, newText, undefined, undefined, 'edit');
     entry.applyChanges(newText);
     _navHintsCache.delete(entry.index);
@@ -4526,8 +4671,8 @@ async function applyChanges() {
   let newText, newSp, warning;
 
   if (state.splitMode) {
-    newText = dom.textEdit.value.split('\n');
-    const visSpEdited = dom.spEdit.value.split('\n');
+    newText = _monacoText.getValue().split('\n');
+    const visSpEdited = _monacoSp.getValue().split('\n');
     newSp = Entry.mergeSpeakers(entry.speakers, visSpEdited);
     const parts = [];
     if (newText.length !== entry.originalText.length) parts.push(`text: ${entry.originalText.length} \u2192 ${newText.length}`);
@@ -4535,7 +4680,7 @@ async function applyChanges() {
     if (visSpEdited.length !== origVis) parts.push(`speakers: ${origVis} \u2192 ${visSpEdited.length}`);
     warning = parts.length > 0 ? 'Кількість рядків змінилася: ' + parts.join('; ') : '';
   } else {
-    const flat = dom.flatEdit.value;
+    const flat = _monacoFlat.getValue();
     const result = entry.fromFlat(flat, state.useSeparator);
     newText = result.text;
     newSp = result.speakers;
@@ -4584,10 +4729,11 @@ function revertChanges() {
 
 function silentApply() {
   if (state.currentIndex < 0 || state.currentIndex >= state.entries.length) return;
+  if (!_monacoReady) return;
   const entry = state.entries[state.currentIndex];
 
   if (state.appMode === 'jojo') {
-    entry.applyChanges(dom.flatEdit.value);
+    entry.applyChanges(_monacoFlat.getValue());
     updateVisibleEntry(entry.index);
     updateMeta();
     updateEditorDirtyVisual();
@@ -4595,7 +4741,7 @@ function silentApply() {
   }
 
   if (state.appMode === 'other') {
-    entry.applyChanges(dom.flatEdit.value.split('\n'));
+    entry.applyChanges(_monacoFlat.getValue().split('\n'));
     updateVisibleEntry(entry.index);
     updateMeta();
     updateEditorDirtyVisual();
@@ -4604,10 +4750,10 @@ function silentApply() {
 
   let newText, newSp;
   if (state.splitMode) {
-    newText = dom.textEdit.value.split('\n');
-    newSp = Entry.mergeSpeakers(entry.speakers, dom.spEdit.value.split('\n'));
+    newText = _monacoText.getValue().split('\n');
+    newSp = Entry.mergeSpeakers(entry.speakers, _monacoSp.getValue().split('\n'));
   } else {
-    const result = entry.fromFlat(dom.flatEdit.value, state.useSeparator);
+    const result = entry.fromFlat(_monacoFlat.getValue(), state.useSeparator);
     newText = result.text;
     newSp = result.speakers;
   }
@@ -5221,9 +5367,8 @@ function importClipboard() {
   if (state.currentIndex < 0) return;
   const text = clipboard.readText();
   if (!text) { setStatus('Буфер порожній.'); return; }
-  if (state.splitMode && state.appMode === 'ishin') dom.textEdit.value = text;
-  else dom.flatEdit.value = text;
-  onEditorChanged();
+  if (state.splitMode && state.appMode === 'ishin') _monacoText.setValue(text);
+  else _monacoFlat.setValue(text);
   setStatus('Вставлено з буфера.');
 }
 
@@ -5245,9 +5390,8 @@ async function importFile() {
   if (!filePath) return;
   try {
     const text = fs.readFileSync(filePath, 'utf-8');
-    if (state.splitMode && state.appMode === 'ishin') dom.textEdit.value = text;
-    else dom.flatEdit.value = text;
-    onEditorChanged();
+    if (state.splitMode && state.appMode === 'ishin') _monacoText.setValue(text);
+    else _monacoFlat.setValue(text);
     setStatus(`Імпортовано: ${filePath}`);
   } catch (e) { await showInfo('Помилка', e.message); }
 }
@@ -5323,10 +5467,10 @@ function showDiff() {
 
   if (state.appMode === 'jojo') {
     original = entry.originalText;
-    current = dom.flatEdit.value;
+    current = _monacoFlat.getValue();
   } else if (state.appMode === 'other') {
     original = entry.originalText.join('\n');
-    current = dom.flatEdit.value;
+    current = _monacoFlat.getValue();
   } else {
     const visOrigSp = entry.visibleOriginalSpeakers();
     const origLines = [...entry.originalText];
@@ -5335,12 +5479,12 @@ function showDiff() {
     original = origLines.join('\n');
 
     if (state.splitMode) {
-      const curLines = dom.textEdit.value.split('\n');
-      if (state.useSeparator && curLines.length > 0 && dom.spEdit.value) curLines.push('');
-      curLines.push(...dom.spEdit.value.split('\n'));
+      const curLines = _monacoText.getValue().split('\n');
+      if (state.useSeparator && curLines.length > 0 && _monacoSp.getValue()) curLines.push('');
+      curLines.push(..._monacoSp.getValue().split('\n'));
       current = curLines.join('\n');
     } else {
-      current = dom.flatEdit.value;
+      current = _monacoFlat.getValue();
     }
   }
 
@@ -5357,10 +5501,10 @@ async function applyGlossaryToEditor() {
 
   let text, spText;
   if (state.splitMode && state.appMode === 'ishin') {
-    text = dom.textEdit.value;
-    spText = dom.spEdit.value;
+    text = _monacoText.getValue();
+    spText = _monacoSp.getValue();
   } else {
-    text = dom.flatEdit.value;
+    text = _monacoFlat.getValue();
     spText = null;
   }
 
@@ -5386,9 +5530,11 @@ async function applyGlossaryToEditor() {
     if (spText !== null) spText = spText.replace(regex, trans);
   }
 
-  // Apply to textarea
-  if (state.splitMode && state.appMode === 'ishin') { dom.textEdit.value = text; dom.spEdit.value = spText; }
-  else dom.flatEdit.value = text;
+  // Apply to Monaco editors
+  _suppressMonacoChange = true;
+  if (state.splitMode && state.appMode === 'ishin') { _monacoText.setValue(text); _monacoSp.setValue(spText); }
+  else _monacoFlat.setValue(text);
+  _suppressMonacoChange = false;
 
   // Record history + apply to data model so Ctrl+Z works
   const entry = state.entries[state.currentIndex];
@@ -5694,13 +5840,14 @@ function freqReplaceWord(original, translation, caseSensitive, wholeLine, rowEl)
 let highlightDebounce = null;
 
 function updateHighlights(immediate) {
+  if (!_monacoReady) return;
   if (highlightDebounce) clearTimeout(highlightDebounce);
   const doRender = () => {
     if (state.splitMode && state.appMode === 'ishin') {
-      renderHighlight(dom.textHighlight, dom.textEdit.value);
-      renderHighlight(dom.spHighlight, dom.spEdit.value);
+      renderMonacoHighlight(_monacoText);
+      renderMonacoHighlight(_monacoSp);
     } else {
-      renderHighlight(dom.flatHighlight, dom.flatEdit.value);
+      renderMonacoHighlight(_monacoFlat);
     }
   };
   if (immediate) {
@@ -5708,6 +5855,56 @@ function updateHighlights(immediate) {
   } else {
     highlightDebounce = setTimeout(doRender, 150);
   }
+}
+
+function renderMonacoHighlight(editor) {
+  if (!editor || !_monaco) return;
+  const model = editor.getModel();
+  const text = model.getValue();
+
+  if (state.settings.visual_effects === 'minimal') {
+    // Clear all decorations in minimal mode
+    _glossDecorationIds = editor.deltaDecorations(_glossDecorationIds, []);
+    _monaco.editor.setModelMarkers(model, 'spellcheck', []);
+    return;
+  }
+
+  const doSpell = state.spellCheckReady && state.settings.spellcheck_enabled;
+  const doGloss = state.settings.plugin_glossary !== false && Object.keys(state.glossary).length > 0;
+
+  if (!doGloss && !doSpell) {
+    _glossDecorationIds = editor.deltaDecorations(_glossDecorationIds, []);
+    _monaco.editor.setModelMarkers(model, 'spellcheck', []);
+    return;
+  }
+
+  // Worker path: send async request for glossary + spell
+  const editorId = editor === _monacoFlat ? 'flat' : (editor === _monacoText ? 'text' : 'sp');
+  if (_highlightWorker && _highlightWorkerReady) {
+    _highlightRequestId++;
+    const reqId = _highlightRequestId;
+    _pendingHighlight.set(editorId, { requestId: reqId, editor, text });
+    _highlightWorker.postMessage({
+      type: 'highlight',
+      requestId: reqId,
+      elementId: editorId,
+      text: text,
+      settings: { spellEnabled: doSpell, glossaryEnabled: doGloss },
+    });
+    return;
+  }
+
+  // Fallback: synchronous glossary only (spell check too slow for main thread)
+  const glossaryRegex = getGlossaryRegex();
+  const glossRanges = [];
+  if (glossaryRegex) {
+    glossaryRegex.lastIndex = 0;
+    let gm;
+    while ((gm = glossaryRegex.exec(text)) !== null) {
+      glossRanges.push({ start: gm.index, end: gm.index + gm[0].length, text: gm[0] });
+    }
+  }
+  applyGlossaryDecorations(editor, glossRanges);
 }
 
 // Cached glossary regex — rebuilt only when glossary changes
@@ -5728,299 +5925,76 @@ function getGlossaryRegex() {
   return _glossaryRegexCache;
 }
 
-let _highlightCache = new WeakMap(); // highlightEl → { text, html }
-
-function renderHighlight(highlightEl, text) {
-  if (!highlightEl) return;
-
-  // Minimal mode: skip all highlighting (but still show whitespace)
-  if (state.settings.visual_effects === 'minimal') {
-    highlightEl.innerHTML = applyWhitespaceVis(escHtml(text || '')) + '\n';
-    return;
-  }
-
-  const doSpell = state.spellCheckReady && state.settings.spellcheck_enabled;
-  const doGloss = state.settings.plugin_glossary !== false && Object.keys(state.glossary).length > 0;
-  const doFind = _find.currentIdx >= 0 && _find.matches.length > 0 && highlightEl === getActiveHighlightEl();
-
-  if (!doGloss && !doSpell && !doFind) {
-    highlightEl.innerHTML = applyWhitespaceVis(escHtml(text || '')) + '\n';
-    _highlightCache.delete(highlightEl);
-    return;
-  }
-
-  // Find-only: fast synchronous render (no need for worker)
-  if (!doGloss && !doSpell && doFind) {
-    renderHighlightFromRanges(highlightEl, text, [], [], true);
-    return;
-  }
-
-  // Skip if text unchanged and no active find
-  if (!doFind) {
-    const cached = _highlightCache.get(highlightEl);
-    if (cached && cached.text === text) return;
-  }
-
-  // Worker path: send async request
-  if (_highlightWorker && _highlightWorkerReady) {
-    _highlightRequestId++;
-    const reqId = _highlightRequestId;
-    const elId = highlightEl.id || 'flat';
-    _pendingHighlight.set(elId, { requestId: reqId, highlightEl, text, doFind });
-    _highlightWorker.postMessage({
-      type: 'highlight',
-      requestId: reqId,
-      elementId: elId,
-      text: text,
-      settings: { spellEnabled: doSpell, glossaryEnabled: doGloss },
-    });
-    return;
-  }
-
-  // Fallback: synchronous but WITHOUT spell checking (too slow for main thread)
-  renderHighlightSync(highlightEl, text, true);
-}
-
 function applyHighlightResult(msg) {
   const pending = _pendingHighlight.get(msg.elementId);
   if (!pending || pending.requestId !== msg.requestId) return;
   _pendingHighlight.delete(msg.elementId);
-  renderHighlightFromRanges(
-    pending.highlightEl, pending.text,
-    msg.glossRanges, msg.spellRanges, pending.doFind
-  );
+  const editor = pending.editor;
+  if (!editor || !_monaco) return;
+  applyGlossaryDecorations(editor, msg.glossRanges || []);
+  applySpellMarkers(editor, msg.spellRanges || []);
 }
 
-function applyWhitespaceVis(html) {
-  if (!state.settings.show_whitespace) return html;
-  return html
-    .replace(/ /g, '<span class="ws-space">\u00B7</span>')
-    .replace(/\t/g, '<span class="ws-tab">\t</span>')
-    .replace(/\n/g, '<span class="ws-cr">CR</span><span class="ws-lf">LF</span>\n');
+function applyGlossaryDecorations(editor, ranges) {
+  if (!_monaco) return;
+  const model = editor.getModel();
+  const decs = ranges.map(r => ({
+    range: offsetToRange(model, r.start, r.end),
+    options: {
+      inlineClassName: 'glossary-highlight',
+      hoverMessage: { value: r.text ? `**${r.text}** → ${state.glossary[r.text] || ''}` : '' }
+    }
+  }));
+  _glossDecorationIds = editor.deltaDecorations(_glossDecorationIds, decs);
 }
 
-function renderHighlightFromRanges(highlightEl, text, glossRanges, spellRanges, doFind) {
-  const findRanges = [];
-  if (doFind) {
-    const m = _find.matches[_find.currentIdx];
-    if (m && m.index + m.length <= text.length) {
-      findRanges.push({ start: m.index, end: m.index + m.length, type: 'find-current' });
-    }
-  }
-
-  const tagged = [
-    ...findRanges,
-    ...glossRanges.map(r => ({ ...r, type: 'gloss' })),
-    ...spellRanges.map(r => ({ ...r, type: 'spell' })),
-  ].sort((a, b) => a.start - b.start || (a.type === 'find-current' ? -1 : 1));
-
-  let html = '';
-  let pos = 0;
-  for (const r of tagged) {
-    if (r.start < pos) continue;
-    html += escHtml(text.slice(pos, r.start));
-    const seg = escHtml(text.slice(r.start, r.end));
-    if (r.type === 'gloss') html += '<mark>' + seg + '</mark>';
-    else if (r.type === 'spell') html += '<mark class="spell-error">' + seg + '</mark>';
-    else if (r.type === 'find-current') html += '<mark class="find-match-current">' + seg + '</mark>';
-    pos = r.end;
-  }
-  html += escHtml(text.slice(pos));
-  highlightEl.innerHTML = applyWhitespaceVis(html) + '\n';
-  if (!doFind) _highlightCache.set(highlightEl, { text });
+function applySpellMarkers(editor, ranges) {
+  if (!_monaco) return;
+  const model = editor.getModel();
+  const markers = ranges.map(r => {
+    const startPos = model.getPositionAt(r.start);
+    const endPos = model.getPositionAt(r.end);
+    return {
+      startLineNumber: startPos.lineNumber,
+      startColumn: startPos.column,
+      endLineNumber: endPos.lineNumber,
+      endColumn: endPos.column,
+      message: 'Можлива помилка',
+      severity: _monaco.MarkerSeverity.Info,
+      source: 'spellcheck'
+    };
+  });
+  _monaco.editor.setModelMarkers(model, 'spellcheck', markers);
 }
 
-function renderHighlightSync(highlightEl, text, skipSpell) {
-  const doSpell = !skipSpell && state.spellCheckReady && state.settings.spellcheck_enabled;
-  const glossaryRegex = getGlossaryRegex();
-  const doFind = _find.currentIdx >= 0 && _find.matches.length > 0 && highlightEl === getActiveHighlightEl();
+// Old HTML overlay functions removed — using Monaco decorations now
 
-  const glossRanges = [];
-  if (glossaryRegex) {
-    glossaryRegex.lastIndex = 0;
-    let gm;
-    while ((gm = glossaryRegex.exec(text)) !== null) {
-      glossRanges.push({ start: gm.index, end: gm.index + gm[0].length, text: gm[0], type: 'gloss' });
-    }
-  }
-
-  const spellRanges = [];
-  if (doSpell) {
-    const wordRe = /[\u0400-\u04FF\u0027\u2019\u0301]+/g;
-    let segment;
-    while ((segment = wordRe.exec(text)) !== null) {
-      const word = segment[0];
-      const wStart = segment.index;
-      const wEnd = wStart + word.length;
-      const overlapsGloss = glossRanges.some(g => wStart < g.end && wEnd > g.start);
-      if (overlapsGloss) continue;
-      const cleanWord = word.replace(/[\u0027\u2019]/g, '\u2019');
-      if (cleanWord.length >= 2 && isSpellError(cleanWord)) {
-        spellRanges.push({ start: wStart, end: wEnd, text: word, type: 'spell' });
-      }
-    }
-  }
-
-  const findRanges = [];
-  if (doFind) {
-    const m = _find.matches[_find.currentIdx];
-    if (m && m.index + m.length <= text.length) {
-      findRanges.push({ start: m.index, end: m.index + m.length, text: text.substring(m.index, m.index + m.length), type: 'find-current' });
-    }
-  }
-
-  const allRanges = [...findRanges, ...glossRanges, ...spellRanges]
-    .sort((a, b) => a.start - b.start || (a.type.startsWith('find') ? -1 : 1));
-
-  let html = '';
-  let pos = 0;
-  for (const r of allRanges) {
-    if (r.start < pos) continue;
-    html += escHtml(text.slice(pos, r.start));
-    if (r.type === 'gloss') html += '<mark>' + escHtml(r.text) + '</mark>';
-    else if (r.type === 'spell') html += '<mark class="spell-error">' + escHtml(r.text) + '</mark>';
-    else if (r.type === 'find-current') html += '<mark class="find-match-current">' + escHtml(r.text) + '</mark>';
-    pos = r.end;
-  }
-  html += escHtml(text.slice(pos));
-  highlightEl.innerHTML = applyWhitespaceVis(html) + '\n';
-  if (!doFind) _highlightCache.set(highlightEl, { text });
-}
+// renderHighlightSync removed — using Monaco decorations
 
 // ═══════════════════════════════════════════════════════════
 //  Line gutter (line numbers + bookmarks)
 // ═══════════════════════════════════════════════════════════
 
-let _gutterLineHeight = 0;
-
-function measureLineHeight(textarea) {
-  if (_gutterLineHeight > 0) return _gutterLineHeight;
-  const style = window.getComputedStyle(textarea);
-  const lh = parseFloat(style.lineHeight);
-  if (!isNaN(lh) && lh > 0) { _gutterLineHeight = lh; return lh; }
-  // Fallback: compute from font-size
-  const fs = parseFloat(style.fontSize);
-  _gutterLineHeight = Math.round(fs * 1.2);
-  return _gutterLineHeight;
-}
-
-function resetLineHeightCache() {
-  _gutterLineHeight = 0;
-}
-
-let _gutterLineCount = 0;
-
-function renderGutter(textarea, gutter) {
-  if (!textarea || !gutter) return;
-  const text = textarea.value;
-  const currentLines = text.split('\n');
-  const lineCount = currentLines.length;
-  const lineH = measureLineHeight(textarea);
-
-  const entryIdx = state.currentIndex;
-  const bSet = state.bookmarks[entryIdx] || new Set();
-
-  // Determine current line from cursor
-  const cursorPos = textarea.selectionStart;
-  const currentLine = text.substring(0, cursorPos).split('\n').length;
-
-  const orig = _originalEditorLines;
-  const isMinimal = state.settings.visual_effects === 'minimal';
-  const existingChildren = gutter.children;
-
-  // Incremental update: if line count matches, just update classes
-  if (existingChildren.length === lineCount && _gutterLineCount === lineCount) {
-    for (let i = 0; i < lineCount; i++) {
-      const div = existingChildren[i];
-      const lineNum = i + 1;
-      div.classList.toggle('bookmarked', bSet.has(lineNum));
-      div.classList.toggle('current-line', lineNum === currentLine);
-      if (!isMinimal) {
-        const idx = i;
-        div.classList.toggle('modified', orig.length > 0 && (idx >= orig.length || currentLines[idx] !== orig[idx]));
-      }
-    }
-    gutter.scrollTop = textarea.scrollTop;
-    return;
-  }
-
-  // Full rebuild needed (line count changed)
-  _gutterLineCount = lineCount;
-  const frag = document.createDocumentFragment();
-  for (let i = 1; i <= lineCount; i++) {
-    const div = document.createElement('div');
-    div.className = 'line-gutter-line';
-    if (bSet.has(i)) div.classList.add('bookmarked');
-    if (i === currentLine) div.classList.add('current-line');
-    if (!isMinimal) {
-      const idx = i - 1;
-      if (orig.length > 0 && (idx >= orig.length || currentLines[idx] !== orig[idx])) {
-        div.classList.add('modified');
-      }
-    }
-    div.style.height = lineH + 'px';
-    div.dataset.line = i;
-
-    const bm = document.createElement('span');
-    bm.className = 'line-gutter-bookmark';
-    div.appendChild(bm);
-
-    const num = document.createElement('span');
-    num.className = 'line-gutter-num';
-    num.textContent = i;
-    div.appendChild(num);
-
-    frag.appendChild(div);
-  }
-
-  gutter.innerHTML = '';
-  gutter.appendChild(frag);
-  gutter.scrollTop = textarea.scrollTop;
-
-  gutter.style.setProperty('--editor-line-height', lineH + 'px');
-}
-
-function getActiveGutter() {
-  if (state.appMode === 'other' || state.appMode === 'jojo') return dom.flatGutter;
-  if (state.splitMode) return dom.textGutter; // primary gutter
-  return dom.flatGutter;
-}
+// Gutter, scroll sync, and textarea helpers removed — Monaco handles all of this
 
 function getActiveTextarea() {
-  if (state.appMode === 'other' || state.appMode === 'jojo') return dom.flatEdit;
-  if (state.splitMode) return dom.textEdit;
-  return dom.flatEdit;
-}
-
-function updateAllGutters() {
-  if (state.appMode === 'other' || state.appMode === 'jojo') {
-    renderGutter(dom.flatEdit, dom.flatGutter);
-  } else if (state.splitMode) {
-    renderGutter(dom.textEdit, dom.textGutter);
-    renderGutter(dom.spEdit, dom.spGutter);
-  } else {
-    renderGutter(dom.flatEdit, dom.flatGutter);
-  }
-  updateCursorPosition();
+  // Compatibility shim — returns null; use getActiveEditor() instead
+  return null;
 }
 
 function updateCursorPosition() {
   if (!dom.statusCursor) return;
-  const ta = getActiveTextarea();
-  if (!ta || state.currentIndex < 0) { dom.statusCursor.textContent = ''; return; }
-  const pos = ta.selectionStart;
-  const text = ta.value.substring(0, pos);
-  const lines = text.split('\n');
-  const ln = lines.length;
-  const col = lines[lines.length - 1].length + 1;
-  const totalLines = ta.value.split('\n').length;
-  dom.statusCursor.textContent = `Рядок ${ln} / ${totalLines}, Стовп ${col}`;
+  if (!_monacoReady || state.currentIndex < 0) { dom.statusCursor.textContent = ''; return; }
+  const editor = getActiveEditor();
+  const pos = editor.getPosition();
+  if (!pos) { dom.statusCursor.textContent = ''; return; }
+  const totalLines = editor.getModel().getLineCount();
+  dom.statusCursor.textContent = `Рядок ${pos.lineNumber} / ${totalLines}, Стовп ${pos.column}`;
 }
 
-let _gutterDebounce = null;
+// scheduleGutterUpdate is now a no-op (Monaco handles line numbers)
 function scheduleGutterUpdate() {
-  if (_gutterDebounce) cancelAnimationFrame(_gutterDebounce);
-  _gutterDebounce = requestAnimationFrame(updateAllGutters);
+  // Decorations are handled by scheduleDecorationUpdate()
 }
 
 function toggleBookmark(lineNum) {
@@ -6032,68 +6006,28 @@ function toggleBookmark(lineNum) {
   } else {
     state.bookmarks[idx].add(lineNum);
   }
-  updateAllGutters();
+  updateBookmarkDecorations();
 }
 
 function setupGutterListeners() {
-  const gutters = [dom.flatGutter, dom.textGutter, dom.spGutter];
-  for (const gutter of gutters) {
-    if (!gutter) continue;
-    gutter.addEventListener('click', (e) => {
-      const lineEl = e.target.closest('.line-gutter-line');
-      if (!lineEl) return;
-      const lineNum = parseInt(lineEl.dataset.line, 10);
-      if (isNaN(lineNum)) return;
-      toggleBookmark(lineNum);
-    });
-  }
-
-  // Update gutter on input / cursor move / scroll
-  const textareas = [dom.flatEdit, dom.textEdit, dom.spEdit];
-  for (const ta of textareas) {
-    if (!ta) continue;
-    ta.addEventListener('input', scheduleGutterUpdate);
-    ta.addEventListener('click', scheduleGutterUpdate);
-    ta.addEventListener('keyup', (e) => {
-      // Only on cursor-moving keys
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown', 'Enter', 'Backspace', 'Delete'].includes(e.key)) {
-        scheduleGutterUpdate();
+  // Monaco glyph margin click for bookmark toggle
+  if (!_monacoReady) return;
+  for (const editor of [_monacoFlat, _monacoText, _monacoSp]) {
+    editor.onMouseDown((e) => {
+      if (e.target && e.target.type === _monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) {
+        const lineNum = e.target.position.lineNumber;
+        toggleBookmark(lineNum);
       }
     });
   }
 }
 
 function setupScrollSync() {
-  const triples = [
-    [dom.flatEdit, dom.flatHighlight, dom.flatGutter],
-    [dom.textEdit, dom.textHighlight, dom.textGutter],
-    [dom.spEdit, dom.spHighlight, dom.spGutter],
-  ];
-  for (const [textarea, highlight, gutter] of triples) {
-    if (textarea && highlight) {
-      let raf = null;
-      const wrapper = textarea.closest('.editor-highlight-wrapper');
-      const btnTop = wrapper ? wrapper.querySelector('.scroll-top') : null;
-      const btnBot = wrapper ? wrapper.querySelector('.scroll-bottom') : null;
-      textarea.addEventListener('scroll', () => {
-        if (raf) return;
-        raf = requestAnimationFrame(() => {
-          highlight.scrollTop = textarea.scrollTop;
-          highlight.scrollLeft = textarea.scrollLeft;
-          if (gutter) gutter.scrollTop = textarea.scrollTop;
-          // Update scroll buttons visibility
-          if (btnTop) btnTop.classList.toggle('visible', textarea.scrollTop > 100);
-          if (btnBot) {
-            const atBottom = textarea.scrollTop + textarea.clientHeight >= textarea.scrollHeight - 50;
-            btnBot.classList.toggle('visible', !atBottom && textarea.scrollHeight > textarea.clientHeight + 100);
-          }
-          raf = null;
-        });
-      });
-      if (btnTop) btnTop.addEventListener('click', () => { textarea.scrollTop = 0; textarea.focus(); });
-      if (btnBot) btnBot.addEventListener('click', () => { textarea.scrollTop = textarea.scrollHeight; textarea.focus(); });
-    }
-  }
+  // Monaco handles scroll internally — no scroll sync needed
+}
+
+function resetLineHeightCache() {
+  // No-op — Monaco manages its own line heights
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -6132,6 +6066,13 @@ function showEntryContextMenu(e, entryIndex) {
   bmItem.textContent = entry && isEntryBookmarked(entry)
     ? '\u25C6 Зняти закладку' : '\u25C7 Закладка';
 
+  // Show "Remove from list" only for other/jojo modes or external entries
+  const removeSep = document.getElementById('ctx-remove-sep');
+  const removeItem = document.getElementById('ctx-remove-entry');
+  const canRemove = state.appMode === 'other' || state.appMode === 'jojo' || (entry && entry.external);
+  removeSep.classList.toggle('hidden', !canRemove);
+  removeItem.classList.toggle('hidden', !canRemove);
+
   // Position
   const x = Math.min(e.clientX, window.innerWidth - 190);
   const y = Math.min(e.clientY, window.innerHeight - 200);
@@ -6157,6 +6098,50 @@ function clearCompareSelection() {
   _compareFirstIdx = -1;
   const prev = dom.entryList.querySelector('.compare-marked');
   if (prev) prev.classList.remove('compare-marked');
+}
+
+function removeEntryFromList(idx) {
+  if (idx < 0 || idx >= state.entries.length) return;
+  const entry = state.entries[idx];
+  const name = entry.file || `#${idx}`;
+
+  // Remove from entries array
+  state.entries.splice(idx, 1);
+
+  // Fix entry indices
+  for (let i = idx; i < state.entries.length; i++) {
+    state.entries[i].index = i;
+  }
+
+  // Close tab if open
+  closeEntryTab(idx);
+
+  // Fix open tab indices (shift down indices above removed)
+  _openTabs = _openTabs.map(t => t > idx ? t - 1 : t);
+
+  // Fix compare selection
+  if (_compareFirstIdx === idx) clearCompareSelection();
+  else if (_compareFirstIdx > idx) _compareFirstIdx--;
+
+  // Fix current index
+  if (state.currentIndex === idx) {
+    if (state.entries.length === 0) {
+      state.currentIndex = -1;
+      _monacoFlat.setValue('');
+      _monacoText.setValue('');
+      _monacoSp.setValue('');
+    } else {
+      state.currentIndex = Math.min(idx, state.entries.length - 1);
+      selectEntryByIndex(state.currentIndex);
+    }
+  } else if (state.currentIndex > idx) {
+    state.currentIndex--;
+  }
+
+  refreshList();
+  renderTabBar();
+  updateProgress();
+  setStatus(`Видалено зі списку: ${name}`);
 }
 
 function setupEntryContextMenu() {
@@ -6215,6 +6200,12 @@ function setupEntryContextMenu() {
   // Bookmarks
   document.getElementById('ctx-bookmark').addEventListener('click', () => {
     if (_ctxTargetIndex >= 0) toggleEntryBookmark(_ctxTargetIndex);
+    hideEntryContextMenu();
+  });
+
+  // Remove entry from list
+  document.getElementById('ctx-remove-entry').addEventListener('click', () => {
+    if (_ctxTargetIndex >= 0) removeEntryFromList(_ctxTargetIndex);
     hideEntryContextMenu();
   });
 
@@ -6286,8 +6277,8 @@ document.addEventListener('DOMContentLoaded', () => {
 // ═══════════════════════════════════════════════════════════
 
 function setupSelectionHandler() {
-  for (const textarea of [dom.flatEdit, dom.textEdit, dom.spEdit]) {
-    textarea.addEventListener('mouseup', onEditorMouseUp);
+  for (const ed of [_monacoFlat, _monacoText, _monacoSp]) {
+    if (ed) ed.onMouseUp((e) => onEditorMouseUp(e, ed));
   }
 
   // Glossary cloud popup buttons
@@ -6303,23 +6294,29 @@ function setupSelectionHandler() {
   });
 }
 
-function onEditorMouseUp(e) {
-  const textarea = e.target;
-  const sel = textarea.value.substring(textarea.selectionStart, textarea.selectionEnd).trim();
+function onEditorMouseUp(e, editor) {
+  const selection = editor.getSelection();
+  const model = editor.getModel();
+  const sel = model.getValueInRange(selection).trim();
+
+  // Mouse coordinates from Monaco's browser event
+  const mx = e.event.posx;
+  const my = e.event.posy;
 
   // If user selected a glossary term — show cloud
   if (sel && sel.length >= 2 && !sel.includes('\n') && state.glossary[sel]) {
-    showGlossCloud(e.clientX, e.clientY, sel, state.glossary[sel], textarea);
+    showGlossCloud(mx, my, sel, state.glossary[sel], editor);
     return;
   }
 
   // No selection — check if cursor is on a glossary term
   if (!sel) {
-    const cursorPos = textarea.selectionStart;
-    const text = textarea.value;
-    const hit = findGlossTermAtCursor(text, cursorPos);
+    const pos = editor.getPosition();
+    const cursorOffset = model.getOffsetAt(pos);
+    const text = model.getValue();
+    const hit = findGlossTermAtCursor(text, cursorOffset);
     if (hit) {
-      showGlossCloud(e.clientX, e.clientY, hit.term, hit.trans, textarea, hit.start, hit.end);
+      showGlossCloud(mx, my, hit.term, hit.trans, editor, hit.start, hit.end);
     } else {
       hideGlossCloud();
     }
@@ -6330,7 +6327,7 @@ function onEditorMouseUp(e) {
 
 // ─── Glossary Cloud (click on highlighted term) ───
 
-let glossCloudState = { textarea: null, start: 0, end: 0, term: '', trans: '' };
+let glossCloudState = { editor: null, start: 0, end: 0, term: '', trans: '' };
 
 function findGlossTermAtCursor(text, pos) {
   const terms = Object.keys(state.glossary);
@@ -6361,7 +6358,7 @@ function showGlossCloud(mx, my, term, trans, textarea, start, end) {
   document.getElementById('gloss-cloud-orig').textContent = term;
   document.getElementById('gloss-cloud-trans').textContent = trans;
 
-  glossCloudState = { textarea, start: start ?? -1, end: end ?? -1, term, trans };
+  glossCloudState = { editor: textarea, start: start ?? -1, end: end ?? -1, term, trans };
 
   const x = Math.min(mx, window.innerWidth - 260);
   const y = Math.min(my - 60, window.innerHeight - 100);
@@ -6372,28 +6369,23 @@ function showGlossCloud(mx, my, term, trans, textarea, start, end) {
 
 function hideGlossCloud() {
   document.getElementById('gloss-cloud').classList.add('hidden');
-  glossCloudState = { textarea: null, start: 0, end: 0, term: '', trans: '' };
+  glossCloudState = { editor: null, start: 0, end: 0, term: '', trans: '' };
 }
 
 function onGlossCloudReplace() {
-  const { textarea, start, end, term, trans } = glossCloudState;
-  if (!textarea || !term) return;
+  const { editor, start, end, term, trans } = glossCloudState;
+  if (!editor || !term || !_monaco) return;
 
+  const model = editor.getModel();
   if (start >= 0 && end >= 0) {
-    // Replace specific occurrence at cursor position
-    const before = textarea.value.slice(0, start);
-    const after = textarea.value.slice(end);
-    textarea.value = before + trans + after;
+    const range = offsetToRange(model, start, end);
+    editor.executeEdits('glossary-replace', [{ range, text: trans }]);
   } else {
     // Fallback: replace selected text
-    const s = textarea.selectionStart;
-    const e = textarea.selectionEnd;
-    const before = textarea.value.slice(0, s);
-    const after = textarea.value.slice(e);
-    textarea.value = before + trans + after;
+    const sel = editor.getSelection();
+    editor.executeEdits('glossary-replace', [{ range: sel, text: trans }]);
   }
 
-  textarea.dispatchEvent(new Event('input'));
   hideGlossCloud();
   setStatus(`Замінено: \u00ab${term}\u00bb \u2192 \u00ab${trans}\u00bb`);
 }
@@ -6585,12 +6577,15 @@ function showFindDialog(tab = 'find') {
   input.select();
 
   // Populate from selection if any
-  const ta = getActiveTextarea();
-  if (ta) {
-    const sel = ta.value.substring(ta.selectionStart, ta.selectionEnd);
-    if (sel && !sel.includes('\n') && sel.length < 200) {
-      input.value = sel;
-      syncFindInputs(inputId);
+  const editor = getActiveEditor();
+  if (editor) {
+    const selection = editor.getSelection();
+    if (selection && !selection.isEmpty()) {
+      const sel = editor.getModel().getValueInRange(selection);
+      if (sel && !sel.includes('\n') && sel.length < 200) {
+        input.value = sel;
+        syncFindInputs(inputId);
+      }
     }
   }
 }
@@ -6665,8 +6660,8 @@ function doFindInTextarea(params) {
 
   if (!params.query) return;
 
-  const ta = getActiveTextarea();
-  if (!ta || state.currentIndex < 0) return;
+  const editor = getActiveEditor();
+  if (!editor || state.currentIndex < 0) return;
 
   let regex;
   try {
@@ -6674,8 +6669,7 @@ function doFindInTextarea(params) {
   } catch (e) {
     return;
   }
-
-  const text = ta.value;
+  const text = editor.getValue();
   let match;
   regex.lastIndex = 0;
   while ((match = regex.exec(text)) !== null) {
@@ -6688,18 +6682,28 @@ function selectFindMatch() {
   if (_find.matches.length === 0 || _find.currentIdx < 0) return;
 
   const m = _find.matches[_find.currentIdx];
-  const ta = getActiveTextarea();
+  const editor = getActiveEditor();
+  const model = editor.getModel();
 
-  ta.focus();
-  ta.setSelectionRange(m.index, m.index + m.length);
+  editor.focus();
+  const range = offsetToRange(model, m.index, m.index + m.length);
+  editor.setSelection(range);
+  editor.revealRangeInCenter(range);
 
-  const before = ta.value.substring(0, m.index);
-  const linesBefore = before.split('\n').length - 1;
-  const lineH = measureLineHeight(ta);
-  ta.scrollTop = Math.max(0, linesBefore * lineH - ta.clientHeight / 3);
-
-  scheduleGutterUpdate();
+  applyFindDecorations(editor);
   updateHighlights();
+}
+
+function applyFindDecorations(editor) {
+  if (!_monaco) return;
+  const model = editor.getModel();
+  const decs = _find.matches.map((m, i) => ({
+    range: offsetToRange(model, m.index, m.index + m.length),
+    options: {
+      className: i === _find.currentIdx ? 'find-match-current' : 'find-match',
+    }
+  }));
+  _findDecorationIds = editor.deltaDecorations(_findDecorationIds, decs);
 }
 
 function findNext(fromReplace) {
@@ -6717,8 +6721,10 @@ function findNext(fromReplace) {
     return;
   }
 
-  const ta = getActiveTextarea();
-  const cursorPos = ta.selectionEnd;
+  const editor = getActiveEditor();
+  const model = editor.getModel();
+  const sel = editor.getSelection();
+  const cursorPos = model.getOffsetAt(sel.getEndPosition());
 
   let nextIdx = -1;
   for (let i = 0; i < _find.matches.length; i++) {
@@ -6754,8 +6760,10 @@ function findPrev(fromReplace) {
     return;
   }
 
-  const ta = getActiveTextarea();
-  const cursorPos = ta.selectionStart;
+  const editor = getActiveEditor();
+  const model = editor.getModel();
+  const sel = editor.getSelection();
+  const cursorPos = model.getOffsetAt(sel.getStartPosition());
 
   let prevIdx = -1;
   for (let i = _find.matches.length - 1; i >= 0; i--) {
@@ -6802,8 +6810,8 @@ function doFindAllInDocument() {
   _find.currentIdx = 0;
   updateHighlights();
 
-  const ta = getActiveTextarea();
-  const text = ta.value;
+  const editor = getActiveEditor();
+  const text = editor.getValue();
   const listEl = document.getElementById('find-results-list');
   listEl.innerHTML = '';
 
@@ -6859,28 +6867,30 @@ function doReplaceOne() {
   _findHistory.findPos = -1;
   _findHistory.replacePos = -1;
 
-  const ta = getActiveTextarea();
-  if (!ta || state.currentIndex < 0) return;
+  const editor = getActiveEditor();
+  if (!editor || state.currentIndex < 0) return;
+  const model = editor.getModel();
 
   // Check if current selection matches
   if (_find.currentIdx >= 0 && _find.currentIdx < _find.matches.length) {
     const m = _find.matches[_find.currentIdx];
-    if (ta.selectionStart === m.index && ta.selectionEnd === m.index + m.length) {
-      const before = ta.value.substring(0, m.index);
-      const after = ta.value.substring(m.index + m.length);
-
+    const sel = editor.getSelection();
+    const selStart = model.getOffsetAt(sel.getStartPosition());
+    const selEnd = model.getOffsetAt(sel.getEndPosition());
+    if (selStart === m.index && selEnd === m.index + m.length) {
       let replacement = params.replaceWith;
       if (params.useRegex) {
         try {
           const regex = buildSearchRegex(params.query, params.wholeWords, params.useRegex, params.matchCase);
-          const matchedText = ta.value.substring(m.index, m.index + m.length);
+          const matchedText = model.getValue().substring(m.index, m.index + m.length);
           replacement = matchedText.replace(regex, params.replaceWith);
         } catch (_) { /* use literal */ }
       }
 
-      ta.value = before + replacement + after;
-      ta.dispatchEvent(new Event('input'));
-      ta.setSelectionRange(m.index + replacement.length, m.index + replacement.length);
+      const range = offsetToRange(model, m.index, m.index + m.length);
+      editor.executeEdits('find-replace', [{ range, text: replacement }]);
+      const newPos = model.getPositionAt(m.index + replacement.length);
+      editor.setPosition(newPos);
       setFindResult('Замінено 1 збіг.', false, true);
       findNext(true);
       return;
@@ -7004,12 +7014,12 @@ function clearFindHighlights() {
 }
 
 function updateGotoLineInfo() {
-  const ta = getActiveTextarea();
+  const editor = getActiveEditor();
   const infoEl = document.getElementById('goto-line-info');
-  if (!ta || !infoEl) return;
-  const totalLines = ta.value.split('\n').length;
-  // Current line from cursor position
-  const curLine = ta.value.substring(0, ta.selectionStart).split('\n').length;
+  if (!editor || !infoEl) return;
+  const totalLines = editor.getModel().getLineCount();
+  const pos = editor.getPosition();
+  const curLine = pos ? pos.lineNumber : 1;
   infoEl.textContent = `Поточний рядок: ${curLine} / ${totalLines}`;
 }
 
@@ -7017,35 +7027,23 @@ function goToLine() {
   const input = document.getElementById('goto-line-input');
   const lineNum = parseInt(input.value, 10);
   if (!lineNum || lineNum < 1) return;
+  if (!_monacoReady) return;
 
-  const ta = getActiveTextarea();
-  if (!ta) return;
-
-  const lines = ta.value.split('\n');
-  const totalLines = lines.length;
+  const editor = getActiveEditor();
+  const totalLines = editor.getModel().getLineCount();
   const target = Math.min(lineNum, totalLines);
 
-  // Calculate character offset to the start of the target line
-  let charOffset = 0;
-  for (let i = 0; i < target - 1; i++) {
-    charOffset += lines[i].length + 1; // +1 for \n
-  }
+  editor.focus();
+  editor.setPosition({ lineNumber: target, column: 1 });
+  editor.revealLineInCenter(target);
 
-  ta.focus();
-  ta.setSelectionRange(charOffset, charOffset + lines[target - 1].length);
-
-  // Scroll so the target line is roughly in the center
-  const lineH = measureLineHeight(ta);
-  ta.scrollTop = Math.max(0, (target - 1) * lineH - ta.clientHeight / 3);
-
-  scheduleGutterUpdate();
   const infoEl = document.getElementById('goto-line-info');
   if (infoEl) infoEl.textContent = `Перейшли до рядка ${target} / ${totalLines}`;
 }
 
 function getActiveHighlightEl() {
-  if (state.splitMode && state.appMode === 'ishin') return dom.textHighlight;
-  return dom.flatHighlight;
+  // No longer used — Monaco handles highlights via decorations
+  return null;
 }
 
 function setupFindDialogDrag() {
@@ -7103,13 +7101,9 @@ function toggleWhitespace() {
   state.settings.show_whitespace = !state.settings.show_whitespace;
   document.getElementById('tb-show-all').classList.toggle('active', state.settings.show_whitespace);
   saveSettings(state.settings);
-  // Force re-render all visible highlights
-  _highlightCache = new WeakMap();
-  if (state.mode === 'ishin') {
-    renderHighlight(dom.textHighlight, dom.textEdit.value);
-    renderHighlight(dom.spHighlight, dom.spEdit.value);
-  } else {
-    renderHighlight(dom.flatHighlight, dom.flatEdit.value);
+  const ws = state.settings.show_whitespace ? 'all' : 'none';
+  for (const ed of [_monacoFlat, _monacoText, _monacoSp]) {
+    if (ed) ed.updateOptions({ renderWhitespace: ws });
   }
 }
 
@@ -7159,7 +7153,7 @@ function setupFindDialog() {
   document.getElementById('goto-line-input').addEventListener('keydown', (e) => {
     e.stopPropagation();
     if (e.key === 'Enter') { e.preventDefault(); goToLine(); }
-    else if (e.key === 'Escape') { e.preventDefault(); hideFindDialog(); getActiveTextarea()?.focus(); }
+    else if (e.key === 'Escape') { e.preventDefault(); hideFindDialog(); getActiveEditor()?.focus(); }
   });
 
   // Sync inputs between tabs
@@ -7200,7 +7194,7 @@ function setupFindDialog() {
         }
       } else if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); findPrev(isReplace); }
       else if (e.key === 'Enter') { e.preventDefault(); findNext(isReplace); }
-      else if (e.key === 'Escape') { e.preventDefault(); hideFindHistoryDropdown(); hideFindDialog(); getActiveTextarea()?.focus(); }
+      else if (e.key === 'Escape') { e.preventDefault(); hideFindHistoryDropdown(); hideFindDialog(); getActiveEditor()?.focus(); }
       else { _findHistory[posKey] = -1; }
     });
   }
@@ -7334,6 +7328,12 @@ function getFileSchema(entry) {
   if (entry && entry.filePath) {
     const s = state.settings.file_schemas[entry.filePath];
     if (s && Array.isArray(s.textPaths) && s.textPaths.length > 0) return s;
+    // Fallback: check parent directory schema (for individually opened files)
+    const dir = nodePath.dirname(entry.filePath);
+    if (dir) {
+      const ds = state.settings.file_schemas[dir];
+      if (ds && Array.isArray(ds.textPaths) && ds.textPaths.length > 0) return ds;
+    }
   }
   // Fallback to global key (ishin/jojo mode)
   const key = state.filePath || state.txtDirPath;
@@ -7366,14 +7366,22 @@ function saveFileSchema(textPaths, parseAs) {
   }
   // In "other" mode, also update directory-level default so files without
   // their own schema inherit it automatically
-  if (state.appMode === 'other' && state.txtDirPath && key !== state.txtDirPath) {
-    if (isEmpty) {
-      delete state.settings.file_schemas[state.txtDirPath];
-    } else {
-      state.settings.file_schemas[state.txtDirPath] = {
-        textPaths: textPaths || [],
-        ...(parseAs && parseAs !== 'auto' ? { parseAs } : {}),
-      };
+  if (state.appMode === 'other') {
+    // Use txtDirPath if available, otherwise derive from current file
+    let dirKey = state.txtDirPath;
+    if (!dirKey && state.currentIndex >= 0 && state.currentIndex < state.entries.length) {
+      const e = state.entries[state.currentIndex];
+      if (e && e.filePath) dirKey = nodePath.dirname(e.filePath);
+    }
+    if (dirKey && key !== dirKey) {
+      if (isEmpty) {
+        delete state.settings.file_schemas[dirKey];
+      } else {
+        state.settings.file_schemas[dirKey] = {
+          textPaths: textPaths || [],
+          ...(parseAs && parseAs !== 'auto' ? { parseAs } : {}),
+        };
+      }
     }
   }
   saveSettings(state.settings);
@@ -7387,6 +7395,12 @@ function getFileParseAs(entry) {
   if (entry && entry.filePath) {
     const s = state.settings.file_schemas[entry.filePath];
     if (s && s.parseAs) return s.parseAs;
+    // Fallback: parent directory
+    const dir = nodePath.dirname(entry.filePath);
+    if (dir) {
+      const ds = state.settings.file_schemas[dir];
+      if (ds && ds.parseAs) return ds.parseAs;
+    }
   }
   // Fallback to global key
   const key = state.filePath || state.txtDirPath;
@@ -7482,12 +7496,28 @@ function _tryParseEntryXml(entry) {
   return null;
 }
 
+function _tryParseEntryKeyValue(entry) {
+  const raw = Array.isArray(entry.text) ? entry.text.join('\n') : (entry.text || '');
+  const obj = {};
+  let hasKV = false;
+  for (const line of raw.split('\n')) {
+    const eqIdx = line.indexOf('=');
+    if (eqIdx > 0) {
+      const key = line.substring(0, eqIdx).trim();
+      const val = line.substring(eqIdx + 1);
+      if (key) { obj[key] = val; hasKV = true; }
+    }
+  }
+  return hasKV ? obj : null;
+}
+
 function _tryParseEntryData(entry) {
   // ishin mode always has entry.data
   if (entry.data && typeof entry.data === 'object') return entry.data;
   const parseAs = getFileParseAs(entry);
   if (parseAs === 'json') return _tryParseEntryJson(entry);
   if (parseAs === 'xml') return _tryParseEntryXml(entry);
+  if (parseAs === 'keyvalue') return _tryParseEntryKeyValue(entry);
   // auto: try JSON first, then XML
   return _tryParseEntryJson(entry) || _tryParseEntryXml(entry);
 }
@@ -8221,13 +8251,11 @@ function applyWrap() {
     }
     const raw = getActiveEditorText();
     const wrapped = wrapText(raw, breakChar, maxWidth);
-    // Apply to editor textarea
+    // Apply to Monaco editor
     if (state.splitMode && state.appMode === 'ishin') {
-      dom.textEdit.value = wrapped;
-      dom.textEdit.dispatchEvent(new Event('input'));
+      _monacoText.setValue(wrapped);
     } else {
-      dom.flatEdit.value = wrapped;
-      dom.flatEdit.dispatchEvent(new Event('input'));
+      _monacoFlat.setValue(wrapped);
     }
     resultEl.textContent = 'Перенесення застосовано до поточного запису.';
     resultEl.classList.remove('replace-error');
@@ -8239,11 +8267,9 @@ function applyWrap() {
       const raw = getActiveEditorText();
       const wrapped = wrapText(raw, breakChar, maxWidth);
       if (state.splitMode && state.appMode === 'ishin') {
-        dom.textEdit.value = wrapped;
-        dom.textEdit.dispatchEvent(new Event('input'));
+        _monacoText.setValue(wrapped);
       } else {
-        dom.flatEdit.value = wrapped;
-        dom.flatEdit.dispatchEvent(new Event('input'));
+        _monacoFlat.setValue(wrapped);
       }
     }
     // Apply to all entries in memory
@@ -8391,9 +8417,9 @@ function writeRecoveryFile() {
     if (state.currentIndex >= 0) {
       editorSnapshot = {
         index: state.currentIndex,
-        flatValue: dom.flatEdit ? dom.flatEdit.value : null,
-        textValue: dom.textEdit ? dom.textEdit.value : null,
-        spValue: dom.spEdit ? dom.spEdit.value : null,
+        flatValue: _monacoFlat ? _monacoFlat.getValue() : null,
+        textValue: _monacoText ? _monacoText.getValue() : null,
+        spValue: _monacoSp ? _monacoSp.getValue() : null,
       };
     }
 
@@ -8536,12 +8562,14 @@ function restoreFromRecovery(snapshot) {
     // Restore unsaved editor content
     if (snapshot.editorSnapshot && snapshot.editorSnapshot.index === idx) {
       const es = snapshot.editorSnapshot;
+      _suppressMonacoChange = true;
       if (state.splitMode && state.appMode === 'ishin') {
-        if (es.textValue !== null) dom.textEdit.value = es.textValue;
-        if (es.spValue !== null) dom.spEdit.value = es.spValue;
+        if (es.textValue !== null) _monacoText.setValue(es.textValue);
+        if (es.spValue !== null) _monacoSp.setValue(es.spValue);
       } else {
-        if (es.flatValue !== null) dom.flatEdit.value = es.flatValue;
+        if (es.flatValue !== null) _monacoFlat.setValue(es.flatValue);
       }
+      _suppressMonacoChange = false;
       updateEditorDirtyVisual();
       updateHighlights();
     }
@@ -8571,6 +8599,17 @@ async function toggleSplitMode() {
   dom.flatContainer.style.display = state.splitMode ? 'none' : 'flex';
   dom.splitContainer.style.display = state.splitMode ? 'flex' : 'none';
   if (state.currentIndex >= 0) loadEditor();
+  // Force Monaco layout recalculation after container visibility change
+  if (_monacoReady) {
+    setTimeout(() => {
+      if (state.splitMode) {
+        _monacoText.layout();
+        _monacoSp.layout();
+      } else {
+        _monacoFlat.layout();
+      }
+    }, 50);
+  }
   setStatus(state.splitMode ? 'Роздільний режим' : 'Плоский режим');
 }
 
@@ -8688,7 +8727,7 @@ function setupKeyboard() {
       if (!pwOverlay.classList.contains('hidden')) { dismissPowerWarning(); return; }
 
       // Close find dialog
-      if (isFindDialogVisible()) { hideFindDialog(); getActiveTextarea()?.focus(); return; }
+      if (isFindDialogVisible()) { hideFindDialog(); getActiveEditor()?.focus(); return; }
 
       // Close command palette
       if (!document.getElementById('cmd-palette-overlay').classList.contains('hidden')) {
@@ -8933,9 +8972,7 @@ function setupEventListeners() {
   });
 
   // Editor change events
-  dom.flatEdit.addEventListener('input', onEditorChanged);
-  dom.textEdit.addEventListener('input', onEditorChanged);
-  dom.spEdit.addEventListener('input', onEditorChanged);
+  // Monaco editor change events are set up in initMonacoEditors()
 
   // Settings modal
   document.getElementById('settings-save').addEventListener('click', saveSettingsFromModal);
@@ -9077,7 +9114,9 @@ function init() {
         () => { setupEventListeners(); },
         () => { setupIPC(); },
         () => { setupKeyboard(); },
-        () => { setupScrollSync(); setupGutterListeners(); },
+        () => { setupScrollSync(); },
+        // ── Monaco Editor init (async — resolves before next step) ──
+        () => initMonacoEditors().then(() => { setupGutterListeners(); }),
         () => { setupEntryContextMenu(); setupToolbar(); },
         () => { setupFindDialog(); setupSchemaModal(); },
         () => { setupSelectionHandler(); setupZoom(); setupDragDrop(); },
