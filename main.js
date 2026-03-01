@@ -139,6 +139,25 @@ function buildMenu() {
         { label: 'Директорія...', click: () => send('menu:action', 'migrate-dir') },
       ],
     },
+    {
+      label: 'Розробка',
+      submenu: [
+        {
+          label: 'DevTools',
+          accelerator: 'F12',
+          click: () => {
+            if (mainWindow) mainWindow.webContents.toggleDevTools();
+          },
+        },
+        {
+          label: 'Перезавантажити',
+          accelerator: 'CmdOrCtrl+R',
+          click: () => {
+            if (mainWindow) mainWindow.webContents.reload();
+          },
+        },
+      ],
+    },
   ];
 
   const menu = Menu.buildFromTemplate(template);

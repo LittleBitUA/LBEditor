@@ -1788,7 +1788,8 @@ textarea.editor-dirty {
 }
 
 /* Reset global textarea styles on Monaco's internal hidden textarea */
-.monaco-editor textarea.inputarea {
+.monaco-editor textarea.inputarea,
+.monaco-editor .ime-text-area {
   background: transparent !important;
   border: none !important;
   border-radius: 0 !important;
@@ -1797,6 +1798,7 @@ textarea.editor-dirty {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
   outline: none !important;
+  opacity: 0 !important;
 }
 
 /* ─── Monaco Decoration: Glossary Highlights ─── */
