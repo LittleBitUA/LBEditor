@@ -1,11 +1,15 @@
 {
   "name": "lb-tool",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "LB",
   "main": "main.js",
   "scripts": {
+    "prestart": "node build.js",
     "start": "electron .",
-    "build": "electron-builder --win"
+    "prebuild": "node build.js",
+    "build": "electron-builder --win --publish never",
+    "build:linux": "electron-builder --linux --publish never",
+    "build:mac": "electron-builder --mac --publish never"
   },
   "build": {
     "appId": "com.littlebit.lb-tool",
@@ -16,6 +20,7 @@
       "monaco-loader.js",
       "highlight-worker.js",
       "analysis-worker.js",
+      "io-worker.js",
       "index.html",
       "styles.css",
       "node_modules/nspell/**/*",
@@ -54,6 +59,16 @@
       "oneClick": true,
       "perMachine": false,
       "artifactName": "LB-Setup.exe"
+    },
+    "mac": {
+      "target": [{ "target": "dmg" }],
+      "icon": "build/icon.icns",
+      "artifactName": "LB-mac.dmg"
+    },
+    "linux": {
+      "target": [{ "target": "AppImage" }],
+      "icon": "build/icon.png",
+      "artifactName": "LB-linux.AppImage"
     }
   },
   "devDependencies": {

@@ -1,0 +1,275 @@
+/* ─── Find Dialog (floating, Notepad++ style) ─── */
+
+.find-dialog {
+  position: fixed;
+  top: 80px;
+  right: 40px;
+  z-index: 900;
+  width: 480px;
+  background: var(--bg-surface);
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+  border: 1px solid var(--border-glass);
+  border-radius: 12px;
+  box-shadow: var(--shadow), 0 0 60px rgba(0,0,0,0.2);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: modalIn 0.18s ease-out;
+}
+
+.find-dialog-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border-glass);
+  cursor: move;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.find-dialog-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.find-dialog-close {
+  width: 24px; height: 24px;
+  border: none; background: transparent;
+  color: var(--text-muted); cursor: pointer;
+  font-size: 16px; border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s; padding: 0;
+}
+.find-dialog-close:hover {
+  color: var(--text-primary);
+  background: var(--bg-glass-hover);
+}
+
+.find-dialog-tabs {
+  display: flex; gap: 2px;
+  padding: 8px 14px 0;
+  flex-shrink: 0;
+}
+
+.find-tab-btn {
+  padding: 5px 16px;
+  border: none; background: transparent;
+  cursor: pointer; border-radius: 6px 6px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  transition: all 0.15s;
+}
+.find-tab-btn:hover { color: var(--text-secondary); }
+.find-tab-btn.active {
+  background: var(--accent-subtle, rgba(255,255,255,0.06));
+  color: var(--text-primary);
+}
+
+.find-tab-content { display: none; padding: 12px 14px; }
+.find-tab-content.active { display: block; }
+
+.find-field-row {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+}
+.find-field-row label {
+  min-width: 80px; text-align: right;
+  font-size: 12px; color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.find-field-row input[type="text"] { flex: 1; }
+
+.find-input-wrapper {
+  display: flex;
+  flex: 1;
+  position: relative;
+}
+.find-input-wrapper input[type="text"] {
+  flex: 1;
+  padding-right: 24px;
+}
+.find-history-btn {
+  position: absolute;
+  right: 1px;
+  top: 1px;
+  bottom: 1px;
+  width: 22px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  border-radius: 0 5px 5px 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  padding: 0;
+}
+.find-history-btn:hover {
+  color: var(--text-secondary);
+  background: var(--bg-glass-hover);
+}
+.find-history-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 950;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--bg-surface);
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+  border: 1px solid var(--border-glass);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  margin-top: 2px;
+}
+.find-history-item {
+  padding: 5px 10px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: 'Consolas', 'Cascadia Code', monospace;
+}
+.find-history-item:hover,
+.find-history-item.active {
+  background: var(--accent-subtle, rgba(255,255,255,0.06));
+  color: var(--text-primary);
+}
+.find-history-empty {
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.find-options {
+  display: flex; gap: 12px; margin: 6px 0; flex-wrap: wrap;
+}
+.find-options label {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 11px; color: var(--text-secondary); cursor: pointer;
+}
+
+.find-mode {
+  display: flex; gap: 14px; margin: 6px 0;
+}
+.find-mode label {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 11px; color: var(--text-secondary); cursor: pointer;
+}
+
+.find-replace-scope {
+  display: flex; gap: 14px; margin: 6px 0;
+}
+.find-replace-scope label {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 11px; color: var(--text-secondary); cursor: pointer;
+}
+
+.find-regex-hint {
+  font-size: 10px; color: var(--text-muted);
+  background: var(--bg-input);
+  border: 1px solid var(--border-glass);
+  border-radius: 6px;
+  padding: 5px 10px; margin: 4px 0; line-height: 1.7;
+}
+.find-regex-hint code {
+  background: var(--bg-glass-hover);
+  border: 1px solid var(--border-glass);
+  border-radius: 3px; padding: 0 4px;
+  font-family: 'Consolas', monospace;
+  font-size: 10px; color: var(--accent);
+}
+
+.find-buttons {
+  display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap;
+}
+
+.find-result {
+  font-size: 11px; color: var(--accent); min-height: 16px; margin-top: 6px;
+}
+.find-result.find-error { color: var(--error); }
+
+/* Go to line */
+.goto-line-info {
+  font-size: 11px; color: var(--text-secondary); margin: 6px 0;
+}
+#goto-line-input {
+  width: 140px;
+  -moz-appearance: textfield;
+}
+#goto-line-input::-webkit-inner-spin-button,
+#goto-line-input::-webkit-outer-spin-button {
+  -webkit-appearance: none; margin: 0;
+}
+
+/* Results panel */
+.find-results-panel {
+  border-top: 1px solid var(--border-glass);
+  max-height: 200px;
+  display: flex; flex-direction: column;
+}
+
+.find-results-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 14px;
+  font-size: 11px; font-weight: 600;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-glass);
+  flex-shrink: 0;
+}
+
+.find-results-close {
+  width: 20px; height: 20px;
+  border: none; background: transparent;
+  color: var(--text-muted); cursor: pointer;
+  font-size: 14px; border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0;
+}
+.find-results-close:hover {
+  color: var(--text-primary); background: var(--bg-glass-hover);
+}
+
+.find-results-list {
+  overflow-y: auto; flex: 1; padding: 4px 0;
+}
+
+.find-results-item {
+  display: flex; gap: 8px; padding: 3px 14px;
+  cursor: pointer; font-size: 11px;
+  color: var(--text-secondary);
+  transition: background 0.1s;
+}
+.find-results-item:hover {
+  background: var(--bg-glass-hover);
+  color: var(--text-primary);
+}
+.find-results-item.active {
+  background: var(--accent-subtle, rgba(255,255,255,0.06));
+  color: var(--text-primary);
+}
+
+.find-results-line {
+  color: var(--accent); min-width: 36px; text-align: right;
+  font-family: 'Consolas', monospace;
+}
+.find-results-text {
+  flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.find-results-text mark {
+  background: var(--accent-subtle, rgba(255,210,0,0.2)); color: var(--text-primary);
+  border-radius: 2px; padding: 0 1px;
+}
+
+/* Find match highlight in editor (only current match — used in find-results-text) */
+

@@ -19,6 +19,8 @@ let _bookmarkDecoIds = [];
 let _modifiedDecoIds = [];
 let _monacoReady = false;
 let _suppressMonacoChange = false; // suppress onDidChangeModelContent during setValue
+let _sideMonaco = null;       // side panel Monaco editor (read-only)
+let _sidePanelIdx = -1;       // entry index shown in side panel (-1 = hidden)
 
 // ── Worker thread state ────────────────────────────────────
 let _highlightWorker = null;
@@ -210,7 +212,7 @@ const DEFAULT_SETTINGS = {
   font_size: 11,
   autosave_enabled: false,
   autosave_interval: 30,
-  backup_on_save: true,
+  backup_on_save: false,
   periodic_backup: false,
   periodic_backup_interval: 300,
   confirm_on_switch: true,
@@ -226,13 +228,14 @@ const DEFAULT_SETTINGS = {
   progress_games_path: '',
   progress_game_id: '',
   progress_code_words: '',
-  other_extensions: '.txt .json',
+  other_extensions: '.txt .json .csv',
   power_warning_enabled: true,
   power_schedule: null, // { 0: Array(48), ..., 6: Array(48) } — per day, half-hour slots
   show_bookmarks: true,
   plugin_glossary: true,
   custom_themes: {},
   file_schemas: {},
+  custom_schemas: [],
 };
 
 const DEFAULT_GLOSSARY = {
@@ -665,8 +668,16 @@ const state = {
 const _openTabs = [];
 let _previewTabIdx = -1; // entry index shown as preview (italic, replaced on next single-click)
 let _listClickTimer = null; // delayed single-click to distinguish from double-click
+const _multiSelected = new Set();  // multi-select: set of entry indices
+let _lastClickedIdx = -1;          // anchor for Shift+click range selection
 
 function openEntryTab(entryIdx, pinned) {
+  // Tab already open — just switch to it, don't touch preview logic
+  if (_openTabs.includes(entryIdx)) {
+    if (pinned && _previewTabIdx === entryIdx) _previewTabIdx = -1;
+    renderTabBar();
+    return;
+  }
   if (pinned) {
     // Pin: if it was preview, just un-mark it
     if (_previewTabIdx === entryIdx) _previewTabIdx = -1;
@@ -1130,6 +1141,7 @@ function loadSettings() {
   if (result.power_warning_enabled === undefined) result.power_warning_enabled = true;
   if (!result.custom_themes || typeof result.custom_themes !== 'object') result.custom_themes = {};
   if (!result.file_schemas || typeof result.file_schemas !== 'object') result.file_schemas = {};
+  if (!Array.isArray(result.custom_schemas)) result.custom_schemas = [];
   return result;
 }
 
@@ -1256,7 +1268,7 @@ function goToNextBookmark() {
   const next = bms.find(i => i > cur);
   const idx = next !== undefined ? next : bms[0];
   selectEntryByIndex(idx, true);
-  setStatus('Закладка: [' + idx + '] ' + state.entries[idx].file);
+  setStatus('Закладка: [' + (idx + 1) + '] ' + state.entries[idx].file);
 }
 
 function goToPrevBookmark() {
@@ -1269,7 +1281,7 @@ function goToPrevBookmark() {
   }
   const idx = prev !== undefined ? prev : bms[bms.length - 1];
   selectEntryByIndex(idx, true);
-  setStatus('Закладка: [' + idx + '] ' + state.entries[idx].file);
+  setStatus('Закладка: [' + (idx + 1) + '] ' + state.entries[idx].file);
 }
 
 function showBookmarksPanel() {
@@ -1292,7 +1304,7 @@ function showBookmarksPanel() {
 
       const info = document.createElement('div');
       info.className = 'bm-row-info';
-      info.textContent = '[' + entry.index + '] ' + entry.file;
+      info.textContent = '[' + (entry.index + 1) + '] ' + entry.file;
       row.appendChild(info);
 
       const tagData = getEntryTagData(entry);
@@ -1384,7 +1396,7 @@ function showHistoryPanel() {
   const entry = state.entries[state.currentIndex];
   const overlay = document.getElementById('history-overlay');
   const modal = document.getElementById('history-modal');
-  document.getElementById('history-entry-label').textContent = `[${entry.index}] ${entry.file}`;
+  document.getElementById('history-entry-label').textContent = `[${entry.index + 1}] ${entry.file}`;
   overlay.classList.remove('hidden');
   modal.classList.remove('hidden');
   renderHistoryList(entry);
@@ -1489,7 +1501,7 @@ function undoLastChange() {
   updateMeta();
   updateProgress();
   markRecoveryDirty();
-  setStatus(`Скасовано зміну в [${entry.index}] ${entry.file}`);
+  setStatus(`Скасовано зміну в [${entry.index + 1}] ${entry.file}`);
   return true;
 }
 
@@ -1526,7 +1538,7 @@ function redoLastChange() {
   updateMeta();
   updateProgress();
   markRecoveryDirty();
-  setStatus(`Повторено зміну в [${entry.index}] ${entry.file}`);
+  setStatus(`Повторено зміну в [${entry.index + 1}] ${entry.file}`);
   return true;
 }
 
@@ -1558,7 +1570,7 @@ async function rollbackToHistory(record) {
   _minimapDirty = true;
   renderMinimap();
   hideHistoryPanel();
-  setStatus(`Відкочено запис [${entry.index}] ${entry.file}`);
+  setStatus(`Відкочено запис [${entry.index + 1}] ${entry.file}`);
 }
 
 async function clearEntryHistory() {
@@ -1712,6 +1724,7 @@ const CMD_COMMANDS = [
   { label: 'Перенесення — Файл', action: () => showMigrateModal('file'), cat: 'Перенесення' },
   { label: 'Перенесення — Директорія', action: () => showMigrateModal('dir'), cat: 'Перенесення' },
   { label: 'Показати всі символи', action: () => toggleWhitespace(), cat: 'Редагування' },
+  { label: 'Бічна панель (відкрити/закрити)', action: () => toggleSidePanel(), cat: 'Вид' },
   { label: 'Вид: список ліворуч', action: () => setLayout('list-left'), cat: 'Вид' },
   { label: 'Вид: список праворуч', action: () => setLayout('list-right'), cat: 'Вид' },
   { label: 'Вид: список зверху', action: () => setLayout('list-top'), cat: 'Вид' },
@@ -1766,7 +1779,7 @@ function filterCmdResults(query) {
     if (text.length > 1) {
       const matches = state.entries.filter(e => e.getSearchIndex().includes(text)).slice(0, 20);
       _cmdFilteredItems = matches.map(e => ({
-        label: '[' + e.index + '] ' + e.file,
+        label: '[' + (e.index + 1) + '] ' + e.file,
         action: () => selectEntryByIndex(e.index),
       }));
     }
@@ -2686,7 +2699,7 @@ function applySettingsToUI() {
 function applyFont(family, size) {
   const fontFamily = `'${family}', monospace`;
   const fontSize = Math.round(size * 1.333); // pt → px
-  for (const ed of [_monacoFlat, _monacoText, _monacoSp]) {
+  for (const ed of [_monacoFlat, _monacoText, _monacoSp, _sideMonaco]) {
     if (ed) ed.updateOptions({ fontFamily, fontSize });
   }
 }
@@ -2703,6 +2716,7 @@ function applyWordWrap(wrap) {
     _monacoFlat.updateOptions({ wordWrap: option });
     _monacoText.updateOptions({ wordWrap: option });
     _monacoSp.updateOptions({ wordWrap: option });
+    if (_sideMonaco) _sideMonaco.updateOptions({ wordWrap: option });
   }
 }
 
@@ -2742,14 +2756,16 @@ function ask(title, text, buttons = 'yn') {
       resolve(val);
     }
 
-    for (const ch of buttons) {
-      if (defs[ch]) {
-        const btn = document.createElement('button');
-        btn.textContent = defs[ch].label;
-        if (ch === 'y') btn.className = 'btn-primary';
-        btn.addEventListener('click', () => finish(defs[ch].value));
-        btnContainer.appendChild(btn);
-      }
+    const btnList = Array.isArray(buttons)
+      ? buttons
+      : [...buttons].map(ch => defs[ch]).filter(Boolean);
+
+    for (const def of btnList) {
+      const btn = document.createElement('button');
+      btn.textContent = def.label;
+      if (def.primary || (!Array.isArray(buttons) && def.value === 'y')) btn.className = 'btn-primary';
+      btn.addEventListener('click', () => finish(def.value));
+      btnContainer.appendChild(btn);
     }
 
     overlay.classList.remove('hidden');
@@ -2824,7 +2840,6 @@ function showSettingsModal() {
   document.getElementById('set-spellcheck').checked = s.spellcheck_enabled;
   document.getElementById('set-autosave').checked = s.autosave_enabled;
   document.getElementById('set-interval').value = s.autosave_interval;
-  document.getElementById('set-backup').checked = s.backup_on_save;
   document.getElementById('set-visual-fx').value = s.visual_effects || 'full';
   document.getElementById('set-periodic-backup').checked = s.periodic_backup;
   document.getElementById('set-periodic-interval').value = s.periodic_backup_interval;
@@ -3012,7 +3027,7 @@ function saveSettingsFromModal() {
     font_size: parseInt(document.getElementById('set-font-size').value, 10) || 11,
     autosave_enabled: document.getElementById('set-autosave').checked,
     autosave_interval: interval,
-    backup_on_save: document.getElementById('set-backup').checked,
+    backup_on_save: false,
     periodic_backup: document.getElementById('set-periodic-backup').checked,
     periodic_backup_interval: periodicInterval,
     confirm_on_switch: document.getElementById('set-confirm').checked,
@@ -4001,11 +4016,30 @@ function rebuildFilteredEntries() {
   renderMinimap();
 }
 
+// ── Multi-select helpers ──────────────────────────────────
+function clearMultiSelect() {
+  if (_multiSelected.size === 0) return;
+  _multiSelected.clear();
+  dom.entryList.querySelectorAll('.multi-selected').forEach(el => el.classList.remove('multi-selected'));
+}
+
+function applyMultiSelectVisual() {
+  dom.entryList.querySelectorAll('.entry-item').forEach(el => {
+    const idx = parseInt(el.dataset.index);
+    el.classList.toggle('multi-selected', _multiSelected.has(idx));
+  });
+}
+
+function getMultiSelectedIndices() {
+  return Array.from(_multiSelected).sort((a, b) => a - b);
+}
+
 // ── Create a single entry DOM element ─────────────────────
 function createEntryElement(entry) {
   const el = document.createElement('div');
   el.className = 'entry-item';
   if (entry.index === state.currentIndex) el.classList.add('active');
+  if (_multiSelected.has(entry.index)) el.classList.add('multi-selected');
   if (entry.dirty) el.classList.add('dirty');
   const tagData = getEntryTagData(entry);
   if (tagData.tag === 'translated') el.classList.add('tag-translated');
@@ -4023,7 +4057,7 @@ function createEntryElement(entry) {
     // Content match — show file name + snippet
     const nameSpan = document.createElement('div');
     nameSpan.className = 'entry-item-name';
-    nameSpan.textContent = `${prefix}[${entry.index}] ${entry.file}`;
+    nameSpan.textContent = `${prefix}[${entry.index + 1}] ${entry.file}`;
     if (noteText) {
       const noteEl = document.createElement('span');
       noteEl.className = 'entry-item-note';
@@ -4050,7 +4084,7 @@ function createEntryElement(entry) {
       el.appendChild(snippetEl);
     }
   } else {
-    const textNode = document.createTextNode(`${prefix}[${entry.index}] ${entry.file}`);
+    const textNode = document.createTextNode(`${prefix}[${entry.index + 1}] ${entry.file}`);
     el.appendChild(textNode);
     if (entry.external && entry.externalDir) {
       const badge = document.createElement('span');
@@ -4103,6 +4137,9 @@ function virtualRender() {
 
   dom.entryList.innerHTML = '';
   dom.entryList.appendChild(frag);
+
+  // Keep _activeListEl reference in sync after DOM rebuild
+  _activeListEl = dom.entryList.querySelector('.entry-item.active');
 }
 
 // ── Update a single visible entry in-place ────────────────
@@ -4133,7 +4170,7 @@ function updateVisibleEntry(entryIndex) {
   if (!_currentFilter || !_filterSnippets.has(entry.index)) {
     const firstChild = el.firstChild;
     if (firstChild && firstChild.nodeType === Node.TEXT_NODE) {
-      firstChild.textContent = `${prefix}[${entry.index}] ${entry.file}`;
+      firstChild.textContent = `${prefix}[${entry.index + 1}] ${entry.file}`;
     }
   }
 
@@ -4339,7 +4376,7 @@ function applyGlossaryToEntry(entry, orig, trans) {
   updateVisibleEntry(entry.index);
   updateProgress();
   _programmaticEdit = true;
-  setStatus(`Замінено «${orig}» \u2192 «${trans}» у [${entry.index}] ${entry.file}`);
+  setStatus(`Замінено «${orig}» \u2192 «${trans}» у [${entry.index + 1}] ${entry.file}`);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -4650,7 +4687,7 @@ async function applyChanges() {
     updateEditorDirtyVisual();
     updateProgress();
     markRecoveryDirty();
-    setStatus(`Застосовано: [${entry.index}] ${entry.file}`);
+    setStatus(`Застосовано: [${entry.index + 1}] ${entry.file}`);
     return;
   }
 
@@ -4664,7 +4701,7 @@ async function applyChanges() {
     updateEditorDirtyVisual();
     updateProgress();
     markRecoveryDirty();
-    setStatus(`Застосовано: [${entry.index}] ${entry.file}`);
+    setStatus(`Застосовано: [${entry.index + 1}] ${entry.file}`);
     return;
   }
 
@@ -4712,9 +4749,9 @@ async function applyChanges() {
   markRecoveryDirty();
 
   if (dups.length > 0) {
-    setStatus(`Застосовано: [${entry.index}] ${entry.file} (+${dups.length} дублів)`);
+    setStatus(`Застосовано: [${entry.index + 1}] ${entry.file} (+${dups.length} дублів)`);
   } else {
-    setStatus(`Застосовано: [${entry.index}] ${entry.file}`);
+    setStatus(`Застосовано: [${entry.index + 1}] ${entry.file}`);
   }
 }
 
@@ -4724,7 +4761,41 @@ function revertChanges() {
   loadEditor();
   updateVisibleEntry(state.currentIndex);
   updateProgress();
-  setStatus(`Скасовано: [${state.currentIndex}] ${state.entries[state.currentIndex].file}`);
+  setStatus(`Скасовано: [${state.currentIndex + 1}] ${state.entries[state.currentIndex].file}`);
+}
+
+function discardEntryChanges(idx) {
+  const entry = state.entries[idx];
+  if (!entry || !entry.dirty) return;
+  // Save discarded text so it can be restored
+  entry._discardedText = Array.isArray(entry.text) ? [...entry.text] : entry.text;
+  if (entry.speakers) entry._discardedSpeakers = [...entry.speakers];
+  entry.revert();
+  if (idx === state.currentIndex) loadEditor();
+  updateVisibleEntry(idx);
+  updateProgress();
+  setStatus(`Відкинуто зміни: [${idx + 1}] ${entry.file}`);
+}
+
+function restoreDiscardedChanges(idx) {
+  const entry = state.entries[idx];
+  if (!entry || !entry._discardedText) return;
+  if (Array.isArray(entry._discardedText)) {
+    entry.text = [...entry._discardedText];
+  } else {
+    entry.text = entry._discardedText;
+  }
+  if (entry._discardedSpeakers && entry.speakers) {
+    entry.speakers = [...entry._discardedSpeakers];
+  }
+  entry.dirty = true;
+  entry._invalidateCaches();
+  delete entry._discardedText;
+  delete entry._discardedSpeakers;
+  if (idx === state.currentIndex) loadEditor();
+  updateVisibleEntry(idx);
+  updateProgress();
+  setStatus(`Повернено зміни: [${idx + 1}] ${entry.file}`);
 }
 
 function silentApply() {
@@ -4859,7 +4930,7 @@ function logVersion(filePath) {
   const lines = ['\u2500'.repeat(60), `${timestamp} | Збережено`];
   if (changed.length > 0) {
     lines.push(`Змінені записи (${changed.length}):`);
-    for (const e of changed.slice(0, 50)) lines.push(`  [${e.index}] ${e.file}`);
+    for (const e of changed.slice(0, 50)) lines.push(`  [${e.index + 1}] ${e.file}`);
     if (changed.length > 50) lines.push(`  ... та ще ${changed.length - 50}`);
   } else {
     lines.push('(Без змін — збережено вручну)');
@@ -5101,14 +5172,6 @@ async function writeJson(filePath, silent = false) {
     return;
   }
 
-  if (state.settings.backup_on_save && fs.existsSync(filePath)) {
-    try { fs.copyFileSync(filePath, filePath + '.bak'); } catch (e) {
-      if (!silent) {
-        if ((await ask('Backup', `Не вдалося створити .bak:\n${e.message}\n\nЗберегти без бекапу?`)) === 'n') return;
-      }
-    }
-  }
-
   logVersion(filePath);
 
   try { fs.writeFileSync(filePath, blob + '\n', 'utf-8'); } catch (e) {
@@ -5236,9 +5299,6 @@ async function saveTxtFiles(silent = false) {
   for (const entry of state.entries) {
     if (!entry.dirty) continue;
     try {
-      if (state.settings.backup_on_save && fs.existsSync(entry.filePath)) {
-        fs.copyFileSync(entry.filePath, entry.filePath + '.bak');
-      }
       fs.writeFileSync(entry.filePath, entry.text.join('\n') + '\n', 'utf-8');
       entry.markSaved();
       ok++;
@@ -5324,14 +5384,6 @@ async function saveJoJoJson(silent = false) {
   const arr = text.split('\n');
   const blob = JSON.stringify(arr, null, 2);
 
-  if (state.settings.backup_on_save && fs.existsSync(state.filePath)) {
-    try { fs.copyFileSync(state.filePath, state.filePath + '.bak'); } catch (e) {
-      if (!silent) {
-        if ((await ask('Backup', `Не вдалося створити .bak:\n${e.message}\n\nЗберегти без бекапу?`)) === 'n') return;
-      }
-    }
-  }
-
   try {
     fs.writeFileSync(state.filePath, blob + '\n', 'utf-8');
   } catch (e) {
@@ -5398,48 +5450,99 @@ async function importFile() {
 
 async function batchExport() {
   if (!state.entries.length) { await showInfo('Інфо', 'Немає записів.'); return; }
+
+  const format = await ask('Batch Export', 'Оберіть формат експорту:', [
+    { label: 'TXT', value: 'txt', primary: true },
+    { label: 'JSON', value: 'json' },
+    { label: 'Скасувати', value: null },
+  ]);
+  if (!format) return;
+
   const folder = await ipcRenderer.invoke('dialog:open-folder');
   if (!folder) return;
 
   let ok = 0;
   const errs = [];
   for (const entry of state.entries) {
-    const name = entry.file ? entry.file.replace(/\.[^.]+$/, '.txt') : `entry_${entry.index}.txt`;
+    const ext = format === 'json' ? '.json' : '.txt';
+    const name = entry.file ? entry.file.replace(/\.[^.]+$/, ext) : `entry_${entry.index}${ext}`;
     try {
-      fs.writeFileSync(nodePath.join(folder, name), (state.appMode === 'other' || state.appMode === 'jojo') ? entry.toFlat() : entry.toFlat(state.useSeparator), 'utf-8');
+      let content;
+      if (format === 'json') {
+        const data = {};
+        if (state.appMode === 'jojo') {
+          data.text = entry.text;
+        } else if (state.appMode === 'other') {
+          data.text = Array.isArray(entry.text) ? entry.text : [entry.text];
+        } else {
+          data.text = entry.text;
+          if (entry.speakers) data.speakers = entry.speakers;
+        }
+        content = JSON.stringify(data, null, 2);
+      } else {
+        content = (state.appMode === 'other' || state.appMode === 'jojo') ? entry.toFlat() : entry.toFlat(state.useSeparator);
+      }
+      fs.writeFileSync(nodePath.join(folder, name), content, 'utf-8');
       ok++;
     } catch (e) { errs.push(`${name}: ${e.message}`); }
   }
-  let msg = `Експортовано ${ok} / ${state.entries.length}.`;
+  let msg = `Експортовано ${ok} / ${state.entries.length} (${format.toUpperCase()}).`;
   if (errs.length) msg += '\n\nПомилки:\n' + errs.slice(0, 20).join('\n');
   await showInfo('Batch Export', msg);
-  setStatus(`Batch export: ${ok} файлів`);
+  setStatus(`Batch export: ${ok} файлів (${format})`);
 }
 
 async function batchImport() {
   if (!state.entries.length) { await showInfo('Інфо', 'Немає записів.'); return; }
+
+  const format = await ask('Batch Import', 'Оберіть формат імпорту:', [
+    { label: 'TXT', value: 'txt', primary: true },
+    { label: 'JSON', value: 'json' },
+    { label: 'Скасувати', value: null },
+  ]);
+  if (!format) return;
+
   const folder = await ipcRenderer.invoke('dialog:open-folder');
   if (!folder) return;
 
   let ok = 0;
   const errs = [], warns = [];
   for (const entry of state.entries) {
-    const name = entry.file ? entry.file.replace(/\.[^.]+$/, '.txt') : `entry_${entry.index}.txt`;
+    const ext = format === 'json' ? '.json' : '.txt';
+    const name = entry.file ? entry.file.replace(/\.[^.]+$/, ext) : `entry_${entry.index}${ext}`;
     const fpath = nodePath.join(folder, name);
     if (!fs.existsSync(fpath)) continue;
     try {
-      const flat = fs.readFileSync(fpath, 'utf-8');
-      if (state.appMode === 'jojo') {
-        recordHistory(entry, entry.text, flat, undefined, undefined, 'import');
-        entry.applyChanges(flat);
-      } else if (state.appMode === 'other') {
-        recordHistory(entry, entry.text, flat.split('\n'), undefined, undefined, 'import');
-        entry.applyChanges(flat.split('\n'));
+      if (format === 'json') {
+        const data = JSON.parse(fs.readFileSync(fpath, 'utf-8'));
+        if (state.appMode === 'jojo') {
+          const t = typeof data.text === 'string' ? data.text : (Array.isArray(data.text) ? data.text.join('\n') : '');
+          recordHistory(entry, entry.text, t, undefined, undefined, 'import');
+          entry.applyChanges(t);
+        } else if (state.appMode === 'other') {
+          const t = Array.isArray(data.text) ? data.text : [String(data.text || '')];
+          recordHistory(entry, entry.text, t, undefined, undefined, 'import');
+          entry.applyChanges(t);
+        } else {
+          const t = Array.isArray(data.text) ? data.text : [];
+          const s = Array.isArray(data.speakers) ? data.speakers : entry.speakers;
+          recordHistory(entry, entry.text, t, entry.speakers, s, 'import');
+          entry.applyChanges(t, s);
+        }
       } else {
-        const { text: newT, speakers: newS, warning: w } = entry.fromFlat(flat, state.useSeparator);
-        recordHistory(entry, entry.text, newT, entry.speakers, newS, 'import');
-        entry.applyChanges(newT, newS);
-        if (w) warns.push(`${name}: ${w}`);
+        const flat = fs.readFileSync(fpath, 'utf-8');
+        if (state.appMode === 'jojo') {
+          recordHistory(entry, entry.text, flat, undefined, undefined, 'import');
+          entry.applyChanges(flat);
+        } else if (state.appMode === 'other') {
+          recordHistory(entry, entry.text, flat.split('\n'), undefined, undefined, 'import');
+          entry.applyChanges(flat.split('\n'));
+        } else {
+          const { text: newT, speakers: newS, warning: w } = entry.fromFlat(flat, state.useSeparator);
+          recordHistory(entry, entry.text, newT, entry.speakers, newS, 'import');
+          entry.applyChanges(newT, newS);
+          if (w) warns.push(`${name}: ${w}`);
+        }
       }
       ok++;
     } catch (e) { errs.push(`${name}: ${e.message}`); }
@@ -5448,11 +5551,11 @@ async function batchImport() {
   updateProgress();
   if (state.currentIndex >= 0) loadEditor();
 
-  let msg = `Імпортовано ${ok} / ${state.entries.length}.`;
+  let msg = `Імпортовано ${ok} / ${state.entries.length} (${format.toUpperCase()}).`;
   if (warns.length) msg += '\n\nПопередження:\n' + warns.slice(0, 20).join('\n');
   if (errs.length) msg += '\n\nПомилки:\n' + errs.slice(0, 20).join('\n');
   await showInfo('Batch Import', msg);
-  setStatus(`Batch import: ${ok} файлів`);
+  setStatus(`Batch import: ${ok} файлів (${format})`);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -5488,7 +5591,7 @@ function showDiff() {
     }
   }
 
-  showDiffModal(original, current, `Diff \u2014 [${entry.index}] ${entry.file}`);
+  showDiffModal(original, current, `Diff \u2014 [${entry.index + 1}] ${entry.file}`);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -6043,6 +6146,11 @@ function showEntryContextMenu(e, entryIndex) {
   const menu = document.getElementById('entry-context-menu');
   menu.classList.remove('hidden');
 
+  // If right-clicked on a non-selected item while multi-select active, reset multi-select
+  const isBulk = _multiSelected.size > 1 && _multiSelected.has(entryIndex);
+  const bulkCount = isBulk ? _multiSelected.size : 0;
+  const bulkSuffix = bulkCount > 1 ? ` (${bulkCount})` : '';
+
   // Update compare menu items dynamically
   const cmpItem = document.getElementById('ctx-compare');
   const cmpCancel = document.getElementById('ctx-compare-cancel');
@@ -6060,11 +6168,34 @@ function showEntryContextMenu(e, entryIndex) {
     cmpCancel.classList.remove('hidden');
   }
 
+  // Update tag menu items with count (preserve inner <span> dot elements)
+  const ctxTranslated = document.getElementById('ctx-translated');
+  const ctxEdited = document.getElementById('ctx-edited');
+  const ctxClear = document.getElementById('ctx-clear-tag');
+  const setCtxText = (el, text) => {
+    const dot = el.querySelector('.ctx-dot');
+    if (dot) {
+      for (const child of [...el.childNodes]) {
+        if (child.nodeType === 3) child.remove();
+      }
+      el.appendChild(document.createTextNode(' ' + text));
+    } else {
+      el.textContent = text;
+    }
+  };
+  setCtxText(ctxTranslated, 'Перекладено' + bulkSuffix);
+  setCtxText(ctxEdited, 'Зредаговано' + bulkSuffix);
+  ctxClear.textContent = 'Зняти все' + bulkSuffix;
+
   // Update bookmark menu item
   const bmItem = document.getElementById('ctx-bookmark');
   const entry = state.entries[entryIndex];
-  bmItem.textContent = entry && isEntryBookmarked(entry)
-    ? '\u25C6 Зняти закладку' : '\u25C7 Закладка';
+  if (bulkCount > 1) {
+    bmItem.textContent = '\u25C7 Закладка' + bulkSuffix;
+  } else {
+    bmItem.textContent = entry && isEntryBookmarked(entry)
+      ? '\u25C6 Зняти закладку' : '\u25C7 Закладка';
+  }
 
   // Show "Remove from list" only for other/jojo modes or external entries
   const removeSep = document.getElementById('ctx-remove-sep');
@@ -6072,6 +6203,22 @@ function showEntryContextMenu(e, entryIndex) {
   const canRemove = state.appMode === 'other' || state.appMode === 'jojo' || (entry && entry.external);
   removeSep.classList.toggle('hidden', !canRemove);
   removeItem.classList.toggle('hidden', !canRemove);
+  if (canRemove) removeItem.textContent = 'Видалити зі списку' + bulkSuffix;
+
+  // Show "Discard changes" only for dirty entries
+  const discardSep = document.getElementById('ctx-discard-sep');
+  const discardItem = document.getElementById('ctx-discard');
+  const restoreItem = document.getElementById('ctx-restore');
+  const isDirty = entry && entry.dirty;
+  const hasDiscarded = entry && entry._discardedText && !entry.dirty;
+  const showDiscardGroup = isDirty || hasDiscarded;
+  discardSep.classList.toggle('hidden', !showDiscardGroup);
+  discardItem.classList.toggle('hidden', !isDirty);
+  restoreItem.classList.toggle('hidden', !hasDiscarded);
+
+  // Update side panel menu item
+  const sideItem = document.getElementById('ctx-open-side');
+  sideItem.textContent = (entryIndex === _sidePanelIdx) ? 'Закрити бічну панель' : 'Відкрити збоку';
 
   // Position
   const x = Math.min(e.clientX, window.innerWidth - 190);
@@ -6144,13 +6291,21 @@ function removeEntryFromList(idx) {
   setStatus(`Видалено зі списку: ${name}`);
 }
 
+// Returns array of indices to act on: multi-selected (if target is among them) or just the target
+function getCtxTargetIndices() {
+  if (_multiSelected.size > 1 && _multiSelected.has(_ctxTargetIndex)) {
+    return getMultiSelectedIndices();
+  }
+  return _ctxTargetIndex >= 0 ? [_ctxTargetIndex] : [];
+}
+
 function setupEntryContextMenu() {
   document.getElementById('ctx-translated').addEventListener('click', () => {
-    if (_ctxTargetIndex >= 0) setEntryTag(_ctxTargetIndex, 'translated');
+    for (const idx of getCtxTargetIndices()) setEntryTag(idx, 'translated');
     hideEntryContextMenu();
   });
   document.getElementById('ctx-edited').addEventListener('click', () => {
-    if (_ctxTargetIndex >= 0) setEntryTag(_ctxTargetIndex, 'edited');
+    for (const idx of getCtxTargetIndices()) setEntryTag(idx, 'edited');
     hideEntryContextMenu();
   });
   document.getElementById('ctx-note').addEventListener('click', () => {
@@ -6165,11 +6320,14 @@ function setupEntryContextMenu() {
     }
   });
   document.getElementById('ctx-clear-tag').addEventListener('click', () => {
-    if (_ctxTargetIndex >= 0) {
-      const entry = state.entries[_ctxTargetIndex];
+    const indices = getCtxTargetIndices();
+    for (const idx of indices) {
+      const entry = state.entries[idx];
       if (entry) delete state.entryTags[getEntryTagKey(entry)];
+    }
+    if (indices.length) {
       saveEntryTags();
-      updateVisibleEntry(_ctxTargetIndex);
+      for (const idx of indices) updateVisibleEntry(idx);
     }
     hideEntryContextMenu();
   });
@@ -6178,12 +6336,10 @@ function setupEntryContextMenu() {
   document.getElementById('ctx-compare').addEventListener('click', () => {
     if (_ctxTargetIndex < 0) { hideEntryContextMenu(); return; }
     if (_compareFirstIdx < 0 || _compareFirstIdx === _ctxTargetIndex) {
-      // Select first entry
       _compareFirstIdx = _ctxTargetIndex;
       markCompareEntry(_compareFirstIdx);
       setStatus(`Порівняння: обрано «${state.entries[_compareFirstIdx]?.file || '#' + _compareFirstIdx}». ПКМ на інший запис → «Порівняти з…»`);
     } else {
-      // Launch comparison
       const idxA = _compareFirstIdx;
       const idxB = _ctxTargetIndex;
       clearCompareSelection();
@@ -6197,15 +6353,69 @@ function setupEntryContextMenu() {
     hideEntryContextMenu();
   });
 
-  // Bookmarks
+  // Bookmarks (bulk: toggle based on majority)
   document.getElementById('ctx-bookmark').addEventListener('click', () => {
-    if (_ctxTargetIndex >= 0) toggleEntryBookmark(_ctxTargetIndex);
+    const indices = getCtxTargetIndices();
+    if (indices.length > 1) {
+      const bookmarkedCount = indices.filter(i => state.entries[i] && isEntryBookmarked(state.entries[i])).length;
+      const shouldAdd = bookmarkedCount <= indices.length / 2;
+      for (const idx of indices) {
+        const entry = state.entries[idx];
+        if (!entry) continue;
+        const key = getEntryTagKey(entry);
+        if (shouldAdd) {
+          state.entryBookmarks[key] = {};
+        } else {
+          delete state.entryBookmarks[key];
+        }
+      }
+      invalidateBookmarkCache();
+      saveEntryBookmarks();
+      for (const idx of indices) updateVisibleEntry(idx);
+      _minimapDirty = true;
+      renderMinimap();
+      updateMinimapVisibility();
+      setStatus(shouldAdd
+        ? `Закладки поставлено: ${indices.length} записів`
+        : `Закладки знято: ${indices.length} записів`);
+    } else if (_ctxTargetIndex >= 0) {
+      toggleEntryBookmark(_ctxTargetIndex);
+    }
     hideEntryContextMenu();
   });
 
-  // Remove entry from list
+  // Discard changes
+  document.getElementById('ctx-discard').addEventListener('click', () => {
+    if (_ctxTargetIndex >= 0) discardEntryChanges(_ctxTargetIndex);
+    hideEntryContextMenu();
+  });
+
+  // Restore discarded changes
+  document.getElementById('ctx-restore').addEventListener('click', () => {
+    if (_ctxTargetIndex >= 0) restoreDiscardedChanges(_ctxTargetIndex);
+    hideEntryContextMenu();
+  });
+
+  // Open in side panel
+  document.getElementById('ctx-open-side').addEventListener('click', () => {
+    if (_ctxTargetIndex >= 0) {
+      if (_ctxTargetIndex === _sidePanelIdx) hideSidePanel();
+      else showSidePanel(_ctxTargetIndex);
+    }
+    hideEntryContextMenu();
+  });
+
+  // Remove entry from list (bulk: remove from end to avoid index shifts)
   document.getElementById('ctx-remove-entry').addEventListener('click', () => {
-    if (_ctxTargetIndex >= 0) removeEntryFromList(_ctxTargetIndex);
+    const indices = getCtxTargetIndices();
+    if (indices.length > 1) {
+      const sorted = indices.slice().sort((a, b) => b - a);
+      for (const idx of sorted) removeEntryFromList(idx);
+      clearMultiSelect();
+      setStatus(`Видалено зі списку: ${indices.length} записів`);
+    } else if (_ctxTargetIndex >= 0) {
+      removeEntryFromList(_ctxTargetIndex);
+    }
     hideEntryContextMenu();
   });
 
@@ -6279,6 +6489,12 @@ document.addEventListener('DOMContentLoaded', () => {
 function setupSelectionHandler() {
   for (const ed of [_monacoFlat, _monacoText, _monacoSp]) {
     if (ed) ed.onMouseUp((e) => onEditorMouseUp(e, ed));
+    // Hide glossary cloud when user starts typing or moves cursor with keyboard
+    if (ed) ed.onDidChangeModelContent(() => hideGlossCloud());
+    if (ed) ed.onDidChangeCursorPosition((e) => {
+      // Hide only on keyboard-driven cursor moves, not mouse clicks (those are handled by onMouseUp)
+      if (e.source === 'keyboard') hideGlossCloud();
+    });
   }
 
   // Glossary cloud popup buttons
@@ -6593,9 +6809,7 @@ function showFindDialog(tab = 'find') {
 function hideFindDialog() {
   document.getElementById('find-dialog').classList.add('hidden');
   document.getElementById('find-results-panel').classList.add('hidden');
-  _find.matches = [];
-  _find.currentIdx = -1;
-  updateHighlights();
+  clearFindHighlights();
 }
 
 function isFindDialogVisible() {
@@ -7010,6 +7224,9 @@ function doReplaceAllEntries() {
 function clearFindHighlights() {
   _find.matches = [];
   _find.currentIdx = -1;
+  // Clear Monaco find decorations
+  const editor = getActiveEditor();
+  if (editor) _findDecorationIds = editor.deltaDecorations(_findDecorationIds, []);
   updateHighlights();
 }
 
@@ -7074,6 +7291,121 @@ function setupFindDialogDrag() {
   document.addEventListener('mouseup', () => { isDragging = false; });
 }
 
+// ═══════════════════════════════════════════════════════════
+//  Side Panel (dual view)
+// ═══════════════════════════════════════════════════════════
+
+function showSidePanel(entryIdx) {
+  if (entryIdx < 0 || entryIdx >= state.entries.length) return;
+  const entry = state.entries[entryIdx];
+
+  const panel = document.getElementById('side-panel');
+  const handle = document.getElementById('side-panel-handle');
+  const titleEl = document.getElementById('side-panel-title');
+
+  titleEl.textContent = `[${entryIdx + 1}] ${entry.file || ''}`;
+
+  // Get entry text for display
+  let text;
+  if (state.appMode === 'ishin' && state.splitMode) {
+    text = entry.text.join('\n') + '\n---\n' + entry.visibleSpeakers().join('\n');
+  } else {
+    text = entry.toFlat(state.appMode === 'ishin' ? state.useSeparator : undefined);
+  }
+
+  // Create or update Monaco editor
+  if (!_sideMonaco) {
+    _sideMonaco = _monaco.editor.create(
+      document.getElementById('side-panel-monaco'),
+      {
+        language: 'plaintext',
+        theme: 'lb-theme',
+        minimap: { enabled: false },
+        lineNumbers: 'on',
+        wordWrap: state.settings.word_wrap ? 'on' : 'off',
+        scrollBeyondLastLine: false,
+        automaticLayout: true,
+        fontSize: (state.settings && state.settings.font_size) || 14,
+        fontFamily: (state.settings && state.settings.font_family) || 'Consolas, monospace',
+        readOnly: true,
+        glyphMargin: false,
+        folding: false,
+        contextmenu: false,
+        quickSuggestions: false,
+        suggestOnTriggerCharacters: false,
+        parameterHints: { enabled: false },
+        overviewRulerLanes: 0,
+        scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
+        unicodeHighlight: { ambiguousCharacters: false, invisibleCharacters: false, nonBasicASCII: false },
+        renderLineHighlight: 'none',
+      }
+    );
+  }
+
+  _sideMonaco.setValue(text);
+  _sidePanelIdx = entryIdx;
+
+  panel.classList.remove('hidden');
+  handle.classList.remove('hidden');
+  document.getElementById('tb-side-panel').classList.add('active');
+
+  // Force layout recalculation
+  setTimeout(() => {
+    if (_monacoFlat) _monacoFlat.layout();
+    if (_monacoText) _monacoText.layout();
+    if (_monacoSp) _monacoSp.layout();
+    if (_sideMonaco) _sideMonaco.layout();
+  }, 50);
+
+  setStatus(`Бічна панель: [${entryIdx + 1}] ${entry.file || ''}`);
+}
+
+function hideSidePanel() {
+  document.getElementById('side-panel').classList.add('hidden');
+  document.getElementById('side-panel-handle').classList.add('hidden');
+  _sidePanelIdx = -1;
+
+  const btn = document.getElementById('tb-side-panel');
+  if (btn) btn.classList.remove('active');
+
+  setTimeout(() => {
+    if (_monacoFlat) _monacoFlat.layout();
+    if (_monacoText) _monacoText.layout();
+    if (_monacoSp) _monacoSp.layout();
+  }, 50);
+}
+
+function toggleSidePanel() {
+  if (_sidePanelIdx >= 0) hideSidePanel();
+  else if (state.currentIndex >= 0) showSidePanel(state.currentIndex);
+}
+
+function setupSidePanelHandle() {
+  const handle = document.getElementById('side-panel-handle');
+  const panel = document.getElementById('side-panel');
+  const area = document.getElementById('editor-area');
+  let dragging = false;
+
+  handle.addEventListener('mousedown', (e) => {
+    dragging = true;
+    e.preventDefault();
+    document.body.style.cursor = 'col-resize';
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const rect = area.getBoundingClientRect();
+    const x = rect.right - e.clientX;
+    const pct = Math.max(20, Math.min(70, (x / rect.width) * 100));
+    panel.style.flexBasis = pct + '%';
+  });
+  document.addEventListener('mouseup', () => {
+    if (dragging) { dragging = false; document.body.style.cursor = ''; }
+  });
+
+  // Close button
+  document.getElementById('side-panel-close').addEventListener('click', () => hideSidePanel());
+}
+
 function setupToolbar() {
   document.getElementById('tb-save').addEventListener('click', () => saveFile());
   document.getElementById('tb-save-as').addEventListener('click', () => saveFileAs());
@@ -7095,6 +7427,9 @@ function setupToolbar() {
   // Undo / Redo buttons
   document.getElementById('tb-undo').addEventListener('click', () => undoLastChange());
   document.getElementById('tb-redo').addEventListener('click', () => redoLastChange());
+
+  // Side panel
+  document.getElementById('tb-side-panel').addEventListener('click', () => toggleSidePanel());
 }
 
 function toggleWhitespace() {
@@ -7102,7 +7437,7 @@ function toggleWhitespace() {
   document.getElementById('tb-show-all').classList.toggle('active', state.settings.show_whitespace);
   saveSettings(state.settings);
   const ws = state.settings.show_whitespace ? 'all' : 'none';
-  for (const ed of [_monacoFlat, _monacoText, _monacoSp]) {
+  for (const ed of [_monacoFlat, _monacoText, _monacoSp, _sideMonaco]) {
     if (ed) ed.updateOptions({ renderWhitespace: ws });
   }
 }
@@ -7323,23 +7658,63 @@ function _applyStatsToModal(s) {
 //  Schema Selector (visual JSON field picker for progress)
 // ═══════════════════════════════════════════════════════════
 
+function _computeStructureSignature(obj, depth) {
+  if (!obj || typeof obj !== 'object' || depth > 2) return '';
+  const parts = [];
+  for (const key of Object.keys(obj).sort()) {
+    const val = obj[key];
+    let type;
+    if (val === null || val === undefined) type = 'null';
+    else if (typeof val === 'string') type = 'string';
+    else if (typeof val === 'number') type = 'number';
+    else if (typeof val === 'boolean') type = 'boolean';
+    else if (Array.isArray(val)) {
+      if (val.length > 0 && typeof val[0] === 'string') type = 'string[]';
+      else if (val.length > 0 && typeof val[0] === 'object' && val[0] !== null) {
+        type = 'object[]:{' + _computeStructureSignature(val[0], depth + 1) + '}';
+      } else type = 'array';
+    } else if (typeof val === 'object') {
+      type = 'object:{' + _computeStructureSignature(val, depth + 1) + '}';
+    } else type = typeof val;
+    parts.push(key + ':' + type);
+  }
+  return parts.join(',');
+}
+
+function _findSchemaByStructure(entry) {
+  const parsed = _tryParseEntryData(entry);
+  if (!parsed || typeof parsed !== 'object') return null;
+  const sample = Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'object'
+    ? parsed[0] : (!Array.isArray(parsed) ? parsed : null);
+  if (!sample) return null;
+  const sig = _computeStructureSignature(sample, 0);
+  if (!sig) return null;
+  for (const [, schema] of Object.entries(state.settings.file_schemas)) {
+    if (schema && schema.structureSig === sig && Array.isArray(schema.textPaths) && schema.textPaths.length > 0) {
+      return schema;
+    }
+  }
+  return null;
+}
+
 function getFileSchema(entry) {
   // Per-file schema (for "other" mode with mixed file structures)
   if (entry && entry.filePath) {
     const s = state.settings.file_schemas[entry.filePath];
-    if (s && Array.isArray(s.textPaths) && s.textPaths.length > 0) return s;
-    // Fallback: check parent directory schema (for individually opened files)
-    const dir = nodePath.dirname(entry.filePath);
-    if (dir) {
-      const ds = state.settings.file_schemas[dir];
-      if (ds && Array.isArray(ds.textPaths) && ds.textPaths.length > 0) return ds;
+    if (s && ((Array.isArray(s.textPaths) && s.textPaths.length > 0) || s.customSchemaIdx != null)) return s;
+  }
+  // Global key fallback — only for ishin/jojo (single file = single schema)
+  // In "other" mode, different files in the same dir may have different structures,
+  // so skip global key and go straight to structure matching
+  if (state.appMode !== 'other') {
+    const key = state.filePath || state.txtDirPath;
+    if (key) {
+      const s = state.settings.file_schemas[key];
+      if (s && ((Array.isArray(s.textPaths) && s.textPaths.length > 0) || s.customSchemaIdx != null)) return s;
     }
   }
-  // Fallback to global key (ishin/jojo mode)
-  const key = state.filePath || state.txtDirPath;
-  if (!key) return null;
-  const s = state.settings.file_schemas[key];
-  return (s && Array.isArray(s.textPaths) && s.textPaths.length > 0) ? s : null;
+  // Fallback: match by structure signature across all saved schemas
+  return _findSchemaByStructure(entry);
 }
 
 function _getSchemaKey() {
@@ -7362,27 +7737,10 @@ function saveFileSchema(textPaths, parseAs) {
     schemaEntry.textPaths = textPaths || [];
     if (parseAs && parseAs !== 'auto') schemaEntry.parseAs = parseAs;
     else delete schemaEntry.parseAs;
+    // Compute and store structure signature for auto-matching
+    const sample = _getSchemaSampleObject();
+    if (sample) schemaEntry.structureSig = _computeStructureSignature(sample, 0);
     state.settings.file_schemas[key] = schemaEntry;
-  }
-  // In "other" mode, also update directory-level default so files without
-  // their own schema inherit it automatically
-  if (state.appMode === 'other') {
-    // Use txtDirPath if available, otherwise derive from current file
-    let dirKey = state.txtDirPath;
-    if (!dirKey && state.currentIndex >= 0 && state.currentIndex < state.entries.length) {
-      const e = state.entries[state.currentIndex];
-      if (e && e.filePath) dirKey = nodePath.dirname(e.filePath);
-    }
-    if (dirKey && key !== dirKey) {
-      if (isEmpty) {
-        delete state.settings.file_schemas[dirKey];
-      } else {
-        state.settings.file_schemas[dirKey] = {
-          textPaths: textPaths || [],
-          ...(parseAs && parseAs !== 'auto' ? { parseAs } : {}),
-        };
-      }
-    }
   }
   saveSettings(state.settings);
   updateProgress();
@@ -7511,6 +7869,80 @@ function _tryParseEntryKeyValue(entry) {
   return hasKV ? obj : null;
 }
 
+// ── CSV parser ───────────────────────────────────────────
+
+function _detectCsvDelimiter(lines) {
+  const candidates = [',', ';', '\t'];
+  let best = ',', bestScore = -1;
+  for (const delim of candidates) {
+    const counts = lines.map(l => _splitCsvRow(l, delim).length);
+    if (counts[0] < 2) continue;
+    const allSame = counts.every(c => c === counts[0]);
+    const score = allSame ? counts[0] * 100 : counts[0];
+    if (score > bestScore) { bestScore = score; best = delim; }
+  }
+  return best;
+}
+
+function _splitCsvRow(line, delim) {
+  const fields = [];
+  let cur = '', inQuote = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuote) {
+      if (ch === '"') {
+        if (i + 1 < line.length && line[i + 1] === '"') { cur += '"'; i++; }
+        else inQuote = false;
+      } else cur += ch;
+    } else {
+      if (ch === '"') inQuote = true;
+      else if (ch === delim) { fields.push(cur); cur = ''; }
+      else cur += ch;
+    }
+  }
+  fields.push(cur);
+  return fields;
+}
+
+function _parseCsvToObjects(lines, delim, hasHeaders) {
+  if (lines.length === 0) return [];
+  const headers = hasHeaders
+    ? _splitCsvRow(lines[0], delim)
+    : _splitCsvRow(lines[0], delim).map((_, i) => `col_${i}`);
+  const dataStart = hasHeaders ? 1 : 0;
+  const result = [];
+  for (let i = dataStart; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    const vals = _splitCsvRow(lines[i], delim);
+    const obj = {};
+    for (let c = 0; c < headers.length; c++) obj[headers[c]] = vals[c] || '';
+    result.push(obj);
+  }
+  return result;
+}
+
+function _detectCsvHeaders(firstRow, delim) {
+  const fields = _splitCsvRow(firstRow, delim);
+  if (fields.length < 2) return false;
+  const unique = new Set(fields.map(f => f.trim().toLowerCase()));
+  if (unique.size !== fields.length) return false;
+  return fields.every(f => f.trim() && isNaN(Number(f.trim())));
+}
+
+function _tryParseEntryCsv(entry) {
+  const raw = Array.isArray(entry.text) ? entry.text.join('\n') : (entry.text || '');
+  const lines = raw.split('\n').filter(l => l.trim());
+  if (lines.length < 2) return null;
+  const delim = _detectCsvDelimiter(lines.slice(0, 5));
+  const firstFields = _splitCsvRow(lines[0], delim);
+  if (firstFields.length < 2) return null;
+  const hasHeaders = _detectCsvHeaders(lines[0], delim);
+  const objects = _parseCsvToObjects(lines, delim, hasHeaders);
+  if (objects.length === 0) return null;
+  // Return full array of row objects (schema tree uses [0] as sample)
+  return objects;
+}
+
 function _tryParseEntryData(entry) {
   // ishin mode always has entry.data
   if (entry.data && typeof entry.data === 'object') return entry.data;
@@ -7518,8 +7950,11 @@ function _tryParseEntryData(entry) {
   if (parseAs === 'json') return _tryParseEntryJson(entry);
   if (parseAs === 'xml') return _tryParseEntryXml(entry);
   if (parseAs === 'keyvalue') return _tryParseEntryKeyValue(entry);
-  // auto: try JSON first, then XML
-  return _tryParseEntryJson(entry) || _tryParseEntryXml(entry);
+  if (parseAs === 'csv') return _tryParseEntryCsv(entry);
+  // auto: try JSON first, then XML, then Key=Value, then CSV
+  const isCsvFile = entry.filePath && entry.filePath.toLowerCase().endsWith('.csv');
+  if (isCsvFile) return _tryParseEntryCsv(entry) || _tryParseEntryJson(entry);
+  return _tryParseEntryJson(entry) || _tryParseEntryXml(entry) || _tryParseEntryKeyValue(entry) || _tryParseEntryCsv(entry);
 }
 
 function _getSchemaSampleObject() {
@@ -7551,9 +7986,31 @@ function _getRawTextLines(entry) {
   return Array.isArray(entry.text) ? entry.text : (typeof entry.text === 'string' ? entry.text.split('\n') : []);
 }
 
+function _extractByRegex(entry, regexStr, group) {
+  const raw = _getRawTextLines(entry);
+  try {
+    const re = new RegExp(regexStr);
+    const lines = [];
+    for (const line of raw) {
+      const m = line.match(re);
+      if (m && m[group] !== undefined) lines.push(m[group]);
+      else lines.push(line);
+    }
+    return lines;
+  } catch (_) {
+    return raw;
+  }
+}
+
 function getTextLinesForEntry(entry) {
   const schema = getFileSchema(entry);
   if (!schema) return _getRawTextLines(entry);
+
+  // Custom regex schema
+  if (schema.customSchemaIdx != null) {
+    const cs = (state.settings.custom_schemas || [])[schema.customSchemaIdx];
+    if (cs && cs.regex) return _extractByRegex(entry, cs.regex, cs.group || 1);
+  }
 
   // ishin mode — use entry.data
   let data = entry.data;
@@ -7597,10 +8054,6 @@ function showSchemaModal() {
   const infoEl = document.getElementById('schema-info');
 
   const sample = _getSchemaSampleObject();
-  if (!sample || typeof sample !== 'object') {
-    showInfo('Схема', 'Не вдалося визначити структуру даних. Файли мають бути у форматі JSON або XML.');
-    return;
-  }
 
   const currentEntry = (state.currentIndex >= 0 && state.currentIndex < state.entries.length)
     ? state.entries[state.currentIndex] : null;
@@ -7624,7 +8077,15 @@ function showSchemaModal() {
   treeEl.innerHTML = '';
   const searchEl = document.getElementById('schema-search');
   if (searchEl) { searchEl.value = ''; }
-  renderSchemaNode(treeEl, sample, '', selectedPaths, 0);
+  if (sample && typeof sample === 'object') {
+    renderSchemaNode(treeEl, sample, '', selectedPaths, 0);
+  } else {
+    treeEl.innerHTML = '<div style="padding:8px;color:var(--text-muted);font-size:12px;">Структурованих даних не знайдено. Використовуйте regex-схеми вище.</div>';
+  }
+
+  // Render custom regex schemas list
+  _renderCustomSchemaList();
+  document.getElementById('schema-custom-editor').classList.add('hidden');
 
   overlay.classList.remove('hidden');
   modal.classList.remove('hidden');
@@ -7844,6 +8305,163 @@ function setupSchemaModal() {
         n.querySelectorAll('.schema-node').forEach(c => c.classList.remove('schema-hidden'));
       }
     });
+  });
+
+  // ── Custom regex schemas ──────────────────────────────
+  _setupCustomSchemaUI();
+}
+
+function _renderCustomSchemaList() {
+  const list = document.getElementById('schema-custom-list');
+  const select = document.getElementById('schema-custom-select');
+  list.innerHTML = '';
+  select.innerHTML = '<option value="">— не обрано —</option>';
+  const schemas = Array.isArray(state.settings.custom_schemas) ? state.settings.custom_schemas : [];
+  for (let i = 0; i < schemas.length; i++) {
+    const cs = schemas[i];
+    const item = document.createElement('div');
+    item.className = 'schema-custom-item';
+    const name = document.createElement('span');
+    name.className = 'schema-custom-item-name';
+    name.textContent = cs.name || `Схема ${i + 1}`;
+    item.appendChild(name);
+    const regex = document.createElement('span');
+    regex.className = 'schema-custom-item-regex';
+    regex.textContent = cs.regex;
+    item.appendChild(regex);
+    const del = document.createElement('button');
+    del.className = 'schema-custom-item-del';
+    del.textContent = '\u00d7';
+    del.title = 'Видалити';
+    del.addEventListener('click', () => {
+      const deletedIdx = i;
+      state.settings.custom_schemas.splice(deletedIdx, 1);
+      // Fix file_schemas references that pointed to this or later indexes
+      for (const key in state.settings.file_schemas) {
+        const fs = state.settings.file_schemas[key];
+        if (fs.customSchemaIdx === deletedIdx) { delete fs.customSchemaIdx; }
+        else if (fs.customSchemaIdx > deletedIdx) { fs.customSchemaIdx--; }
+      }
+      saveSettings();
+      _renderCustomSchemaList();
+    });
+    item.appendChild(del);
+    list.appendChild(item);
+
+    const opt = document.createElement('option');
+    opt.value = String(i);
+    opt.textContent = cs.name || `Схема ${i + 1}`;
+    select.appendChild(opt);
+  }
+  const applyRow = document.getElementById('schema-custom-apply-row');
+  applyRow.classList.toggle('hidden', schemas.length === 0);
+}
+
+function _updateRegexPreview(regexInput, groupInput) {
+  const previewEl = document.getElementById('schema-custom-preview');
+  const regexStr = regexInput.value.trim();
+  if (!regexStr) { previewEl.classList.add('hidden'); return; }
+
+  let re;
+  try { re = new RegExp(regexStr); } catch (_) {
+    previewEl.innerHTML = '<div class="schema-custom-preview-no">Некоректний regex</div>';
+    previewEl.classList.remove('hidden');
+    return;
+  }
+
+  const group = parseInt(groupInput.value, 10) || 1;
+  const entry = (state.currentIndex >= 0 && state.currentIndex < state.entries.length)
+    ? state.entries[state.currentIndex] : state.entries[0];
+  if (!entry) { previewEl.classList.add('hidden'); return; }
+
+  const lines = _getRawTextLines(entry).slice(0, 10);
+  previewEl.innerHTML = '';
+  for (const line of lines) {
+    const div = document.createElement('div');
+    div.className = 'schema-custom-preview-line';
+    const m = line.match(re);
+    if (m && m[group] !== undefined) {
+      const captured = m[group];
+      const idx = line.indexOf(captured, m.index);
+      if (idx >= 0) {
+        div.appendChild(document.createTextNode(line.substring(0, idx)));
+        const span = document.createElement('span');
+        span.className = 'schema-custom-preview-match';
+        span.textContent = captured;
+        div.appendChild(span);
+        div.appendChild(document.createTextNode(line.substring(idx + captured.length)));
+      } else {
+        div.textContent = line;
+        const tag = document.createElement('span');
+        tag.className = 'schema-custom-preview-match';
+        tag.textContent = ` → ${captured}`;
+        div.appendChild(tag);
+      }
+    } else {
+      div.classList.add('schema-custom-preview-no');
+      div.textContent = line || '(порожній рядок)';
+    }
+    previewEl.appendChild(div);
+  }
+  previewEl.classList.remove('hidden');
+}
+
+function _setupCustomSchemaUI() {
+  const addBtn = document.getElementById('schema-custom-add');
+  const editor = document.getElementById('schema-custom-editor');
+  const nameInput = document.getElementById('schema-custom-name');
+  const regexInput = document.getElementById('schema-custom-regex');
+  const groupInput = document.getElementById('schema-custom-group');
+
+  let _previewTimer = null;
+  function schedulePreview() {
+    clearTimeout(_previewTimer);
+    _previewTimer = setTimeout(() => _updateRegexPreview(regexInput, groupInput), 200);
+  }
+  regexInput.addEventListener('input', schedulePreview);
+  groupInput.addEventListener('input', schedulePreview);
+
+  addBtn.addEventListener('click', () => {
+    nameInput.value = '';
+    regexInput.value = '';
+    groupInput.value = '1';
+    document.getElementById('schema-custom-preview').classList.add('hidden');
+    editor.classList.remove('hidden');
+    nameInput.focus();
+  });
+
+  document.getElementById('schema-custom-cancel-btn').addEventListener('click', () => {
+    editor.classList.add('hidden');
+    document.getElementById('schema-custom-preview').classList.add('hidden');
+  });
+
+  document.getElementById('schema-custom-save-btn').addEventListener('click', () => {
+    const name = nameInput.value.trim();
+    const regex = regexInput.value.trim();
+    const group = parseInt(groupInput.value, 10) || 1;
+    if (!name || !regex) { showInfo('Помилка', 'Введіть назву та регулярний вираз.'); return; }
+    try { new RegExp(regex); } catch (_) { showInfo('Помилка', 'Некоректний регулярний вираз.'); return; }
+    if (!state.settings.custom_schemas) state.settings.custom_schemas = [];
+    state.settings.custom_schemas.push({ name, regex, group });
+    saveSettings(state.settings);
+    editor.classList.add('hidden');
+    _renderCustomSchemaList();
+    setStatus(`Regex-схему «${name}» збережено`);
+  });
+
+  document.getElementById('schema-custom-apply-btn').addEventListener('click', () => {
+    const idx = parseInt(document.getElementById('schema-custom-select').value, 10);
+    if (isNaN(idx) || idx < 0) return;
+    const key = _getSchemaKey();
+    if (!key) return;
+    state.settings.file_schemas[key] = { textPaths: [], customSchemaIdx: idx };
+    saveSettings(state.settings);
+    updateProgress();
+    updateMeta();
+    forceVirtualRender();
+    hideSchemaModal();
+    const cs = state.settings.custom_schemas[idx];
+    setStatus(`Застосовано regex-схему «${cs ? cs.name : idx}»`);
   });
 }
 
@@ -8712,28 +9330,149 @@ function setupSplitHandle() {
 // ═══════════════════════════════════════════════════════════
 
 function setupKeyboard() {
+  // ── Capture phase: intercept shortcuts BEFORE Monaco steals them ──
+  // All Ctrl+key combos and F-keys are handled here so they work
+  // regardless of whether Monaco Editor has focus.
   document.addEventListener('keydown', (e) => {
-    // F1 — shortcuts overlay
-    if (e.key === 'F1') {
-      e.preventDefault();
-      showCmdPalette();
+    // F1 — command palette (override Monaco's F1)
+    if (e.key === 'F1' && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+      e.preventDefault(); e.stopPropagation(); showCmdPalette(); return;
+    }
+
+    // F2 — bookmarks (override Monaco's F2 rename)
+    if (e.key === 'F2') {
+      e.preventDefault(); e.stopPropagation();
+      if (e.ctrlKey && e.shiftKey) goToPrevBookmark();
+      else if (e.ctrlKey) goToNextBookmark();
+      else if (!e.shiftKey && !e.altKey) toggleEntryBookmark();
       return;
     }
 
-    // Escape — close modals / revert / clear search
+    // Only Ctrl/Cmd combos below
+    if (!e.ctrlKey && !e.metaKey) return;
+    // Use e.code (physical key) — works regardless of keyboard layout (UA, EN, etc.)
+    const code = e.code;
+
+    // Clipboard: Ctrl+C/X/A — let browser/Monaco handle natively
+    if (!e.shiftKey && !e.altKey && (code === 'KeyC' || code === 'KeyX' || code === 'KeyA')) return;
+
+    // Ctrl+V — manual paste via Electron clipboard (native paste broken in Electron without role)
+    if (code === 'KeyV' && !e.shiftKey && !e.altKey) {
+      e.preventDefault(); e.stopPropagation();
+      const text = clipboard.readText();
+      if (!text) return;
+      const editor = getActiveEditor();
+      if (editor && editor.hasTextFocus()) {
+        editor.trigger('keyboard', 'type', { text });
+      } else {
+        const el = document.activeElement;
+        if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
+          const s = el.selectionStart, end = el.selectionEnd;
+          el.value = el.value.slice(0, s) + text + el.value.slice(end);
+          el.selectionStart = el.selectionEnd = s + text.length;
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+      }
+      return;
+    }
+
+    // Ctrl+Z — only intercept for programmatic undo, else let Monaco handle
+    if (code === 'KeyZ' && !e.shiftKey && !e.altKey) {
+      if (_programmaticEdit) {
+        e.preventDefault(); e.stopPropagation();
+        _programmaticEdit = false;
+        undoLastChange();
+      }
+      return;
+    }
+
+    // Ctrl+Y — redo (ours if available, else let Monaco handle)
+    if (code === 'KeyY' && !e.shiftKey && !e.altKey) {
+      if (_redoStack.length > 0) {
+        e.preventDefault(); e.stopPropagation();
+        redoLastChange();
+      }
+      return;
+    }
+
+    // File operations
+    if (code === 'KeyO' && !e.shiftKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); openFile(); return; }
+    if (code === 'KeyO' && e.shiftKey && !e.altKey)  { e.preventDefault(); e.stopPropagation(); openTxtDirectory(); return; }
+    if (code === 'KeyS' && !e.shiftKey && !e.altKey)  { e.preventDefault(); e.stopPropagation(); saveFile(); return; }
+    if (code === 'KeyS' && e.shiftKey && !e.altKey)   { e.preventDefault(); e.stopPropagation(); saveFileAs(); return; }
+    if (code === 'KeyS' && !e.shiftKey && e.altKey)    { e.preventDefault(); e.stopPropagation(); saveAll(); return; }
+    if (code === 'KeyQ' && !e.shiftKey && !e.altKey)   {
+      e.preventDefault(); e.stopPropagation();
+      saveSession();
+      confirmDiscardAll().then(ok => {
+        if (ok) { stopAutosave(); stopPeriodicBackup(); stopPowerWarningTimer(); stopRecoveryTimer(); deleteRecoveryFile(); terminateWorkers(); ipcRenderer.send('app:quit-confirmed'); }
+      });
+      return;
+    }
+
+    // Editing
+    if (code === 'KeyD' && !e.shiftKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); showDiff(); return; }
+    if (code === 'KeyF' && !e.shiftKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); showFindDialog('find'); return; }
+    if (code === 'KeyH' && !e.shiftKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); showFindDialog('replace'); return; }
+    if (code === 'KeyL' && !e.shiftKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); showFindDialog('goto'); return; }
+    if (code === 'KeyT' && !e.shiftKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); toggleSplitMode(); return; }
+    if (code === 'Comma' && !e.shiftKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); showSettingsModal(); return; }
+
+    // Glossary / Bookmarks / Palette (no shift)
+    if (code === 'KeyG' && !e.shiftKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); showGlossaryModal(); return; }
+    if (code === 'KeyB' && !e.shiftKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); showBookmarksPanel(); return; }
+    if (code === 'KeyP' && !e.shiftKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); showCmdPalette(); return; }
+
+    // Ctrl+Shift combos
+    if (e.shiftKey && !e.altKey) {
+      if (code === 'KeyW') { e.preventDefault(); e.stopPropagation(); showWrapModal(); return; }
+      if (code === 'KeyI') { e.preventDefault(); e.stopPropagation(); showStatsModal(); return; }
+      if (code === 'KeyP') { e.preventDefault(); e.stopPropagation(); showProgressModal(); return; }
+      if (code === 'KeyA') { e.preventDefault(); e.stopPropagation(); showFreqModal(); return; }
+      if (code === 'KeyG') { e.preventDefault(); e.stopPropagation(); applyGlossaryToEditor(); return; }
+      if (code === 'KeyH') { e.preventDefault(); e.stopPropagation(); showHistoryPanel(); return; }
+    }
+
+    // Ctrl+Tab / Ctrl+Shift+Tab — switch entry tabs
+    if (e.key === 'Tab' && _openTabs.length > 1) {
+      e.preventDefault(); e.stopPropagation();
+      const curPos = _openTabs.indexOf(state.currentIndex);
+      if (curPos >= 0) {
+        const next = e.shiftKey
+          ? (curPos - 1 + _openTabs.length) % _openTabs.length
+          : (curPos + 1) % _openTabs.length;
+        onListItemClick(_openTabs[next]);
+      }
+      return;
+    }
+
+    // Ctrl+W — close current entry tab
+    if (code === 'KeyW' && !e.shiftKey && _openTabs.length > 0) {
+      e.preventDefault(); e.stopPropagation();
+      closeEntryTab(state.currentIndex);
+      return;
+    }
+
+    // Ctrl+Up / Ctrl+Down — navigation
+    if (!e.shiftKey && e.key === 'ArrowUp')   { e.preventDefault(); e.stopPropagation(); goPrev(); return; }
+    if (!e.shiftKey && e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); goNext(); return; }
+  }, true); // capture phase
+
+  // ── Bubble phase: Escape, Enter, compare arrows ──
+  // These need to coexist with Monaco's own Escape/Enter handling.
+  document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      // Dismiss power warning first
+      // Close glossary tooltip if visible
+      const glossTip = document.getElementById('gloss-tooltip');
+      if (glossTip && !glossTip.classList.contains('hidden')) {
+        glossTip.classList.add('hidden');
+        if (tooltipHideTimer) { clearTimeout(tooltipHideTimer); tooltipHideTimer = null; }
+        return;
+      }
       const pwOverlay = document.getElementById('power-warning-overlay');
       if (!pwOverlay.classList.contains('hidden')) { dismissPowerWarning(); return; }
-
-      // Close find dialog
       if (isFindDialogVisible()) { hideFindDialog(); getActiveEditor()?.focus(); return; }
-
-      // Close command palette
-      if (!document.getElementById('cmd-palette-overlay').classList.contains('hidden')) {
-        hideCmdPalette(); return;
-      }
-
+      if (!document.getElementById('cmd-palette-overlay').classList.contains('hidden')) { hideCmdPalette(); return; }
       for (const id of ['bookmarks-overlay', 'history-overlay', 'migrate-overlay', 'compare-overlay', 'stats-overlay', 'progress-overlay', 'wrap-overlay', 'freq-overlay', 'settings-overlay', 'glossary-overlay', 'diff-overlay', 'info-overlay', 'ref-overlay', 'modal-overlay']) {
         const ol = document.getElementById(id);
         if (!ol.classList.contains('hidden')) {
@@ -8747,7 +9486,6 @@ function setupKeyboard() {
       return;
     }
 
-    // Enter / Shift+Enter — find next/prev when find dialog is open
     if (e.key === 'Enter' && !e.ctrlKey && !e.altKey && isFindDialogVisible()) {
       e.preventDefault();
       if (e.shiftKey) findPrev(false);
@@ -8755,77 +9493,10 @@ function setupKeyboard() {
       return;
     }
 
-    // ↑↓ in compare modal — navigate diffs
     if (!document.getElementById('compare-overlay').classList.contains('hidden')) {
       if (e.key === 'ArrowUp')   { e.preventDefault(); comparePrev(); return; }
       if (e.key === 'ArrowDown') { e.preventDefault(); compareNext(); return; }
     }
-
-    // F2 — toggle bookmark
-    if (e.key === 'F2' && !e.ctrlKey && !e.shiftKey && !e.altKey) {
-      e.preventDefault(); toggleEntryBookmark(); return;
-    }
-    // Ctrl+F2 — next bookmark
-    if (e.key === 'F2' && e.ctrlKey && !e.shiftKey) {
-      e.preventDefault(); goToNextBookmark(); return;
-    }
-    // Ctrl+Shift+F2 — previous bookmark
-    if (e.key === 'F2' && e.ctrlKey && e.shiftKey) {
-      e.preventDefault(); goToPrevBookmark(); return;
-    }
-    // Ctrl+B — bookmarks panel
-    if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === 'b') {
-      e.preventDefault(); showBookmarksPanel(); return;
-    }
-    // Ctrl+P — command palette
-    if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === 'p') {
-      e.preventDefault(); showCmdPalette(); return;
-    }
-    // Ctrl+Shift+H — entry history panel
-    if (e.ctrlKey && e.shiftKey && !e.altKey && e.key === 'H') {
-      e.preventDefault(); showHistoryPanel(); return;
-    }
-
-    // Ctrl+Tab / Ctrl+Shift+Tab — switch entry tabs
-    if (e.ctrlKey && e.key === 'Tab' && _openTabs.length > 1) {
-      e.preventDefault();
-      const curPos = _openTabs.indexOf(state.currentIndex);
-      if (curPos >= 0) {
-        const next = e.shiftKey
-          ? (curPos - 1 + _openTabs.length) % _openTabs.length
-          : (curPos + 1) % _openTabs.length;
-        onListItemClick(_openTabs[next]);
-      }
-      return;
-    }
-
-    // Ctrl+W — close current entry tab
-    if (e.ctrlKey && !e.shiftKey && e.key === 'w' && _openTabs.length > 0) {
-      e.preventDefault();
-      closeEntryTab(state.currentIndex);
-      return;
-    }
-
-    // Ctrl+Z — undo last programmatic change (glossary replace, etc.)
-    if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === 'z' && _programmaticEdit) {
-      e.preventDefault();
-      _programmaticEdit = false;
-      undoLastChange();
-      return;
-    }
-
-    // Ctrl+Y — redo
-    if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === 'y') {
-      if (_redoStack.length > 0) {
-        e.preventDefault();
-        redoLastChange();
-        return;
-      }
-    }
-
-    // Ctrl+Up / Ctrl+Down — navigation
-    if (e.ctrlKey && !e.shiftKey && e.key === 'ArrowUp')   { e.preventDefault(); goPrev(); return; }
-    if (e.ctrlKey && !e.shiftKey && e.key === 'ArrowDown') { e.preventDefault(); goNext(); return; }
   });
 }
 
@@ -8930,15 +9601,61 @@ function setupEventListeners() {
     });
   });
 
+  // Make entry list container focusable for keyboard navigation
+  dom.entryListContainer.tabIndex = -1;
+  dom.entryListContainer.style.outline = 'none';
+
+  // Arrow keys navigate entries when list is focused
+  dom.entryListContainer.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && _multiSelected.size > 0) {
+      e.preventDefault();
+      clearMultiSelect();
+      return;
+    }
+    if (e.ctrlKey || e.altKey || e.shiftKey) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); goNext(); return; }
+    if (e.key === 'ArrowUp')   { e.preventDefault(); goPrev(); return; }
+  });
+
   // Event delegation for entry list (replaces per-item listeners)
   dom.entryList.addEventListener('click', (e) => {
     const el = e.target.closest('.entry-item');
     if (!el) return;
     const idx = parseInt(el.dataset.index);
     clearTimeout(_listClickTimer);
+
+    if (e.ctrlKey) {
+      // Ctrl+click — toggle item in multi-selection
+      if (_multiSelected.has(idx)) {
+        _multiSelected.delete(idx);
+        el.classList.remove('multi-selected');
+      } else {
+        _multiSelected.add(idx);
+        el.classList.add('multi-selected');
+      }
+      _lastClickedIdx = idx;
+      dom.entryListContainer.focus();
+      return;
+    }
+
+    if (e.shiftKey && _lastClickedIdx >= 0) {
+      // Shift+click — range selection from anchor to clicked
+      _multiSelected.clear();
+      const from = Math.min(_lastClickedIdx, idx);
+      const to = Math.max(_lastClickedIdx, idx);
+      for (let i = from; i <= to; i++) _multiSelected.add(i);
+      applyMultiSelectVisual();
+      dom.entryListContainer.focus();
+      return;
+    }
+
+    // Normal click — single selection, clear multi-select
+    clearMultiSelect();
+    _lastClickedIdx = idx;
     if (_activeListEl) _activeListEl.classList.remove('active');
     el.classList.add('active');
     _activeListEl = el;
+    dom.entryListContainer.focus();
     _listClickTimer = setTimeout(() => onListItemClick(idx), 220);
   });
   dom.entryList.addEventListener('dblclick', (e) => {
@@ -9117,7 +9834,7 @@ function init() {
         () => { setupScrollSync(); },
         // ── Monaco Editor init (async — resolves before next step) ──
         () => initMonacoEditors().then(() => { setupGutterListeners(); }),
-        () => { setupEntryContextMenu(); setupToolbar(); },
+        () => { setupEntryContextMenu(); setupToolbar(); setupSidePanelHandle(); },
         () => { setupFindDialog(); setupSchemaModal(); },
         () => { setupSelectionHandler(); setupZoom(); setupDragDrop(); },
         () => { setupMigrateModal(); },

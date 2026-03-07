@@ -1,0 +1,95 @@
+/* ─── Performance: Visual Effects Levels ─── */
+
+/* Reduced: no blur, no transitions */
+.reduced-fx *,
+.minimal-fx * {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  transition-duration: 0ms !important;
+}
+
+.reduced-fx .modal,
+.minimal-fx .modal {
+  animation: none !important;
+}
+
+.reduced-fx .progress-bar-fill,
+.minimal-fx .progress-bar-fill {
+  transition: none !important;
+}
+
+/* Minimal: additionally remove shadows, glows */
+.minimal-fx * {
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+
+/* ─── Power Outage Warning ─── */
+
+.power-warning-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.82);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 3000;
+  animation: powerWarnFade 0.4s ease-out;
+}
+
+@keyframes powerWarnFade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.power-warning-panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--dirty);
+  border-radius: 18px;
+  padding: 32px 40px;
+  text-align: center;
+  max-width: 460px;
+  box-shadow: 0 0 60px rgba(232, 138, 58, 0.25), var(--shadow);
+  animation: modalIn 0.3s ease-out;
+}
+
+.power-warning-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+  filter: drop-shadow(0 0 12px rgba(232, 138, 58, 0.5));
+}
+
+.power-warning-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--dirty);
+  margin-bottom: 12px;
+}
+
+.power-warning-text {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  margin-bottom: 20px;
+}
+
+.power-warning-panel .btn-primary {
+  padding: 8px 28px;
+  font-size: 13px;
+}
+
+/* ─── Reduced Motion ─── */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .progress-bar-fill { transition: none; }
+  .modal { animation: none; }
+  .gloss-cloud { animation: none; }
+}

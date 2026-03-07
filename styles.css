@@ -629,6 +629,13 @@ body {
   border-left: 2px solid var(--accent);
 }
 
+.entry-item.multi-selected {
+  background: var(--accent-subtle);
+  color: var(--text-primary);
+  border-left: 2px solid var(--accent);
+  opacity: 0.85;
+}
+
 .entry-item.dirty { color: var(--dirty); }
 .entry-item.dirty.active { color: var(--text-primary); }
 
@@ -1102,6 +1109,62 @@ body {
 .schema-children { padding-left: 20px; }
 .schema-children.collapsed { display: none; }
 
+/* ─── Custom Schema (regex) ─── */
+.schema-custom-section {
+  margin-bottom: 10px; padding: 8px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--input-bg);
+}
+.schema-custom-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 6px;
+}
+.schema-custom-title { font-size: 12px; font-weight: 600; color: var(--text); }
+.schema-custom-editor { margin-top: 8px; }
+.schema-custom-row {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 6px; font-size: 12px;
+}
+.schema-custom-row label { min-width: 100px; color: var(--text-secondary); }
+.schema-custom-row input {
+  flex: 1; padding: 3px 6px; font-size: 12px;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 4px;
+}
+.schema-custom-preview {
+  max-height: 140px; overflow-y: auto;
+  font-family: monospace; font-size: 11px;
+  background: var(--bg-input); border-radius: 6px;
+  padding: 6px 8px; margin-top: 6px;
+  line-height: 1.5;
+}
+.schema-custom-preview-line { white-space: pre; overflow: hidden; text-overflow: ellipsis; color: var(--text-secondary); }
+.schema-custom-preview-match { color: var(--accent); font-weight: 600; }
+.schema-custom-preview-no { color: var(--text-muted); font-style: italic; }
+.schema-custom-actions { display: flex; gap: 6px; margin-top: 6px; }
+.schema-custom-apply {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 8px; font-size: 12px;
+}
+.schema-custom-apply label { color: var(--text-secondary); white-space: nowrap; }
+.schema-custom-apply select {
+  flex: 1; padding: 3px 6px; font-size: 12px;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 4px;
+}
+.schema-custom-item {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 0; font-size: 12px; border-bottom: 1px solid var(--border);
+}
+.schema-custom-item:last-child { border-bottom: none; }
+.schema-custom-item-name { flex: 1; font-weight: 500; color: var(--text); }
+.schema-custom-item-regex { color: var(--text-muted); font-family: monospace; font-size: 11px; }
+.schema-custom-item-del {
+  background: none; border: none; color: var(--danger, #e55); cursor: pointer;
+  font-size: 14px; padding: 0 4px; opacity: 0.6;
+}
+.schema-custom-item-del:hover { opacity: 1; }
+
 /* ─── Find Dialog (floating, Notepad++ style) ─── */
 
 .find-dialog {
@@ -1521,6 +1584,80 @@ body {
 .tb-icon-show-all::before { content: "\00B6"; }
 .tb-icon-undo::before { content: "\21B6"; }
 .tb-icon-redo::before { content: "\21B7"; }
+.tb-icon-side-panel::before { content: "\25EB"; }
+
+/* ─── Side Panel (dual view) ─── */
+
+#side-panel-handle {
+  width: 3px;
+  cursor: col-resize;
+  background: transparent;
+  flex-shrink: 0;
+  border-radius: 2px;
+  transition: background 0.2s;
+}
+#side-panel-handle:hover {
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent-glow);
+}
+
+#side-panel {
+  flex: 0 0 45%;
+  max-width: 55%;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.side-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  background: var(--bg-glass);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--border-glass);
+  border-radius: 8px;
+  font-size: 11px;
+  color: var(--text-primary);
+  flex-shrink: 0;
+  margin-bottom: 4px;
+}
+
+.side-panel-title {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.side-panel-close {
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+
+.side-panel-close:hover {
+  background: var(--bg-glass-hover);
+  color: var(--text-primary);
+}
+
+#side-panel .monaco-container {
+  flex: 1;
+}
 
 /* ─── Layout modes on #split-container ─── */
 
@@ -1692,6 +1829,22 @@ body {
 .mode-btn.active { background: var(--accent-subtle); color: var(--text-primary); font-weight: 500; }
 
 /* ─── Editor ─── */
+
+#editor-area {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+  min-height: 100px;
+}
+
+#editor-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  overflow: hidden;
+}
 
 #flat-editor-container {
   flex: 1;
@@ -1911,6 +2064,9 @@ textarea.editor-dirty {
   justify-content: center;
   z-index: 1000;
 }
+
+/* Alert-level modals (info, ask) must appear above content modals (schema, stats, etc.) */
+#info-overlay, #modal-overlay { z-index: 1100; }
 
 .modal {
   background: var(--bg-surface);

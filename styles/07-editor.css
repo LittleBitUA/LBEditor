@@ -1,0 +1,221 @@
+/* ─── Editor ─── */
+
+#editor-area {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+  min-height: 100px;
+}
+
+#editor-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  overflow: hidden;
+}
+
+#flat-editor-container {
+  flex: 1;
+  display: flex;
+  min-height: 100px;
+}
+
+#split-editor-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 100px;
+}
+
+.editor-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 0 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+textarea {
+  background: var(--bg-glass);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  color: var(--text-primary);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--glass-radius);
+  font-family: 'Consolas', 'Cascadia Code', monospace;
+  font-size: 11pt;
+  line-height: 1.4;
+  resize: none;
+  outline: none;
+  padding: 10px 12px;
+  white-space: pre;
+  overflow: auto;
+  tab-size: 4;
+  user-select: text;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+textarea::placeholder { color: var(--text-placeholder); }
+
+textarea:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px var(--border-glow);
+}
+
+textarea.word-wrap {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+textarea.editor-dirty {
+  border-color: var(--dirty);
+  box-shadow: 0 0 0 1px var(--dirty-glow);
+}
+
+/* ─── Monaco Editor Containers ─── */
+
+.monaco-container {
+  position: relative;
+  flex: 1;
+  width: 100%;
+  min-height: 200px;
+  background: var(--bg-glass);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--border-glass);
+  border-radius: var(--glass-radius);
+  transition: border-color 0.2s, box-shadow 0.2s;
+  overflow: hidden;
+}
+
+.monaco-container:focus-within {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px var(--border-glow);
+}
+
+.monaco-container.editor-dirty {
+  border-color: var(--dirty);
+  box-shadow: 0 0 0 1px var(--dirty-glow);
+}
+
+/* Make Monaco editor background transparent for glass morphism */
+.monaco-container .monaco-editor,
+.monaco-container .monaco-editor .overflow-guard,
+.monaco-container .monaco-editor-background,
+.monaco-container .monaco-editor .margin {
+  background: transparent !important;
+}
+
+/* Reset global textarea styles on Monaco's internal hidden textarea */
+.monaco-editor textarea.inputarea,
+.monaco-editor .ime-text-area {
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  outline: none !important;
+  opacity: 0 !important;
+}
+
+/* ─── Monaco Decoration: Glossary Highlights ─── */
+.glossary-highlight {
+  background: var(--accent-subtle);
+  border-bottom: 2px solid var(--accent);
+  border-radius: 2px 2px 0 0;
+}
+
+/* ─── Monaco Decoration: Find Match ─── */
+.find-match {
+  background: rgba(255, 213, 0, 0.2);
+  border: 1px solid rgba(255, 213, 0, 0.5);
+}
+.find-match-current {
+  background: rgba(255, 213, 0, 0.45);
+  border: 1px solid rgba(255, 213, 0, 0.8);
+}
+
+/* ─── Monaco Decoration: Bookmark Glyph ─── */
+.bookmark-glyph {
+  background: var(--accent);
+  border-radius: 50%;
+  width: 8px !important;
+  height: 8px !important;
+  margin-left: 4px;
+  margin-top: 5px;
+  box-shadow: 0 0 4px var(--accent);
+}
+
+/* ─── Monaco Decoration: Modified Lines ─── */
+.modified-line-deco {
+  background: #e8a838;
+  width: 3px !important;
+}
+
+/* ─── Status Bar ─── */
+
+#status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 12px;
+  background: var(--bg-glass);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--border-glass);
+  border-radius: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  min-height: 26px;
+  flex-shrink: 0;
+}
+
+#status-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.status-cursor {
+  color: var(--text-muted);
+  margin-left: 12px;
+  white-space: nowrap;
+  font-size: 10px;
+  font-family: 'Consolas', monospace;
+}
+
+#status-hint {
+  color: var(--text-muted);
+  margin-left: 12px;
+  white-space: nowrap;
+  font-size: 10px;
+}
+
+/* ─── Scrollbar ─── */
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 4px;
+  transition: background 0.2s, width 0.2s;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-subtle, rgba(128,128,128,0.25));
+}
+::-webkit-scrollbar-thumb:active {
+  background: var(--accent-glow, rgba(128,128,128,0.35));
+}
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* Monaco editor uses its own scrollbar — no custom scrollbar needed */
+
+.hidden { display: none !important; }
+

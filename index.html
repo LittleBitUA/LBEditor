@@ -123,19 +123,34 @@
           <span class="tb-sep"></span>
           <button class="tb-btn tb-icon-undo" id="tb-undo" title="Скасувати (Ctrl+Z)"></button>
           <button class="tb-btn tb-icon-redo" id="tb-redo" title="Повторити (Ctrl+Y)"></button>
+          <span class="tb-sep"></span>
+          <button class="tb-btn tb-icon-side-panel" id="tb-side-panel" title="Відкрити збоку"></button>
         </div>
 
         <div id="tab-bar"></div>
 
-        <div id="flat-editor-container">
-          <div id="flat-monaco" class="monaco-container"></div>
-        </div>
+        <div id="editor-area">
+          <div id="editor-main">
+            <div id="flat-editor-container">
+              <div id="flat-monaco" class="monaco-container"></div>
+            </div>
 
-        <div id="split-editor-container" style="display:none;">
-          <label class="editor-label">Text</label>
-          <div id="text-monaco" class="monaco-container" style="flex:3;"></div>
-          <label class="editor-label">Speakers</label>
-          <div id="sp-monaco" class="monaco-container" style="flex:1;"></div>
+            <div id="split-editor-container" style="display:none;">
+              <label class="editor-label">Text</label>
+              <div id="text-monaco" class="monaco-container" style="flex:3;"></div>
+              <label class="editor-label">Speakers</label>
+              <div id="sp-monaco" class="monaco-container" style="flex:1;"></div>
+            </div>
+          </div>
+
+          <div id="side-panel-handle" class="hidden"></div>
+          <div id="side-panel" class="hidden">
+            <div class="side-panel-header">
+              <span class="side-panel-title" id="side-panel-title"></span>
+              <button class="side-panel-close" id="side-panel-close" title="Закрити">&times;</button>
+            </div>
+            <div id="side-panel-monaco" class="monaco-container"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -286,10 +301,6 @@
           <div class="form-row">
             <label>Інтервал (сек):</label>
             <input type="number" id="set-interval" min="10" value="30">
-          </div>
-          <div class="form-row">
-            <label>Бекап:</label>
-            <label><input type="checkbox" id="set-backup" checked> .bak перед збереженням</label>
           </div>
           <div class="form-row">
             <label>Періодичний бекап:</label>
@@ -716,8 +727,42 @@
             <option value="json">JSON</option>
             <option value="xml">XML</option>
             <option value="keyvalue">Key=Value</option>
+            <option value="csv">CSV</option>
           </select>
           <button id="schema-reparse-btn" class="schema-reparse-btn" title="Перечитати з обраним типом">&#x21bb;</button>
+        </div>
+        <div class="schema-custom-section" id="schema-custom-section">
+          <div class="schema-custom-header">
+            <span class="schema-custom-title">Власні схеми (regex):</span>
+            <button id="schema-custom-add" class="btn-sm" title="Додати regex-схему">+</button>
+          </div>
+          <div id="schema-custom-list"></div>
+          <div id="schema-custom-editor" class="schema-custom-editor hidden">
+            <div class="schema-custom-row">
+              <label>Назва:</label>
+              <input type="text" id="schema-custom-name" placeholder="Напр. Key=Value" maxlength="40">
+            </div>
+            <div class="schema-custom-row">
+              <label>Regex:</label>
+              <input type="text" id="schema-custom-regex" placeholder="^[^=]+=(.*)$" style="font-family:monospace">
+            </div>
+            <div class="schema-custom-row">
+              <label>Capture group:</label>
+              <input type="number" id="schema-custom-group" value="1" min="0" max="9" style="width:60px">
+            </div>
+            <div id="schema-custom-preview" class="schema-custom-preview hidden"></div>
+            <div class="schema-custom-actions">
+              <button class="btn-primary btn-sm" id="schema-custom-save-btn">Зберегти схему</button>
+              <button class="btn-sm" id="schema-custom-cancel-btn">Скасувати</button>
+            </div>
+          </div>
+          <div id="schema-custom-apply-row" class="schema-custom-apply hidden">
+            <label>Застосувати до файлу:</label>
+            <select id="schema-custom-select">
+              <option value="">— не обрано —</option>
+            </select>
+            <button class="btn-sm btn-primary" id="schema-custom-apply-btn">Застосувати</button>
+          </div>
         </div>
         <div class="schema-hint">Оберіть поля, які містять текст для перекладу:</div>
         <input type="text" id="schema-search" class="schema-search" placeholder="Пошук ключа...">
@@ -776,10 +821,23 @@
         </div>
 
         <h4 style="margin:0 0 6px;">Дефіс і скісна риска</h4>
-        <ul style="margin:0; padding-left:20px;">
+        <ul style="margin:0 0 12px; padding-left:20px;">
           <li>Пропущена середина — дефіс без крапки: гр-н, вид-во, ін-т, ун-т, р-н</li>
           <li>Складні слова — букви частин з крапкою: с.-д., с.-г., ст.-сл., півн.-сх.</li>
           <li>Скісна риска без крапок: п/в, а/с, р/р, км/год, м/хв</li>
+        </ul>
+
+        <h4 style="margin:0 0 6px;">Збіг розділових знаків</h4>
+        <ul style="margin:0; padding-left:20px;">
+          <li><b>, —</b> (кома й тире) ставимо:
+            <ul style="padding-left:18px;">
+              <li>у реченнях з прямою мовою та мовою автора;</li>
+              <li>у межах речень з випущеними членами та з відокремленими і вставленими конструкціями, у складних реченнях, коли — за наявності тире — кома має закривати попередню конструкцію (<i>З одного боку, це ніби й не так, а з другого, — факти частково підтвердилися</i>);</li>
+              <li>для увиразнення протиставлення: перед указівними словами <i>це, так, такий</i> і под. на початку другої частини речення.</li>
+            </ul>
+          </li>
+          <li>Збіг різних знаків у реченнях з конструкціями у дужках.</li>
+          <li>Збіг різних знаків у реченнях з прямою мовою та мовою автора.</li>
         </ul>
       </div>
       <div class="modal-footer">
@@ -948,6 +1006,11 @@
     <div class="ctx-sep"></div>
     <div class="ctx-item" id="ctx-bookmark"><span class="ctx-dot ctx-dot-bookmark"></span> Закладка</div>
     <div class="ctx-item" id="ctx-entry-history">Історія змін&#x2026;</div>
+    <div class="ctx-sep hidden" id="ctx-discard-sep"></div>
+    <div class="ctx-item ctx-danger hidden" id="ctx-discard">Відкинути зміни</div>
+    <div class="ctx-item ctx-muted hidden" id="ctx-restore">Повернути зміни</div>
+    <div class="ctx-sep" id="ctx-side-sep"></div>
+    <div class="ctx-item" id="ctx-open-side">Відкрити збоку</div>
     <div class="ctx-sep" id="ctx-compare-sep"></div>
     <div class="ctx-item" id="ctx-compare">Порівняти&#x2026;</div>
     <div class="ctx-item hidden" id="ctx-compare-cancel">Скасувати порівняння</div>

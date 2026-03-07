@@ -1,0 +1,505 @@
+/* ═══════════════════════════════════════════════════════════
+   LB — Glass Themes
+   ═══════════════════════════════════════════════════════════ */
+
+/* ─── Dark Theme (default) ─── */
+
+:root, [data-theme="dark"] {
+  --bg-deep: #1b1b1b;
+  --bg-glass: rgba(255, 255, 255, 0.05);
+  --bg-glass-hover: rgba(255, 255, 255, 0.08);
+  --bg-glass-active: rgba(255, 255, 255, 0.12);
+  --bg-surface: rgba(30, 30, 30, 0.94);
+  --bg-input: rgba(0, 0, 0, 0.30);
+
+  --text-primary: #e8e8e8;
+  --text-secondary: rgba(232, 232, 232, 0.62);
+  --text-muted: rgba(232, 232, 232, 0.32);
+  --text-placeholder: rgba(232, 232, 232, 0.20);
+
+  --border-glass: rgba(255, 255, 255, 0.08);
+  --border-focus: rgba(160, 180, 220, 0.50);
+  --border-glow: rgba(160, 180, 220, 0.18);
+
+  --accent: #7eb8e0;
+  --accent-glow: rgba(126, 184, 224, 0.25);
+  --accent-subtle: rgba(126, 184, 224, 0.12);
+
+  --dirty: #e88a3a;
+  --dirty-glow: rgba(232, 138, 58, 0.28);
+  --error: #d45050;
+  --success: #5ab87a;
+
+  --diff-add: #5ab87a;
+  --diff-del: #d45050;
+  --diff-hunk: #7eb8e0;
+
+  --glass-blur: 24px;
+  --glass-radius: 12px;
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  --scrollbar-thumb: rgba(255, 255, 255, 0.10);
+
+  --spell-error: rgba(212, 80, 80, 0.55);
+  --spell-error-line: #d45050;
+}
+
+/* ─── Light Theme ─── */
+
+[data-theme="light"] {
+  --bg-deep: #f0f0f0;
+  --bg-glass: rgba(255, 255, 255, 0.60);
+  --bg-glass-hover: rgba(255, 255, 255, 0.75);
+  --bg-glass-active: rgba(255, 255, 255, 0.85);
+  --bg-surface: rgba(250, 250, 250, 0.96);
+  --bg-input: rgba(0, 0, 0, 0.05);
+
+  --text-primary: #1a1a1a;
+  --text-secondary: rgba(26, 26, 26, 0.68);
+  --text-muted: rgba(26, 26, 26, 0.38);
+  --text-placeholder: rgba(26, 26, 26, 0.25);
+
+  --border-glass: rgba(0, 0, 0, 0.10);
+  --border-focus: rgba(50, 100, 180, 0.50);
+  --border-glow: rgba(50, 100, 180, 0.15);
+
+  --accent: #2a6db5;
+  --accent-glow: rgba(42, 109, 181, 0.20);
+  --accent-subtle: rgba(42, 109, 181, 0.10);
+
+  --dirty: #c06820;
+  --dirty-glow: rgba(192, 104, 32, 0.22);
+  --error: #c03030;
+  --success: #2a8a48;
+
+  --diff-add: #2a8a48;
+  --diff-del: #c03030;
+  --diff-hunk: #2a6db5;
+
+  --glass-blur: 20px;
+  --glass-radius: 12px;
+  --shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
+  --scrollbar-thumb: rgba(0, 0, 0, 0.12);
+
+  --spell-error: rgba(192, 48, 48, 0.15);
+  --spell-error-line: #c03030;
+}
+
+/* ─── Blue Night Theme ─── */
+
+[data-theme="blue-night"] {
+  --bg-deep: #0d1520;
+  --bg-glass: rgba(100, 160, 255, 0.06);
+  --bg-glass-hover: rgba(100, 160, 255, 0.10);
+  --bg-glass-active: rgba(100, 160, 255, 0.15);
+  --bg-surface: rgba(14, 22, 36, 0.96);
+  --bg-input: rgba(0, 10, 30, 0.35);
+
+  --text-primary: #d0dcea;
+  --text-secondary: rgba(208, 220, 234, 0.62);
+  --text-muted: rgba(208, 220, 234, 0.32);
+  --text-placeholder: rgba(208, 220, 234, 0.18);
+
+  --border-glass: rgba(80, 140, 230, 0.12);
+  --border-focus: rgba(90, 150, 240, 0.55);
+  --border-glow: rgba(90, 150, 240, 0.20);
+
+  --accent: #5a9cf0;
+  --accent-glow: rgba(90, 156, 240, 0.28);
+  --accent-subtle: rgba(90, 156, 240, 0.14);
+
+  --dirty: #e08a40;
+  --dirty-glow: rgba(224, 138, 64, 0.25);
+  --error: #d45050;
+  --success: #50b878;
+
+  --diff-add: #50b878;
+  --diff-del: #d45050;
+  --diff-hunk: #5a9cf0;
+
+  --glass-blur: 24px;
+  --glass-radius: 12px;
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.7);
+  --scrollbar-thumb: rgba(90, 150, 240, 0.12);
+
+  --spell-error: rgba(212, 80, 80, 0.50);
+  --spell-error-line: #d45050;
+}
+
+/* ─── Green Forest Theme ─── */
+
+[data-theme="green-forest"] {
+  --bg-deep: #0f1a0f;
+  --bg-glass: rgba(80, 200, 100, 0.06);
+  --bg-glass-hover: rgba(80, 200, 100, 0.10);
+  --bg-glass-active: rgba(80, 200, 100, 0.15);
+  --bg-surface: rgba(16, 28, 16, 0.96);
+  --bg-input: rgba(0, 15, 0, 0.30);
+
+  --text-primary: #d0e8d0;
+  --text-secondary: rgba(208, 232, 208, 0.62);
+  --text-muted: rgba(208, 232, 208, 0.32);
+  --text-placeholder: rgba(208, 232, 208, 0.18);
+
+  --border-glass: rgba(80, 180, 100, 0.12);
+  --border-focus: rgba(80, 200, 110, 0.50);
+  --border-glow: rgba(80, 200, 110, 0.18);
+
+  --accent: #5cb870;
+  --accent-glow: rgba(92, 184, 112, 0.28);
+  --accent-subtle: rgba(92, 184, 112, 0.14);
+
+  --dirty: #d8a040;
+  --dirty-glow: rgba(216, 160, 64, 0.25);
+  --error: #d45050;
+  --success: #5cb870;
+
+  --diff-add: #5cb870;
+  --diff-del: #d45050;
+  --diff-hunk: #70b8d0;
+
+  --glass-blur: 24px;
+  --glass-radius: 12px;
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.65);
+  --scrollbar-thumb: rgba(80, 180, 100, 0.12);
+
+  --spell-error: rgba(212, 80, 80, 0.50);
+  --spell-error-line: #d45050;
+}
+
+/* ─── Warm Amber Theme ─── */
+
+[data-theme="warm-amber"] {
+  --bg-deep: #1a1510;
+  --bg-glass: rgba(230, 170, 80, 0.06);
+  --bg-glass-hover: rgba(230, 170, 80, 0.10);
+  --bg-glass-active: rgba(230, 170, 80, 0.15);
+  --bg-surface: rgba(30, 24, 18, 0.96);
+  --bg-input: rgba(20, 12, 0, 0.30);
+
+  --text-primary: #ecdcc8;
+  --text-secondary: rgba(236, 220, 200, 0.62);
+  --text-muted: rgba(236, 220, 200, 0.32);
+  --text-placeholder: rgba(236, 220, 200, 0.18);
+
+  --border-glass: rgba(200, 150, 70, 0.12);
+  --border-focus: rgba(220, 170, 80, 0.50);
+  --border-glow: rgba(220, 170, 80, 0.18);
+
+  --accent: #d8a850;
+  --accent-glow: rgba(216, 168, 80, 0.28);
+  --accent-subtle: rgba(216, 168, 80, 0.14);
+
+  --dirty: #e07840;
+  --dirty-glow: rgba(224, 120, 64, 0.25);
+  --error: #d45050;
+  --success: #6ab870;
+
+  --diff-add: #6ab870;
+  --diff-del: #d45050;
+  --diff-hunk: #d8a850;
+
+  --glass-blur: 24px;
+  --glass-radius: 12px;
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.65);
+  --scrollbar-thumb: rgba(200, 150, 70, 0.12);
+
+  --spell-error: rgba(212, 80, 80, 0.50);
+  --spell-error-line: #d45050;
+}
+
+/* ─── Rose Theme ─── */
+
+[data-theme="rose"] {
+  --bg-deep: #1a1018;
+  --bg-glass: rgba(220, 120, 160, 0.06);
+  --bg-glass-hover: rgba(220, 120, 160, 0.10);
+  --bg-glass-active: rgba(220, 120, 160, 0.15);
+  --bg-surface: rgba(30, 18, 26, 0.96);
+  --bg-input: rgba(20, 5, 15, 0.30);
+
+  --text-primary: #ecd8e4;
+  --text-secondary: rgba(236, 216, 228, 0.62);
+  --text-muted: rgba(236, 216, 228, 0.32);
+  --text-placeholder: rgba(236, 216, 228, 0.18);
+
+  --border-glass: rgba(200, 100, 140, 0.12);
+  --border-focus: rgba(220, 120, 160, 0.50);
+  --border-glow: rgba(220, 120, 160, 0.18);
+
+  --accent: #d878a0;
+  --accent-glow: rgba(216, 120, 160, 0.28);
+  --accent-subtle: rgba(216, 120, 160, 0.14);
+
+  --dirty: #e0a040;
+  --dirty-glow: rgba(224, 160, 64, 0.25);
+  --error: #d45050;
+  --success: #60b880;
+
+  --diff-add: #60b880;
+  --diff-del: #d45050;
+  --diff-hunk: #d878a0;
+
+  --glass-blur: 24px;
+  --glass-radius: 12px;
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.65);
+  --scrollbar-thumb: rgba(200, 100, 140, 0.12);
+
+  --spell-error: rgba(212, 80, 80, 0.50);
+  --spell-error-line: #d45050;
+}
+
+/* ─── GitHub Dark Classic ─── */
+
+[data-theme="github-dark"] {
+  --bg-deep: #24292e;
+  --bg-glass: rgba(255, 255, 255, 0.05);
+  --bg-glass-hover: rgba(255, 255, 255, 0.08);
+  --bg-glass-active: rgba(255, 255, 255, 0.12);
+  --bg-surface: rgba(31, 36, 40, 0.96);
+  --bg-input: rgba(47, 54, 61, 0.80);
+
+  --text-primary: #e1e4e8;
+  --text-secondary: rgba(209, 213, 218, 0.70);
+  --text-muted: rgba(209, 213, 218, 0.38);
+  --text-placeholder: rgba(209, 213, 218, 0.22);
+
+  --border-glass: rgba(27, 31, 35, 0.50);
+  --border-focus: rgba(0, 92, 197, 0.65);
+  --border-glow: rgba(0, 92, 197, 0.22);
+
+  --accent: #58a6ff;
+  --accent-glow: rgba(88, 166, 255, 0.25);
+  --accent-subtle: rgba(88, 166, 255, 0.12);
+
+  --dirty: #d29922;
+  --dirty-glow: rgba(210, 153, 34, 0.28);
+  --error: #f85149;
+  --success: #3fb950;
+
+  --diff-add: #3fb950;
+  --diff-del: #f85149;
+  --diff-hunk: #58a6ff;
+
+  --glass-blur: 20px;
+  --glass-radius: 8px;
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
+  --scrollbar-thumb: rgba(106, 115, 125, 0.20);
+
+  --spell-error: rgba(248, 81, 73, 0.50);
+  --spell-error-line: #f85149;
+}
+
+/* ─── Notepad++ ─── */
+
+[data-theme="notepadpp"] {
+  --bg-deep: #e8e8e8;
+  --bg-glass: rgba(255, 255, 255, 0.70);
+  --bg-glass-hover: rgba(255, 255, 255, 0.85);
+  --bg-glass-active: rgba(255, 255, 255, 0.92);
+  --bg-surface: rgba(255, 255, 255, 0.97);
+  --bg-input: rgba(255, 255, 255, 0.95);
+
+  --text-primary: #000000;
+  --text-secondary: rgba(0, 0, 0, 0.72);
+  --text-muted: rgba(0, 0, 0, 0.40);
+  --text-placeholder: rgba(0, 0, 0, 0.28);
+
+  --border-glass: rgba(0, 0, 0, 0.14);
+  --border-focus: rgba(0, 120, 215, 0.60);
+  --border-glow: rgba(0, 120, 215, 0.18);
+
+  --accent: #0078d7;
+  --accent-glow: rgba(0, 120, 215, 0.22);
+  --accent-subtle: rgba(0, 120, 215, 0.10);
+
+  --dirty: #c06820;
+  --dirty-glow: rgba(192, 104, 32, 0.22);
+  --error: #ff0000;
+  --success: #008000;
+
+  --diff-add: #008000;
+  --diff-del: #ff0000;
+  --diff-hunk: #0000ff;
+
+  --glass-blur: 16px;
+  --glass-radius: 4px;
+  --shadow: 0 2px 8px rgba(0, 0, 0, 0.10);
+  --scrollbar-thumb: rgba(0, 0, 0, 0.16);
+
+  --spell-error: rgba(255, 0, 0, 0.15);
+  --spell-error-line: #ff0000;
+}
+
+/* ─── Dracula ─── */
+
+[data-theme="dracula"] {
+  --bg-deep: #282a36;
+  --bg-glass: rgba(68, 71, 90, 0.45);
+  --bg-glass-hover: rgba(68, 71, 90, 0.60);
+  --bg-glass-active: rgba(68, 71, 90, 0.75);
+  --bg-surface: rgba(40, 42, 54, 0.95);
+  --bg-input: rgba(40, 42, 54, 0.80);
+
+  --text-primary: #f8f8f2;
+  --text-secondary: rgba(248, 248, 242, 0.70);
+  --text-muted: rgba(98, 114, 164, 0.80);
+  --text-placeholder: rgba(98, 114, 164, 0.50);
+
+  --border-glass: rgba(98, 114, 164, 0.30);
+  --border-focus: rgba(189, 147, 249, 0.60);
+  --border-glow: rgba(189, 147, 249, 0.22);
+
+  --accent: #bd93f9;
+  --accent-glow: rgba(189, 147, 249, 0.30);
+  --accent-subtle: rgba(189, 147, 249, 0.14);
+
+  --dirty: #ffb86c;
+  --dirty-glow: rgba(255, 184, 108, 0.28);
+  --error: #ff5555;
+  --success: #50fa7b;
+
+  --diff-add: #50fa7b;
+  --diff-del: #ff5555;
+  --diff-hunk: #8be9fd;
+
+  --glass-blur: 22px;
+  --glass-radius: 10px;
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
+  --scrollbar-thumb: rgba(98, 114, 164, 0.30);
+
+  --spell-error: rgba(255, 85, 85, 0.50);
+  --spell-error-line: #ff5555;
+}
+
+/* ─── Alucard (Dracula Light) ─── */
+
+[data-theme="alucard"] {
+  --bg-deep: #fffbeb;
+  --bg-glass: rgba(255, 255, 255, 0.65);
+  --bg-glass-hover: rgba(255, 255, 255, 0.80);
+  --bg-glass-active: rgba(255, 255, 255, 0.90);
+  --bg-surface: rgba(255, 251, 235, 0.96);
+  --bg-input: rgba(255, 255, 255, 0.90);
+
+  --text-primary: #1f1f1f;
+  --text-secondary: rgba(31, 31, 31, 0.72);
+  --text-muted: rgba(108, 102, 75, 0.80);
+  --text-placeholder: rgba(108, 102, 75, 0.45);
+
+  --border-glass: rgba(108, 102, 75, 0.20);
+  --border-focus: rgba(100, 74, 201, 0.55);
+  --border-glow: rgba(100, 74, 201, 0.18);
+
+  --accent: #644ac9;
+  --accent-glow: rgba(100, 74, 201, 0.25);
+  --accent-subtle: rgba(100, 74, 201, 0.10);
+
+  --dirty: #a34d14;
+  --dirty-glow: rgba(163, 77, 20, 0.22);
+  --error: #cb3a2a;
+  --success: #14710a;
+
+  --diff-add: #14710a;
+  --diff-del: #cb3a2a;
+  --diff-hunk: #036a96;
+
+  --glass-blur: 20px;
+  --glass-radius: 10px;
+  --shadow: 0 4px 20px rgba(108, 102, 75, 0.12);
+  --scrollbar-thumb: rgba(108, 102, 75, 0.18);
+
+  --spell-error: rgba(203, 58, 42, 0.20);
+  --spell-error-line: #cb3a2a;
+}
+
+[data-theme="nier"] {
+  --bg-deep: #d4c9a8;
+  --bg-glass: rgba(78, 72, 58, 0.07);
+  --bg-glass-hover: rgba(78, 72, 58, 0.12);
+  --bg-glass-active: rgba(78, 72, 58, 0.18);
+  --bg-surface: rgba(200, 192, 168, 0.96);
+  --bg-input: rgba(190, 182, 156, 0.60);
+  --bg-app: #d4c9a8;
+
+  --text-primary: #454138;
+  --text-secondary: rgba(69, 65, 56, 0.72);
+  --text-muted: rgba(69, 65, 56, 0.42);
+  --text-placeholder: rgba(69, 65, 56, 0.30);
+
+  --border-glass: rgba(69, 65, 56, 0.18);
+  --border-focus: rgba(69, 65, 56, 0.50);
+  --border-glow: rgba(69, 65, 56, 0.14);
+
+  --accent: #6b6459;
+  --accent-glow: rgba(107, 100, 89, 0.22);
+  --accent-subtle: rgba(107, 100, 89, 0.12);
+
+  --dirty: #8a6832;
+  --dirty-glow: rgba(138, 104, 50, 0.22);
+  --error: #8b3a30;
+  --success: #4a7040;
+
+  --diff-add: #4a7040;
+  --diff-del: #8b3a30;
+  --diff-hunk: #5a6878;
+
+  --glass-blur: 16px;
+  --glass-radius: 2px;
+  --shadow: 0 2px 8px rgba(69, 65, 56, 0.12);
+  --scrollbar-thumb: rgba(69, 65, 56, 0.20);
+
+  --spell-error: rgba(139, 58, 48, 0.18);
+  --spell-error-line: #8b3a30;
+}
+
+[data-theme="nier-replicant"] {
+  --bg-deep: #c8c3b8;
+  --bg-glass: rgba(58, 55, 68, 0.06);
+  --bg-glass-hover: rgba(58, 55, 68, 0.11);
+  --bg-glass-active: rgba(58, 55, 68, 0.17);
+  --bg-surface: rgba(195, 190, 182, 0.96);
+  --bg-input: rgba(185, 180, 172, 0.55);
+  --bg-app: #c8c3b8;
+
+  --text-primary: #2c2a2e;
+  --text-secondary: rgba(44, 42, 46, 0.70);
+  --text-muted: rgba(44, 42, 46, 0.40);
+  --text-placeholder: rgba(44, 42, 46, 0.28);
+
+  --border-glass: rgba(58, 52, 72, 0.16);
+  --border-focus: rgba(88, 96, 128, 0.55);
+  --border-glow: rgba(88, 96, 128, 0.18);
+
+  --accent: #5c6488;
+  --accent-glow: rgba(92, 100, 136, 0.24);
+  --accent-subtle: rgba(92, 100, 136, 0.12);
+
+  --dirty: #7a5c30;
+  --dirty-glow: rgba(122, 92, 48, 0.20);
+  --error: #7a3030;
+  --success: #3a6838;
+
+  --diff-add: #3a6838;
+  --diff-del: #7a3030;
+  --diff-hunk: #5c6488;
+
+  --glass-blur: 16px;
+  --glass-radius: 2px;
+  --shadow: 0 2px 8px rgba(44, 42, 46, 0.10);
+  --scrollbar-thumb: rgba(58, 52, 72, 0.18);
+
+  --spell-error: rgba(122, 48, 48, 0.16);
+  --spell-error-line: #7a3030;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Segoe UI', -apple-system, system-ui, sans-serif;
+  font-size: 13px;
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  overflow: hidden;
+  height: 100vh;
+  user-select: none;
+}
