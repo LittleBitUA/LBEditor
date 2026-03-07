@@ -6,10 +6,26 @@ Electron-застосунок для роботи з текстовими рес
 
 ---
 
+## Завантаження
+
+Готові збірки для всіх платформ — у розділі [Releases](https://github.com/LittleBitUA/LBEditor/releases/latest):
+
+| Платформа | Файл | Опис |
+|-----------|------|------|
+| Windows | `LB.exe` | Портативна версія (без інсталяції) |
+| Windows | `LB-Setup.exe` | Інсталятор (NSIS) |
+| Linux | `LB-linux.AppImage` | AppImage (запускається без інсталяції) |
+| macOS | `LB-mac.dmg` | DMG-образ для macOS |
+
+> **macOS Tahoe (26+):** підтримується нативний ефект Liquid Glass через `NSGlassEffectView`.
+
+---
+
 ## Можливості
 
 ### Редактор
 - Три режими роботи: **Ishin** (JSON з text[]/speakers[]), **Other** (тека .txt файлів), **JoJo** (JSON-масив рядків)
+- Monaco Editor з підсвіткою синтаксису
 - Плоский та розділений редактор (текст + спікери окремо)
 - Пошук та заміна по всіх записах (Ctrl+H)
 - Diff-перегляд змін (Ctrl+D)
@@ -21,7 +37,7 @@ Electron-застосунок для роботи з текстовими рес
 - Пакетний імпорт/експорт .txt файлів
 
 ### Словник та глосарій
-- 920+ термінів ігрової локалізації (Yakuza, NieR тощо)
+- 940+ термінів ігрової локалізації (Yakuza, NieR тощо)
 - Редактор глосарію (Ctrl+G) з пошуком та автозаміною
 - Підсвітка термінів глосарію в тексті
 - Перевірка орфографії українською (nspell + uk_UA)
@@ -34,6 +50,7 @@ Electron-застосунок для роботи з текстовими рес
 - Синхронізація прогресу між файлами (Ctrl+Shift+P)
 
 ### Інтерфейс
+- **macOS Tahoe:** нативний Liquid Glass (`NSGlassEffectView`)
 - Скляноморфний (glass morphism) дизайн
 - 6 вбудованих тем + редактор власних тем
 - Налаштування шрифту, ефектів, перенесення рядків
@@ -50,15 +67,30 @@ Electron-застосунок для роботи з текстовими рес
 
 ## Встановлення
 
-### Готовий .exe (Windows)
+### Готові збірки
 
-Завантажте з [Releases](https://github.com/LittleBitUA/LBEditor/releases):
-- **LB.exe** — портативна версія (без інсталяції)
-- **LB-Setup.exe** — інсталятор
+Завантажте потрібну версію з [Releases](https://github.com/LittleBitUA/LBEditor/releases/latest):
+
+**Windows:**
+```
+LB.exe          — портативна, запускається напряму
+LB-Setup.exe    — інсталятор
+```
+
+**Linux:**
+```bash
+chmod +x LB-linux.AppImage
+./LB-linux.AppImage
+```
+
+**macOS:**
+```
+Відкрийте LB-mac.dmg і перетягніть LB до Applications
+```
 
 ### Зі сорс-коду
 
-**Вимоги:** [Node.js](https://nodejs.org/) 18+ та npm
+**Вимоги:** [Node.js](https://nodejs.org/) 22+ та npm
 
 ```bash
 git clone https://github.com/LittleBitUA/LBEditor.git
@@ -71,14 +103,14 @@ npm install
 npm start
 ```
 
-Збірка .exe:
+Збірка:
 ```bash
-npm run build
+npm run build          # Windows (.exe)
+npm run build:linux    # Linux (AppImage)
+npm run build:mac      # macOS (DMG)
 ```
 
-Результат у теці `dist/`:
-- `LB.exe` — портативна версія
-- `LB-Setup.exe` — інсталятор (NSIS)
+Результат у теці `dist/`.
 
 ---
 
@@ -87,20 +119,23 @@ npm run build
 ```
 LBEditor/
 ├── main.js                 # Electron main process — меню, діалоги, IPC
-├── renderer.js             # Уся логіка застосунку (~9000 рядків)
+├── renderer.js             # Зібраний файл логіки (з src/)
 ├── index.html              # Розмітка інтерфейсу
-├── styles.css              # Стилі, теми, glass morphism
+├── styles.css              # Зібрані стилі (зі styles/)
+├── build.js                # Скрипт збірки: src/*.js → renderer.js, styles/*.css → styles.css
+├── src/                    # Модулі renderer (01-head … 18-init)
+├── styles/                 # Модулі стилів (01-themes … 11-effects)
 ├── highlight-worker.js     # Worker: перевірка орфографії + підсвітка глосарію
 ├── analysis-worker.js      # Worker: статистика, прогрес, часті слова
 ├── io-worker.js            # Worker: файлові операції, recovery
-├── editor_glossary.json    # Глосарій ігрових термінів (920+ записів)
+├── editor_glossary.json    # Глосарій ігрових термінів (940+ записів)
 ├── package.json            # Конфігурація npm та electron-builder
 ├── dicts/
 │   ├── uk_UA.aff           # Словник nspell — афікси
 │   └── uk_UA.dic           # Словник nspell — слова
 └── build/
-    ├── icon.ico            # Іконка .exe
-    └── icon.png            # Іконка PNG
+    ├── icon.ico            # Іконка Windows
+    └── icon.png            # Іконка PNG (Linux / macOS)
 ```
 
 ### Дані користувача
@@ -114,8 +149,9 @@ LBEditor/
 | `editor_history.json` | Історія змін записів |
 
 Розташування:
-- **Портативна версія** — поруч з .exe
-- **Інсталятор** — `%AppData%/LB`
+- **Портативна версія (Windows)** — поруч з .exe
+- **Інсталятор (Windows)** — `%AppData%/LB`
+- **Linux / macOS** — `~/.config/LB` або `~/Library/Application Support/LB`
 - **Режим розробки** — тека проєкту
 
 ---
@@ -125,6 +161,8 @@ LBEditor/
 | Клавіша | Дія |
 |---------|-----|
 | `Ctrl+S` | Зберегти |
+| `Ctrl+Shift+S` | Зберегти як... |
+| `Ctrl+Alt+S` | Зберегти все |
 | `Ctrl+F` | Пошук у файлі |
 | `Ctrl+H` | Знайти та замінити |
 | `Ctrl+D` | Diff-перегляд |
@@ -136,6 +174,7 @@ LBEditor/
 | `F1` | Командна палітра |
 | `F2` | Закладка запису |
 | `Ctrl+F2` | Наступна закладка |
+| `Ctrl+Shift+F2` | Попередня закладка |
 | `Ctrl+Shift+G` | Замінити з глосарію |
 | `Ctrl+Shift+A` | Часті слова |
 | `Ctrl+Shift+I` | Статистика перекладу |
@@ -151,11 +190,13 @@ LBEditor/
 ## Технології
 
 - **[Electron](https://www.electronjs.org/) 33** — кросплатформний десктоп-фреймворк
+- **[Monaco Editor](https://microsoft.github.io/monaco-editor/)** — редактор з підсвіткою синтаксису (основа VS Code)
 - **Vanilla JavaScript** — без фронтенд-фреймворків
 - **[nspell](https://github.com/wooorm/nspell)** — перевірка орфографії (OpenOffice-сумісні словники)
+- **[electron-liquid-glass](https://github.com/Meridius-Labs/electron-liquid-glass)** — нативний Liquid Glass для macOS Tahoe
 - **Worker Threads** — виокремлення важких операцій (I/O, аналіз, підсвітка)
 - **Glass Morphism CSS** — скляноморфний дизайн з backdrop-filter blur
-- **electron-builder** — збірка .exe (portable + NSIS installer)
+- **[electron-builder](https://www.electron.build/)** — збірка для Windows, Linux, macOS
 
 ---
 
