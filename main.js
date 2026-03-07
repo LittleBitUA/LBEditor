@@ -4,6 +4,11 @@ const { app, BrowserWindow, Menu, dialog, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
+let liquidGlass = null;
+if (process.platform === 'darwin') {
+  try { liquidGlass = require('electron-liquid-glass'); } catch (_) {}
+}
+
 let mainWindow = null;
 let allowQuit = false;
 
@@ -32,11 +37,16 @@ function ensureDefaults(dataDir, resourcesDir) {
 }
 
 function createWindow() {
+  const isMac = process.platform === 'darwin';
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 850,
     title: 'LB',
-    backgroundColor: '#1b1b1b',
+    backgroundColor: isMac ? undefined : '#1b1b1b',
+    transparent: isMac,
+    vibrancy: false,
+    titleBarStyle: isMac ? 'hiddenInset' : 'default',
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
@@ -47,6 +57,16 @@ function createWindow() {
 
   // Hide menu during loading screen
   mainWindow.setMenuBarVisibility(false);
+
+  if (isMac && liquidGlass) {
+    mainWindow.webContents.once('did-finish-load', () => {
+      try {
+        liquidGlass.addView(mainWindow.getNativeWindowHandle(), {
+          cornerRadius: 12,
+        });
+      } catch (_) {}
+    });
+  }
 
   mainWindow.on('close', (e) => {
     if (!allowQuit) {
