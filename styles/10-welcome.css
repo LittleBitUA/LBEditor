@@ -196,10 +196,10 @@
 .welcome-title {
   font-size: 52px;
   font-weight: 800;
-  color: var(--accent);
+  color: #7b8fff;
   letter-spacing: 6px;
   margin-bottom: 6px;
-  text-shadow: 0 0 32px var(--accent-subtle), 0 0 80px rgba(196,185,154,0.15);
+  text-shadow: 0 0 32px rgba(99, 132, 255, 0.25), 0 0 80px rgba(99, 132, 255, 0.1);
 }
 
 .welcome-subtitle {
