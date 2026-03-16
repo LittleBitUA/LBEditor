@@ -223,23 +223,9 @@
 
         <!-- Tab: Вигляд -->
         <div class="tab-content active" data-tab="look">
-          <div class="form-row">
-            <label>Тема:</label>
-            <select id="set-theme">
-              <option value="dark">Темна</option>
-              <option value="light">Світла</option>
-              <option value="blue-night">Синя ніч</option>
-              <option value="green-forest">Зелений ліс</option>
-              <option value="warm-amber">Тепла амбра</option>
-              <option value="rose">Рожева</option>
-              <option value="github-dark">GitHub Dark</option>
-              <option value="notepadpp">Notepad++</option>
-              <option value="dracula">Dracula</option>
-              <option value="alucard">Alucard</option>
-              <option value="nier">NieR: Automata</option>
-              <option value="nier-replicant">NieR Replicant</option>
-            </select>
-          </div>
+          <select id="set-theme" class="hidden">
+            <option value="dark">Темна</option>
+          </select>
           <div class="form-row">
             <label>Шрифт:</label>
             <select id="set-font">
