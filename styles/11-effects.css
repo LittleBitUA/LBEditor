@@ -8,6 +8,16 @@
   transition-duration: 0ms !important;
 }
 
+/* Opaque fallback when blur is disabled */
+.reduced-fx .modal,
+.reduced-fx .entry-context-menu,
+.reduced-fx .find-dialog,
+.minimal-fx .modal,
+.minimal-fx .entry-context-menu,
+.minimal-fx .find-dialog {
+  background: var(--bg-deep) !important;
+}
+
 .reduced-fx .modal,
 .minimal-fx .modal {
   animation: none !important;

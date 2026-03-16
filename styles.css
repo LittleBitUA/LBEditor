@@ -9,7 +9,7 @@
   --bg-glass: rgba(255, 255, 255, 0.05);
   --bg-glass-hover: rgba(255, 255, 255, 0.08);
   --bg-glass-active: rgba(255, 255, 255, 0.12);
-  --bg-surface: rgba(30, 30, 30, 0.94);
+  --bg-surface: rgba(24, 24, 28, 0.78);
   --bg-input: rgba(0, 0, 0, 0.30);
 
   --text-primary: #e8e8e8;
@@ -50,7 +50,7 @@
   --bg-glass: rgba(255, 255, 255, 0.60);
   --bg-glass-hover: rgba(255, 255, 255, 0.75);
   --bg-glass-active: rgba(255, 255, 255, 0.85);
-  --bg-surface: rgba(250, 250, 250, 0.96);
+  --bg-surface: rgba(250, 250, 250, 0.82);
   --bg-input: rgba(0, 0, 0, 0.05);
 
   --text-primary: #1a1a1a;
@@ -91,7 +91,7 @@
   --bg-glass: rgba(100, 160, 255, 0.06);
   --bg-glass-hover: rgba(100, 160, 255, 0.10);
   --bg-glass-active: rgba(100, 160, 255, 0.15);
-  --bg-surface: rgba(14, 22, 36, 0.96);
+  --bg-surface: rgba(14, 22, 36, 0.80);
   --bg-input: rgba(0, 10, 30, 0.35);
 
   --text-primary: #d0dcea;
@@ -132,7 +132,7 @@
   --bg-glass: rgba(80, 200, 100, 0.06);
   --bg-glass-hover: rgba(80, 200, 100, 0.10);
   --bg-glass-active: rgba(80, 200, 100, 0.15);
-  --bg-surface: rgba(16, 28, 16, 0.96);
+  --bg-surface: rgba(16, 28, 16, 0.80);
   --bg-input: rgba(0, 15, 0, 0.30);
 
   --text-primary: #d0e8d0;
@@ -173,7 +173,7 @@
   --bg-glass: rgba(230, 170, 80, 0.06);
   --bg-glass-hover: rgba(230, 170, 80, 0.10);
   --bg-glass-active: rgba(230, 170, 80, 0.15);
-  --bg-surface: rgba(30, 24, 18, 0.96);
+  --bg-surface: rgba(30, 24, 18, 0.80);
   --bg-input: rgba(20, 12, 0, 0.30);
 
   --text-primary: #ecdcc8;
@@ -214,7 +214,7 @@
   --bg-glass: rgba(220, 120, 160, 0.06);
   --bg-glass-hover: rgba(220, 120, 160, 0.10);
   --bg-glass-active: rgba(220, 120, 160, 0.15);
-  --bg-surface: rgba(30, 18, 26, 0.96);
+  --bg-surface: rgba(30, 18, 26, 0.80);
   --bg-input: rgba(20, 5, 15, 0.30);
 
   --text-primary: #ecd8e4;
@@ -255,7 +255,7 @@
   --bg-glass: rgba(255, 255, 255, 0.05);
   --bg-glass-hover: rgba(255, 255, 255, 0.08);
   --bg-glass-active: rgba(255, 255, 255, 0.12);
-  --bg-surface: rgba(31, 36, 40, 0.96);
+  --bg-surface: rgba(31, 36, 40, 0.80);
   --bg-input: rgba(47, 54, 61, 0.80);
 
   --text-primary: #e1e4e8;
@@ -296,7 +296,7 @@
   --bg-glass: rgba(255, 255, 255, 0.70);
   --bg-glass-hover: rgba(255, 255, 255, 0.85);
   --bg-glass-active: rgba(255, 255, 255, 0.92);
-  --bg-surface: rgba(255, 255, 255, 0.97);
+  --bg-surface: rgba(255, 255, 255, 0.84);
   --bg-input: rgba(255, 255, 255, 0.95);
 
   --text-primary: #000000;
@@ -337,7 +337,7 @@
   --bg-glass: rgba(68, 71, 90, 0.45);
   --bg-glass-hover: rgba(68, 71, 90, 0.60);
   --bg-glass-active: rgba(68, 71, 90, 0.75);
-  --bg-surface: rgba(40, 42, 54, 0.95);
+  --bg-surface: rgba(40, 42, 54, 0.80);
   --bg-input: rgba(40, 42, 54, 0.80);
 
   --text-primary: #f8f8f2;
@@ -378,7 +378,7 @@
   --bg-glass: rgba(255, 255, 255, 0.65);
   --bg-glass-hover: rgba(255, 255, 255, 0.80);
   --bg-glass-active: rgba(255, 255, 255, 0.90);
-  --bg-surface: rgba(255, 251, 235, 0.96);
+  --bg-surface: rgba(255, 251, 235, 0.84);
   --bg-input: rgba(255, 255, 255, 0.90);
 
   --text-primary: #1f1f1f;
@@ -417,7 +417,7 @@
   --bg-glass: rgba(78, 72, 58, 0.07);
   --bg-glass-hover: rgba(78, 72, 58, 0.12);
   --bg-glass-active: rgba(78, 72, 58, 0.18);
-  --bg-surface: rgba(200, 192, 168, 0.96);
+  --bg-surface: rgba(200, 192, 168, 0.82);
   --bg-input: rgba(190, 182, 156, 0.60);
   --bg-app: #d4c9a8;
 
@@ -457,7 +457,7 @@
   --bg-glass: rgba(58, 55, 68, 0.06);
   --bg-glass-hover: rgba(58, 55, 68, 0.11);
   --bg-glass-active: rgba(58, 55, 68, 0.17);
-  --bg-surface: rgba(195, 190, 182, 0.96);
+  --bg-surface: rgba(195, 190, 182, 0.82);
   --bg-input: rgba(185, 180, 172, 0.55);
   --bg-app: #c8c3b8;
 
@@ -896,9 +896,12 @@ body {
   z-index: 9999;
   min-width: 190px;
   background: var(--bg-surface);
-  border: 1px solid var(--border-glass);
+  backdrop-filter: blur(32px) saturate(1.3);
+  -webkit-backdrop-filter: blur(32px) saturate(1.3);
+  border: 1px solid rgba(255, 255, 255, 0.10);
   border-radius: 10px;
-  box-shadow: 0 12px 36px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.04);
+  box-shadow: 0 12px 36px rgba(0,0,0,0.55),
+              inset 0 1px 0 rgba(255, 255, 255, 0.06);
   padding: 5px 0;
   font-size: 12px;
   transform-origin: top left;
@@ -1081,12 +1084,39 @@ body {
 
 .progress-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--accent), #80c0ff);
   border-radius: 3px;
-  transition: width 0.5s cubic-bezier(0.22, 1, 0.36, 1);
-  box-shadow: 0 0 8px var(--accent-glow);
+  transition: width 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+              background 0.8s ease;
   position: relative;
   overflow: hidden;
+  /* Dynamic gradient — updated via JS based on % */
+  background: linear-gradient(90deg, #5b7fff, #7b5fff, #a855f7);
+  box-shadow: 0 0 8px var(--accent-glow);
+}
+
+/* Color stops by progress tier (set via data-tier on .progress-bar-track) */
+.progress-bar-track[data-tier="low"] .progress-bar-fill {
+  background: linear-gradient(90deg, #5b7fff, #818cf8);
+  box-shadow: 0 0 8px rgba(91, 127, 255, 0.3);
+}
+.progress-bar-track[data-tier="mid"] .progress-bar-fill {
+  background: linear-gradient(90deg, #818cf8, #a855f7);
+  box-shadow: 0 0 8px rgba(168, 85, 247, 0.3);
+}
+.progress-bar-track[data-tier="high"] .progress-bar-fill {
+  background: linear-gradient(90deg, #a855f7, #22c55e);
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.3);
+}
+.progress-bar-track[data-tier="done"] .progress-bar-fill {
+  background: linear-gradient(90deg, #22c55e, #4ade80);
+  box-shadow: 0 0 12px rgba(34, 197, 94, 0.45);
+  animation: progCelebrate 1.2s ease-out;
+}
+
+@keyframes progCelebrate {
+  0%   { box-shadow: 0 0 12px rgba(34,197,94,0.45); }
+  40%  { box-shadow: 0 0 24px rgba(34,197,94,0.7), 0 0 48px rgba(74,222,128,0.3); }
+  100% { box-shadow: 0 0 12px rgba(34,197,94,0.45); }
 }
 
 .progress-bar-fill::after {
@@ -1096,14 +1126,25 @@ body {
   left: -100%;
   width: 100%;
   height: 100%;
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
-  animation: progShimmer 2s ease-in-out infinite;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.18), transparent);
+  animation: progShimmer 2.5s ease-in-out infinite;
 }
 
 @keyframes progShimmer {
   0%   { left: -100%; }
   50%  { left: 100%; }
   100% { left: 100%; }
+}
+
+/* Edit progress — orange/amber gradient */
+.progress-section-edit .progress-bar-fill {
+  background: linear-gradient(90deg, #f59e0b, #f97316);
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.25);
+}
+.progress-section-edit .progress-bar-track[data-tier="done"] .progress-bar-fill {
+  background: linear-gradient(90deg, #22c55e, #4ade80);
+  box-shadow: 0 0 12px rgba(34, 197, 94, 0.45);
+  animation: progCelebrate 1.2s ease-out;
 }
 
 .progress-milestone {
@@ -1293,11 +1334,12 @@ body {
   z-index: 900;
   width: 480px;
   background: var(--bg-surface);
-  backdrop-filter: blur(30px);
-  -webkit-backdrop-filter: blur(30px);
-  border: 1px solid var(--border-glass);
+  backdrop-filter: blur(32px) saturate(1.3);
+  -webkit-backdrop-filter: blur(32px) saturate(1.3);
+  border: 1px solid rgba(255, 255, 255, 0.10);
   border-radius: 12px;
-  box-shadow: var(--shadow), 0 0 60px rgba(0,0,0,0.2);
+  box-shadow: var(--shadow), 0 0 60px rgba(0,0,0,0.2),
+              inset 0 1px 0 rgba(255, 255, 255, 0.06);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -2339,13 +2381,14 @@ textarea.editor-dirty {
 
 .modal {
   background: var(--bg-surface);
-  backdrop-filter: blur(30px);
-  -webkit-backdrop-filter: blur(30px);
-  border: 1px solid var(--border-glass);
+  backdrop-filter: blur(32px) saturate(1.3);
+  -webkit-backdrop-filter: blur(32px) saturate(1.3);
+  border: 1px solid rgba(255, 255, 255, 0.10);
   border-radius: 14px;
   display: flex;
   flex-direction: column;
-  box-shadow: var(--shadow), 0 0 80px rgba(0,0,0,0.3);
+  box-shadow: var(--shadow), 0 0 80px rgba(0,0,0,0.3),
+              inset 0 1px 0 rgba(255, 255, 255, 0.06);
   max-height: 85vh;
   overflow: hidden;
   animation: modalIn 0.18s ease-out;
@@ -3950,6 +3993,16 @@ select option:checked {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
   transition-duration: 0ms !important;
+}
+
+/* Opaque fallback when blur is disabled */
+.reduced-fx .modal,
+.reduced-fx .entry-context-menu,
+.reduced-fx .find-dialog,
+.minimal-fx .modal,
+.minimal-fx .entry-context-menu,
+.minimal-fx .find-dialog {
+  background: var(--bg-deep) !important;
 }
 
 .reduced-fx .modal,

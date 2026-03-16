@@ -5040,6 +5040,10 @@ function _applyProgress(transE, totalE, transL, totalL, editedFiles, editedLines
   dom.progEntries.textContent = `${transE}/${totalE} (${pctE.toFixed(0)}%)`;
   dom.progLines.textContent = `${tVal}/${tTotal}`;
 
+  // Set color tier on track
+  const track = dom.progBar.parentElement;
+  if (track) track.dataset.tier = pct >= 100 ? 'done' : pct >= 66 ? 'high' : pct >= 33 ? 'mid' : 'low';
+
   // Tooltip
   const remain = tTotal - tVal;
   const remainE = totalE - transE;
@@ -5052,6 +5056,10 @@ function _applyProgress(transE, totalE, transL, totalL, editedFiles, editedLines
   dom.progEditPct.textContent = editPct.toFixed(1) + '%';
   dom.progEditFiles.textContent = `зредаговано ${editedFiles} із ${totalE}`;
   dom.progEditLines.textContent = `${editedLines}/${totalL} ${unit}`;
+
+  // Set color tier on edit track
+  const editTrack = dom.progEditBar.parentElement;
+  if (editTrack) editTrack.dataset.tier = editPct >= 100 ? 'done' : '';
 
   // Tooltip
   const remainEditF = totalE - editedFiles;

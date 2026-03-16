@@ -9,7 +9,7 @@
   --bg-glass: rgba(255, 255, 255, 0.05);
   --bg-glass-hover: rgba(255, 255, 255, 0.08);
   --bg-glass-active: rgba(255, 255, 255, 0.12);
-  --bg-surface: rgba(30, 30, 30, 0.94);
+  --bg-surface: rgba(24, 24, 28, 0.78);
   --bg-input: rgba(0, 0, 0, 0.30);
 
   --text-primary: #e8e8e8;
@@ -50,7 +50,7 @@
   --bg-glass: rgba(255, 255, 255, 0.60);
   --bg-glass-hover: rgba(255, 255, 255, 0.75);
   --bg-glass-active: rgba(255, 255, 255, 0.85);
-  --bg-surface: rgba(250, 250, 250, 0.96);
+  --bg-surface: rgba(250, 250, 250, 0.82);
   --bg-input: rgba(0, 0, 0, 0.05);
 
   --text-primary: #1a1a1a;
@@ -91,7 +91,7 @@
   --bg-glass: rgba(100, 160, 255, 0.06);
   --bg-glass-hover: rgba(100, 160, 255, 0.10);
   --bg-glass-active: rgba(100, 160, 255, 0.15);
-  --bg-surface: rgba(14, 22, 36, 0.96);
+  --bg-surface: rgba(14, 22, 36, 0.80);
   --bg-input: rgba(0, 10, 30, 0.35);
 
   --text-primary: #d0dcea;
@@ -132,7 +132,7 @@
   --bg-glass: rgba(80, 200, 100, 0.06);
   --bg-glass-hover: rgba(80, 200, 100, 0.10);
   --bg-glass-active: rgba(80, 200, 100, 0.15);
-  --bg-surface: rgba(16, 28, 16, 0.96);
+  --bg-surface: rgba(16, 28, 16, 0.80);
   --bg-input: rgba(0, 15, 0, 0.30);
 
   --text-primary: #d0e8d0;
@@ -173,7 +173,7 @@
   --bg-glass: rgba(230, 170, 80, 0.06);
   --bg-glass-hover: rgba(230, 170, 80, 0.10);
   --bg-glass-active: rgba(230, 170, 80, 0.15);
-  --bg-surface: rgba(30, 24, 18, 0.96);
+  --bg-surface: rgba(30, 24, 18, 0.80);
   --bg-input: rgba(20, 12, 0, 0.30);
 
   --text-primary: #ecdcc8;
@@ -214,7 +214,7 @@
   --bg-glass: rgba(220, 120, 160, 0.06);
   --bg-glass-hover: rgba(220, 120, 160, 0.10);
   --bg-glass-active: rgba(220, 120, 160, 0.15);
-  --bg-surface: rgba(30, 18, 26, 0.96);
+  --bg-surface: rgba(30, 18, 26, 0.80);
   --bg-input: rgba(20, 5, 15, 0.30);
 
   --text-primary: #ecd8e4;
@@ -255,7 +255,7 @@
   --bg-glass: rgba(255, 255, 255, 0.05);
   --bg-glass-hover: rgba(255, 255, 255, 0.08);
   --bg-glass-active: rgba(255, 255, 255, 0.12);
-  --bg-surface: rgba(31, 36, 40, 0.96);
+  --bg-surface: rgba(31, 36, 40, 0.80);
   --bg-input: rgba(47, 54, 61, 0.80);
 
   --text-primary: #e1e4e8;
@@ -296,7 +296,7 @@
   --bg-glass: rgba(255, 255, 255, 0.70);
   --bg-glass-hover: rgba(255, 255, 255, 0.85);
   --bg-glass-active: rgba(255, 255, 255, 0.92);
-  --bg-surface: rgba(255, 255, 255, 0.97);
+  --bg-surface: rgba(255, 255, 255, 0.84);
   --bg-input: rgba(255, 255, 255, 0.95);
 
   --text-primary: #000000;
@@ -337,7 +337,7 @@
   --bg-glass: rgba(68, 71, 90, 0.45);
   --bg-glass-hover: rgba(68, 71, 90, 0.60);
   --bg-glass-active: rgba(68, 71, 90, 0.75);
-  --bg-surface: rgba(40, 42, 54, 0.95);
+  --bg-surface: rgba(40, 42, 54, 0.80);
   --bg-input: rgba(40, 42, 54, 0.80);
 
   --text-primary: #f8f8f2;
@@ -378,7 +378,7 @@
   --bg-glass: rgba(255, 255, 255, 0.65);
   --bg-glass-hover: rgba(255, 255, 255, 0.80);
   --bg-glass-active: rgba(255, 255, 255, 0.90);
-  --bg-surface: rgba(255, 251, 235, 0.96);
+  --bg-surface: rgba(255, 251, 235, 0.84);
   --bg-input: rgba(255, 255, 255, 0.90);
 
   --text-primary: #1f1f1f;
@@ -417,7 +417,7 @@
   --bg-glass: rgba(78, 72, 58, 0.07);
   --bg-glass-hover: rgba(78, 72, 58, 0.12);
   --bg-glass-active: rgba(78, 72, 58, 0.18);
-  --bg-surface: rgba(200, 192, 168, 0.96);
+  --bg-surface: rgba(200, 192, 168, 0.82);
   --bg-input: rgba(190, 182, 156, 0.60);
   --bg-app: #d4c9a8;
 
@@ -457,7 +457,7 @@
   --bg-glass: rgba(58, 55, 68, 0.06);
   --bg-glass-hover: rgba(58, 55, 68, 0.11);
   --bg-glass-active: rgba(58, 55, 68, 0.17);
-  --bg-surface: rgba(195, 190, 182, 0.96);
+  --bg-surface: rgba(195, 190, 182, 0.82);
   --bg-input: rgba(185, 180, 172, 0.55);
   --bg-app: #c8c3b8;
 
