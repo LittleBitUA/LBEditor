@@ -134,6 +134,27 @@
   color: var(--accent);
   font-weight: 600;
 }
+/* ─── Editing progress ─── */
+
+.progress-edit-track {
+  margin-top: 4px;
+  margin-bottom: 4px;
+}
+
+.progress-edit-fill {
+  background: linear-gradient(90deg, #e8a44a, #f0c060) !important;
+  box-shadow: 0 0 6px rgba(232,164,74,0.3) !important;
+}
+
+.progress-edit-pct {
+  color: #e8a44a;
+  font-weight: 600;
+}
+
+.progress-edit-labels {
+  margin-top: 0;
+}
+
 .schema-btn {
   width: 16px; height: 16px;
   border: none; background: transparent;

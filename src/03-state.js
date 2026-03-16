@@ -139,6 +139,10 @@ function cacheDom() {
   dom.progPct = document.getElementById('progress-pct');
   dom.progEntries = document.getElementById('prog-label-entries');
   dom.progLines = document.getElementById('prog-label-lines');
+  dom.progEditBar = document.getElementById('progress-edit-bar');
+  dom.progEditPct = document.getElementById('progress-edit-pct');
+  dom.progEditFiles = document.getElementById('prog-edit-files');
+  dom.progEditLines = document.getElementById('prog-edit-lines');
   dom.metaFile = document.getElementById('meta-file');
   dom.metaTextN = document.getElementById('meta-text-n');
   dom.metaSpN = document.getElementById('meta-sp-n');

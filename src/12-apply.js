@@ -192,27 +192,53 @@ function getEntryProgress(entry) {
   return entry._progressCache;
 }
 
+function _calcEditingStats() {
+  let editedFiles = 0, editedLines = 0;
+  for (const entry of state.entries) {
+    const tagData = getEntryTagData(entry);
+    if (tagData.tag === 'edited') {
+      editedFiles++;
+      const p = getEntryProgress(entry);
+      editedLines += p.totalL;
+    }
+  }
+  return { editedFiles, editedLines };
+}
+
 function calcProgressSync() {
   let transE = 0, totalE = state.entries.length, transL = 0, totalL = 0;
+  let editedFiles = 0, editedLines = 0;
   for (const entry of state.entries) {
     const p = getEntryProgress(entry);
-    // If entry has 'edited' or 'translated' tag — count all its lines as translated
     const tagData = getEntryTagData(entry);
     const tagDone = tagData.tag === 'edited' || tagData.tag === 'translated';
     totalL += p.totalL;
     transL += tagDone ? p.totalL : p.transL;
     if (tagDone || p.isFullyTranslated) transE++;
+    // Editing progress: only files with 'edited' tag
+    if (tagData.tag === 'edited') {
+      editedFiles++;
+      editedLines += p.totalL;
+    }
   }
-  return { transE, totalE, transL, totalL };
+  return { transE, totalE, transL, totalL, editedFiles, editedLines };
 }
 
-function _applyProgress(transE, totalE, transL, totalL) {
+function _applyProgress(transE, totalE, transL, totalL, editedFiles, editedLines) {
   const pctL = totalL > 0 ? (transL / totalL * 100) : 0;
   const pctE = totalE > 0 ? (transE / totalE * 100) : 0;
   dom.progBar.style.width = pctL.toFixed(1) + '%';
   dom.progPct.textContent = pctL.toFixed(1) + '%';
   dom.progEntries.textContent = `${transE}/${totalE} (${pctE.toFixed(0)}%)`;
   dom.progLines.textContent = `${transL}/${totalL}`;
+
+  // Editing progress
+  const editPctFiles = totalE > 0 ? (editedFiles / totalE * 100) : 0;
+  const editPctLines = totalL > 0 ? (editedLines / totalL * 100) : 0;
+  dom.progEditBar.style.width = editPctLines.toFixed(1) + '%';
+  dom.progEditPct.textContent = editPctLines.toFixed(1) + '%';
+  dom.progEditFiles.textContent = `зредаговано ${editedFiles} із ${totalE}`;
+  dom.progEditLines.textContent = `${editedLines}/${totalL} рядків`;
 }
 
 let _progressDebounce = null;
@@ -223,6 +249,10 @@ function updateProgress() {
     dom.progPct.textContent = '0%';
     dom.progEntries.textContent = '\u2014';
     dom.progLines.textContent = '\u2014';
+    dom.progEditBar.style.width = '0%';
+    dom.progEditPct.textContent = '0%';
+    dom.progEditFiles.textContent = '\u2014';
+    dom.progEditLines.textContent = '\u2014';
     return;
   }
   if (_progressDebounce) clearTimeout(_progressDebounce);
@@ -233,14 +263,18 @@ function updateProgress() {
         type: 'calc-progress',
         entries: serializeEntries(state.entries),
         codeWords: [..._codeWordsSet],
-      }).then(r => _applyProgress(r.transE, r.totalE, r.transL, r.totalL))
+      }).then(r => {
+          // Worker doesn't know about tags — calc editing stats from sync
+          const edit = _calcEditingStats();
+          _applyProgress(r.transE, r.totalE, r.transL, r.totalL, edit.editedFiles, edit.editedLines);
+        })
         .catch(() => {
           const r = calcProgressSync();
-          _applyProgress(r.transE, r.totalE, r.transL, r.totalL);
+          _applyProgress(r.transE, r.totalE, r.transL, r.totalL, r.editedFiles, r.editedLines);
         });
     } else {
       const r = calcProgressSync();
-      _applyProgress(r.transE, r.totalE, r.transL, r.totalL);
+      _applyProgress(r.transE, r.totalE, r.transL, r.totalL, r.editedFiles, r.editedLines);
     }
   }, 50);
 }
