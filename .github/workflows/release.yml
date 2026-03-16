@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
       - run: npm install
       - run: node build.js
       - run: npx electron-builder --win --publish never
@@ -23,8 +23,8 @@ jobs:
         with:
           name: dist-win
           path: |
-            dist/LB.exe
-            dist/LB-Setup.exe
+            dist/LB Editor.exe
+            dist/LB Editor-Setup.exe
 
   build-linux:
     runs-on: ubuntu-latest
@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
       - run: npm install
       - run: node build.js
       - run: npx electron-builder --linux --publish never
@@ -47,7 +47,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
       - name: Generate macOS icon
         run: |
           mkdir -p build/icon.iconset
@@ -82,3 +82,4 @@ jobs:
           files: artifacts/*
           draft: false
           prerelease: false
+          generate_release_notes: true
