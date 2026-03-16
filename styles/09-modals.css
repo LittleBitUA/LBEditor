@@ -579,6 +579,7 @@
 
 .stats-ua .stats-section-title { color: #4ea6f7; }
 .stats-en .stats-section-title { color: #e88a3a; }
+.stats-edit .stats-section-title { color: #e8a44a; }
 
 .stats-row {
   display: flex;
@@ -597,6 +598,7 @@
 
 .stats-pct { color: var(--accent); font-size: 15px; font-weight: 700; }
 .stats-pct-en { color: var(--dirty); font-size: 15px; font-weight: 700; }
+.stats-pct-edit { color: #e8a44a; font-size: 15px; font-weight: 700; }
 
 .stats-pct-row { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border-glass); }
 

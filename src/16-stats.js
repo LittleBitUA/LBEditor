@@ -44,10 +44,23 @@ function calculateExtendedStatsSync() {
   const uaPct = translatableLines > 0 ? (uaLines / translatableLines * 100) : 0;
   const enPct = translatableLines > 0 ? (enLines / translatableLines * 100) : 0;
 
+  // Editing stats (files with 'edited' tag)
+  let editedFiles = 0, editedLines = 0;
+  for (const entry of state.entries) {
+    const tagData = getEntryTagData(entry);
+    if (tagData.tag === 'edited') {
+      editedFiles++;
+      const lines = getTextLinesForEntry(entry);
+      editedLines += lines.filter(l => l.trim()).length;
+    }
+  }
+  const editPct = totalLines > 0 ? (editedLines / totalLines * 100) : 0;
+
   return {
     totalEntries, totalLines, totalWords, totalChars, neutralLines,
     uaLines, uaWords, uaChars, uaPct,
     enLines, enWords, enChars, enPct,
+    editedFiles, editedLines, editPct,
   };
 }
 
@@ -65,6 +78,10 @@ function _applyStatsToModal(s) {
   document.getElementById('st-en-words').textContent = s.enWords.toLocaleString();
   document.getElementById('st-en-chars').textContent = s.enChars.toLocaleString();
   document.getElementById('st-en-pct').textContent = `${s.enPct.toFixed(1)}%`;
+  // Editing stats
+  document.getElementById('st-edit-files').textContent = `${s.editedFiles} із ${s.totalEntries}`;
+  document.getElementById('st-edit-lines').textContent = s.editedLines.toLocaleString();
+  document.getElementById('st-edit-pct').textContent = `${s.editPct.toFixed(1)}%`;
 }
 
 // ═══════════════════════════════════════════════════════════
