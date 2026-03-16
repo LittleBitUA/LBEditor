@@ -16,6 +16,7 @@ const VIRTUAL_OVERSCAN = 10;
 let _filteredEntries = [];
 let _filteredIndexByEntry = new Map(); // entry.index → position in _filteredEntries
 let _currentFilter = '';
+let _statusFilter = 'all'; // 'all' | 'untranslated' | 'translated' | 'edited'
 let _filterSnippets = new Map();
 let _vStartIdx = -1;
 let _vEndIdx = -1;
@@ -28,6 +29,23 @@ function _getItemHeight() {
 }
 
 // ── Build filtered entries array ──────────────────────────
+function _entryMatchesStatusFilter(entry) {
+  if (_statusFilter === 'all') return true;
+  const tagData = getEntryTagData(entry);
+  if (_statusFilter === 'edited') return tagData.tag === 'edited';
+  if (_statusFilter === 'translated') {
+    if (tagData.tag === 'translated') return true;
+    const p = getEntryProgress(entry);
+    return p.isFullyTranslated;
+  }
+  if (_statusFilter === 'untranslated') {
+    if (tagData.tag === 'translated' || tagData.tag === 'edited') return false;
+    const p = getEntryProgress(entry);
+    return !p.isFullyTranslated;
+  }
+  return true;
+}
+
 function rebuildFilteredEntries() {
   const filt = dom.searchInput.value.toLowerCase();
   _currentFilter = filt;
@@ -37,6 +55,7 @@ function rebuildFilteredEntries() {
 
   for (const entry of state.entries) {
     if (filt && !entryMatchesFilter(entry, filt)) continue;
+    if (!_entryMatchesStatusFilter(entry)) continue;
     _filteredIndexByEntry.set(entry.index, _filteredEntries.length);
     _filteredEntries.push(entry);
     if (filt && !entry.file.toLowerCase().includes(filt)) {
@@ -244,6 +263,7 @@ async function onListItemClick(newIdx) {
   loadEditor();
   saveSession();
   openEntryTab(newIdx, false); // preview (not pinned)
+  updateSidePanelForEntry(newIdx);
 
   // If search filter is active, highlight the first match in the editor
   const filt = dom.searchInput.value.trim();

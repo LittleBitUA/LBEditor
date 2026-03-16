@@ -21,6 +21,7 @@ let _monacoReady = false;
 let _suppressMonacoChange = false; // suppress onDidChangeModelContent during setValue
 let _sideMonaco = null;       // side panel Monaco editor (read-only)
 let _sidePanelIdx = -1;       // entry index shown in side panel (-1 = hidden)
+let _sideOriginalMode = false; // true = side panel shows original text (auto-follows current entry)
 
 // ── Worker thread state ────────────────────────────────────
 let _highlightWorker = null;
@@ -4078,6 +4079,7 @@ const VIRTUAL_OVERSCAN = 10;
 let _filteredEntries = [];
 let _filteredIndexByEntry = new Map(); // entry.index → position in _filteredEntries
 let _currentFilter = '';
+let _statusFilter = 'all'; // 'all' | 'untranslated' | 'translated' | 'edited'
 let _filterSnippets = new Map();
 let _vStartIdx = -1;
 let _vEndIdx = -1;
@@ -4090,6 +4092,23 @@ function _getItemHeight() {
 }
 
 // ── Build filtered entries array ──────────────────────────
+function _entryMatchesStatusFilter(entry) {
+  if (_statusFilter === 'all') return true;
+  const tagData = getEntryTagData(entry);
+  if (_statusFilter === 'edited') return tagData.tag === 'edited';
+  if (_statusFilter === 'translated') {
+    if (tagData.tag === 'translated') return true;
+    const p = getEntryProgress(entry);
+    return p.isFullyTranslated;
+  }
+  if (_statusFilter === 'untranslated') {
+    if (tagData.tag === 'translated' || tagData.tag === 'edited') return false;
+    const p = getEntryProgress(entry);
+    return !p.isFullyTranslated;
+  }
+  return true;
+}
+
 function rebuildFilteredEntries() {
   const filt = dom.searchInput.value.toLowerCase();
   _currentFilter = filt;
@@ -4099,6 +4118,7 @@ function rebuildFilteredEntries() {
 
   for (const entry of state.entries) {
     if (filt && !entryMatchesFilter(entry, filt)) continue;
+    if (!_entryMatchesStatusFilter(entry)) continue;
     _filteredIndexByEntry.set(entry.index, _filteredEntries.length);
     _filteredEntries.push(entry);
     if (filt && !entry.file.toLowerCase().includes(filt)) {
@@ -4306,6 +4326,7 @@ async function onListItemClick(newIdx) {
   loadEditor();
   saveSession();
   openEntryTab(newIdx, false); // preview (not pinned)
+  updateSidePanelForEntry(newIdx);
 
   // If search filter is active, highlight the first match in the editor
   const filt = dom.searchInput.value.trim();
@@ -7969,19 +7990,24 @@ function setupGlossaryDock() {
 //  Side Panel (dual view)
 // ═══════════════════════════════════════════════════════════
 
-function showSidePanel(entryIdx) {
+function showSidePanel(entryIdx, originalMode) {
   if (entryIdx < 0 || entryIdx >= state.entries.length) return;
   const entry = state.entries[entryIdx];
+  const isOrig = originalMode || _sideOriginalMode;
 
   const panel = document.getElementById('side-panel');
   const handle = document.getElementById('side-panel-handle');
   const titleEl = document.getElementById('side-panel-title');
 
-  titleEl.textContent = `[${entryIdx + 1}] ${entry.file || ''}`;
+  titleEl.textContent = isOrig
+    ? `Оригінал: [${entryIdx + 1}] ${entry.file || ''}`
+    : `[${entryIdx + 1}] ${entry.file || ''}`;
 
   // Get entry text for display
   let text;
-  if (state.appMode === 'ishin' && state.splitMode) {
+  if (isOrig) {
+    text = (entry.originalText || entry.text).join('\n');
+  } else if (state.appMode === 'ishin' && state.splitMode) {
     text = entry.text.join('\n') + '\n---\n' + entry.visibleSpeakers().join('\n');
   } else {
     text = entry.toFlat(state.appMode === 'ishin' ? state.useSeparator : undefined);
@@ -8038,9 +8064,12 @@ function hideSidePanel() {
   document.getElementById('side-panel').classList.add('hidden');
   document.getElementById('side-panel-handle').classList.add('hidden');
   _sidePanelIdx = -1;
+  _sideOriginalMode = false;
 
   const btn = document.getElementById('tb-side-panel');
   if (btn) btn.classList.remove('active');
+  const origBtn = document.getElementById('tb-original');
+  if (origBtn) origBtn.classList.remove('active');
 
   setTimeout(() => {
     if (_monacoFlat) _monacoFlat.layout();
@@ -8050,8 +8079,24 @@ function hideSidePanel() {
 }
 
 function toggleSidePanel() {
-  if (_sidePanelIdx >= 0) hideSidePanel();
-  else if (state.currentIndex >= 0) showSidePanel(state.currentIndex);
+  if (_sidePanelIdx >= 0 && !_sideOriginalMode) hideSidePanel();
+  else if (state.currentIndex >= 0) { _sideOriginalMode = false; showSidePanel(state.currentIndex); }
+}
+
+function toggleOriginalSidePanel() {
+  if (_sideOriginalMode) {
+    _sideOriginalMode = false;
+    hideSidePanel();
+  } else {
+    _sideOriginalMode = true;
+    if (state.currentIndex >= 0) showSidePanel(state.currentIndex, true);
+  }
+  document.getElementById('tb-original').classList.toggle('active', _sideOriginalMode);
+}
+
+/** Called when user navigates to a new entry — update side panel if in original mode */
+function updateSidePanelForEntry(entryIdx) {
+  if (_sideOriginalMode && entryIdx >= 0) showSidePanel(entryIdx, true);
 }
 
 function setupSidePanelHandle() {
@@ -8104,6 +8149,7 @@ function setupToolbar() {
 
   // Side panel
   document.getElementById('tb-side-panel').addEventListener('click', () => toggleSidePanel());
+  document.getElementById('tb-original').addEventListener('click', () => toggleOriginalSidePanel());
 }
 
 function toggleWhitespace() {
@@ -10334,6 +10380,16 @@ function setupEventListeners() {
     refreshList();
     dom.searchInput.focus();
   });
+
+  // Status filter buttons
+  for (const btn of document.querySelectorAll('.sf-btn')) {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.sf-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      _statusFilter = btn.dataset.sf || 'all';
+      refreshList();
+    });
+  }
 
   // Virtual scroll listener
   dom.entryListContainer.addEventListener('scroll', () => {

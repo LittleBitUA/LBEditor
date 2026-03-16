@@ -398,6 +398,16 @@ function setupEventListeners() {
     dom.searchInput.focus();
   });
 
+  // Status filter buttons
+  for (const btn of document.querySelectorAll('.sf-btn')) {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.sf-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      _statusFilter = btn.dataset.sf || 'all';
+      refreshList();
+    });
+  }
+
   // Virtual scroll listener
   dom.entryListContainer.addEventListener('scroll', () => {
     if (_vScrollRAF) return;

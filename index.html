@@ -67,6 +67,13 @@
           <button class="search-clear" id="search-clear">&times;</button>
         </div>
 
+        <div id="status-filter-row" class="status-filter-row">
+          <button class="sf-btn active" data-sf="all">Всі</button>
+          <button class="sf-btn" data-sf="untranslated">Не перекл.</button>
+          <button class="sf-btn" data-sf="translated">Перекл.</button>
+          <button class="sf-btn" data-sf="edited">Зредаг.</button>
+        </div>
+
         <div id="entry-list-row">
           <div id="entry-list-container" tabindex="-1">
             <div id="entry-list"></div>
@@ -143,6 +150,7 @@
           <button class="tb-btn tb-icon-redo" id="tb-redo" title="Повторити (Ctrl+Y)"></button>
           <span class="tb-sep"></span>
           <button class="tb-btn tb-icon-side-panel" id="tb-side-panel" title="Відкрити збоку"></button>
+          <button class="tb-btn" id="tb-original" title="Оригінал збоку" style="font-size:10px;padding:0 4px;">A|Б</button>
         </div>
 
         <div id="tab-bar"></div>

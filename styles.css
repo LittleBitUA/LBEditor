@@ -1002,6 +1002,43 @@ body {
   font-size: 12px;
 }
 
+/* ─── Status filter buttons ─── */
+
+.status-filter-row {
+  display: flex;
+  gap: 3px;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+
+.sf-btn {
+  flex: 1;
+  padding: 3px 0;
+  font-size: 9px;
+  border: 1px solid var(--border-glass);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.12s;
+  white-space: nowrap;
+}
+
+.sf-btn:hover {
+  background: var(--bg-glass);
+  color: var(--text-secondary);
+}
+
+.sf-btn.active {
+  background: var(--bg-glass-hover);
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+.sf-btn[data-sf="translated"].active { border-color: #4ade80; color: #4ade80; }
+.sf-btn[data-sf="edited"].active { border-color: #fb923c; color: #fb923c; }
+.sf-btn[data-sf="untranslated"].active { border-color: #e06060; color: #e06060; }
+
 #count-label {
   font-size: 10px;
   color: var(--text-muted);

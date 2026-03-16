@@ -21,6 +21,7 @@ let _monacoReady = false;
 let _suppressMonacoChange = false; // suppress onDidChangeModelContent during setValue
 let _sideMonaco = null;       // side panel Monaco editor (read-only)
 let _sidePanelIdx = -1;       // entry index shown in side panel (-1 = hidden)
+let _sideOriginalMode = false; // true = side panel shows original text (auto-follows current entry)
 
 // ── Worker thread state ────────────────────────────────────
 let _highlightWorker = null;

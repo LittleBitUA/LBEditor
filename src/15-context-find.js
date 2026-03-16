@@ -1502,19 +1502,24 @@ function setupGlossaryDock() {
 //  Side Panel (dual view)
 // ═══════════════════════════════════════════════════════════
 
-function showSidePanel(entryIdx) {
+function showSidePanel(entryIdx, originalMode) {
   if (entryIdx < 0 || entryIdx >= state.entries.length) return;
   const entry = state.entries[entryIdx];
+  const isOrig = originalMode || _sideOriginalMode;
 
   const panel = document.getElementById('side-panel');
   const handle = document.getElementById('side-panel-handle');
   const titleEl = document.getElementById('side-panel-title');
 
-  titleEl.textContent = `[${entryIdx + 1}] ${entry.file || ''}`;
+  titleEl.textContent = isOrig
+    ? `Оригінал: [${entryIdx + 1}] ${entry.file || ''}`
+    : `[${entryIdx + 1}] ${entry.file || ''}`;
 
   // Get entry text for display
   let text;
-  if (state.appMode === 'ishin' && state.splitMode) {
+  if (isOrig) {
+    text = (entry.originalText || entry.text).join('\n');
+  } else if (state.appMode === 'ishin' && state.splitMode) {
     text = entry.text.join('\n') + '\n---\n' + entry.visibleSpeakers().join('\n');
   } else {
     text = entry.toFlat(state.appMode === 'ishin' ? state.useSeparator : undefined);
@@ -1571,9 +1576,12 @@ function hideSidePanel() {
   document.getElementById('side-panel').classList.add('hidden');
   document.getElementById('side-panel-handle').classList.add('hidden');
   _sidePanelIdx = -1;
+  _sideOriginalMode = false;
 
   const btn = document.getElementById('tb-side-panel');
   if (btn) btn.classList.remove('active');
+  const origBtn = document.getElementById('tb-original');
+  if (origBtn) origBtn.classList.remove('active');
 
   setTimeout(() => {
     if (_monacoFlat) _monacoFlat.layout();
@@ -1583,8 +1591,24 @@ function hideSidePanel() {
 }
 
 function toggleSidePanel() {
-  if (_sidePanelIdx >= 0) hideSidePanel();
-  else if (state.currentIndex >= 0) showSidePanel(state.currentIndex);
+  if (_sidePanelIdx >= 0 && !_sideOriginalMode) hideSidePanel();
+  else if (state.currentIndex >= 0) { _sideOriginalMode = false; showSidePanel(state.currentIndex); }
+}
+
+function toggleOriginalSidePanel() {
+  if (_sideOriginalMode) {
+    _sideOriginalMode = false;
+    hideSidePanel();
+  } else {
+    _sideOriginalMode = true;
+    if (state.currentIndex >= 0) showSidePanel(state.currentIndex, true);
+  }
+  document.getElementById('tb-original').classList.toggle('active', _sideOriginalMode);
+}
+
+/** Called when user navigates to a new entry — update side panel if in original mode */
+function updateSidePanelForEntry(entryIdx) {
+  if (_sideOriginalMode && entryIdx >= 0) showSidePanel(entryIdx, true);
 }
 
 function setupSidePanelHandle() {
@@ -1637,6 +1661,7 @@ function setupToolbar() {
 
   // Side panel
   document.getElementById('tb-side-panel').addEventListener('click', () => toggleSidePanel());
+  document.getElementById('tb-original').addEventListener('click', () => toggleOriginalSidePanel());
 }
 
 function toggleWhitespace() {
