@@ -82,6 +82,7 @@ function renderTabBar() {
   dom.tabBar.innerHTML = '';
   if (_openTabs.length === 0) return;
 
+  const frag = document.createDocumentFragment();
   for (const idx of _openTabs) {
     const entry = state.entries[idx];
     if (!entry) continue;
@@ -114,7 +115,6 @@ function renderTabBar() {
       if (idx !== state.currentIndex) onListItemClick(idx);
     });
     el.addEventListener('dblclick', () => {
-      // Double-click on tab = pin it
       if (idx === _previewTabIdx) pinCurrentTab();
     });
     el.addEventListener('mousedown', (e) => {
@@ -122,8 +122,9 @@ function renderTabBar() {
     });
     el.addEventListener('contextmenu', (ev) => showEntryContextMenu(ev, idx));
 
-    dom.tabBar.appendChild(el);
+    frag.appendChild(el);
   }
+  dom.tabBar.appendChild(frag);
 }
 
 // ═══════════════════════════════════════════════════════════

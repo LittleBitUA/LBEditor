@@ -87,6 +87,34 @@ parentPort.on('message', (msg) => {
       break;
     }
 
+    // ── Serialize entries + write JSON (heavy stringify offloaded) ──
+    case 'serialize-write-json': {
+      try {
+        const blob = JSON.stringify(msg.data, null, 2);
+        fs.writeFileSync(msg.path, blob + '\n', 'utf-8');
+        parentPort.postMessage({ type: 'serialize-write-json', requestId: msg.requestId, ok: true });
+      } catch (e) {
+        parentPort.postMessage({ type: 'serialize-write-json', requestId: msg.requestId, ok: false, error: e.message });
+      }
+      break;
+    }
+
+    // ── Batch write text files (multiple fs.writeFileSync in worker) ──
+    case 'batch-write-text': {
+      let ok = 0;
+      const errs = [];
+      for (const item of msg.files) {
+        try {
+          const dir = nodePath.dirname(item.path);
+          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(item.path, item.text, 'utf-8');
+          ok++;
+        } catch (e) { errs.push(`${nodePath.basename(item.path)}: ${e.message}`); }
+      }
+      parentPort.postMessage({ type: 'batch-write-text', requestId: msg.requestId, ok, total: msg.files.length, errs });
+      break;
+    }
+
     // ── Write recovery snapshot (heavy JSON.stringify offloaded) ──
     case 'write-recovery': {
       try {

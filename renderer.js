@@ -726,6 +726,7 @@ function renderTabBar() {
   dom.tabBar.innerHTML = '';
   if (_openTabs.length === 0) return;
 
+  const frag = document.createDocumentFragment();
   for (const idx of _openTabs) {
     const entry = state.entries[idx];
     if (!entry) continue;
@@ -758,7 +759,6 @@ function renderTabBar() {
       if (idx !== state.currentIndex) onListItemClick(idx);
     });
     el.addEventListener('dblclick', () => {
-      // Double-click on tab = pin it
       if (idx === _previewTabIdx) pinCurrentTab();
     });
     el.addEventListener('mousedown', (e) => {
@@ -766,8 +766,9 @@ function renderTabBar() {
     });
     el.addEventListener('contextmenu', (ev) => showEntryContextMenu(ev, idx));
 
-    dom.tabBar.appendChild(el);
+    frag.appendChild(el);
   }
+  dom.tabBar.appendChild(frag);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1045,6 +1046,51 @@ function ioExistsBatch(paths) {
         try { results[p] = fs.existsSync(p); } catch (_) { results[p] = false; }
       }
       resolve({ results });
+    }
+  });
+}
+
+/** Async serialize + write JSON (offloads JSON.stringify + fs.writeFileSync to worker) */
+function ioSerializeWriteJSON(filePath, data) {
+  return new Promise((resolve, reject) => {
+    if (_ioWorker) {
+      _ioRequestId++;
+      const reqId = _ioRequestId;
+      _ioPending.set(reqId, {
+        resolve: (r) => r.ok ? resolve() : reject(new Error(r.error || 'write failed')),
+      });
+      _ioWorker.postMessage({ type: 'serialize-write-json', path: filePath, data, requestId: reqId });
+    } else {
+      // Fallback: sync on main thread
+      try {
+        const blob = JSON.stringify(data, null, 2);
+        fs.writeFileSync(filePath, blob + '\n', 'utf-8');
+        resolve();
+      } catch (e) { reject(e); }
+    }
+  });
+}
+
+/** Async batch write text files (offloads loop of fs.writeFileSync to worker) */
+function ioBatchWriteText(files) {
+  return new Promise((resolve) => {
+    if (_ioWorker) {
+      _ioRequestId++;
+      const reqId = _ioRequestId;
+      _ioPending.set(reqId, { resolve });
+      _ioWorker.postMessage({ type: 'batch-write-text', files, requestId: reqId });
+    } else {
+      let ok = 0;
+      const errs = [];
+      for (const item of files) {
+        try {
+          const dir = nodePath.dirname(item.path);
+          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(item.path, item.text, 'utf-8');
+          ok++;
+        } catch (e) { errs.push(`${nodePath.basename(item.path)}: ${e.message}`); }
+      }
+      resolve({ ok, total: files.length, errs });
     }
   });
 }
@@ -5230,19 +5276,13 @@ async function saveFileAs() {
       // Let user choose a new folder and save copies there
       const folder = await ipcRenderer.invoke('dialog:open-folder');
       if (!folder) return;
-      let ok = 0;
-      const errs = [];
-      for (const entry of state.entries) {
-        try {
-          const dest = nodePath.join(folder, entry.file || `entry_${entry.index}.txt`);
-          const destDir = nodePath.dirname(dest);
-          if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
-          fs.writeFileSync(dest, entry.text.join('\n') + '\n', 'utf-8');
-          ok++;
-        } catch (e) { errs.push(`${entry.file}: ${e.message}`); }
-      }
-      let msg = `Збережено ${ok} / ${state.entries.length} файлів у:\n${folder}`;
-      if (errs.length) msg += '\n\nПомилки:\n' + errs.slice(0, 20).join('\n');
+      const files = state.entries.map(entry => ({
+        path: nodePath.join(folder, entry.file || `entry_${entry.index}.txt`),
+        text: entry.text.join('\n') + '\n',
+      }));
+      const result = await ioBatchWriteText(files);
+      let msg = `Збережено ${result.ok} / ${result.total} файлів у:\n${folder}`;
+      if (result.errs && result.errs.length) msg += '\n\nПомилки:\n' + result.errs.slice(0, 20).join('\n');
       await showInfo('Зберегти як', msg);
       setStatus(`Збережено як: ${ok} файлів → ${folder}`);
       return;
@@ -5261,22 +5301,19 @@ async function saveFileAs() {
 }
 
 async function writeJson(filePath, silent = false) {
-  let blob;
+  let data;
   try {
-    blob = JSON.stringify(state.entries.map(e => e.buildData()), null, 2);
+    data = state.entries.map(e => e.buildData());
   } catch (e) {
     if (!silent) await showInfo('Помилка', `Серіалізація JSON не вдалася:\n${e.message}`);
     return;
   }
 
-  try { JSON.parse(blob); } catch (e) {
-    if (!silent) await showInfo('Помилка', `Згенерований JSON невалідний:\n${e.message}`);
-    return;
-  }
-
   logVersion(filePath);
 
-  try { fs.writeFileSync(filePath, blob + '\n', 'utf-8'); } catch (e) {
+  try {
+    await ioSerializeWriteJSON(filePath, data);
+  } catch (e) {
     if (!silent) await showInfo('Помилка', `Запис файлу не вдався:\n${e.message}`);
     return;
   }
@@ -6593,11 +6630,37 @@ function getCtxTargetIndices() {
 
 function setupEntryContextMenu() {
   document.getElementById('ctx-translated').addEventListener('click', () => {
-    for (const idx of getCtxTargetIndices()) setEntryTag(idx, 'translated');
+    const indices = getCtxTargetIndices();
+    for (const idx of indices) {
+      const entry = state.entries[idx];
+      if (!entry) continue;
+      const key = getEntryTagKey(entry);
+      const existing = getEntryTagData(key);
+      state.entryTags[key] = { tag: 'translated', note: existing.note };
+    }
+    if (indices.length) {
+      saveEntryTags();
+      for (const idx of indices) updateVisibleEntry(idx);
+      updateProgress();
+      renderTabBar();
+    }
     hideEntryContextMenu();
   });
   document.getElementById('ctx-edited').addEventListener('click', () => {
-    for (const idx of getCtxTargetIndices()) setEntryTag(idx, 'edited');
+    const indices = getCtxTargetIndices();
+    for (const idx of indices) {
+      const entry = state.entries[idx];
+      if (!entry) continue;
+      const key = getEntryTagKey(entry);
+      const existing = getEntryTagData(key);
+      state.entryTags[key] = { tag: 'edited', note: existing.note };
+    }
+    if (indices.length) {
+      saveEntryTags();
+      for (const idx of indices) updateVisibleEntry(idx);
+      updateProgress();
+      renderTabBar();
+    }
     hideEntryContextMenu();
   });
   document.getElementById('ctx-note').addEventListener('click', () => {

@@ -193,19 +193,13 @@ async function saveFileAs() {
       // Let user choose a new folder and save copies there
       const folder = await ipcRenderer.invoke('dialog:open-folder');
       if (!folder) return;
-      let ok = 0;
-      const errs = [];
-      for (const entry of state.entries) {
-        try {
-          const dest = nodePath.join(folder, entry.file || `entry_${entry.index}.txt`);
-          const destDir = nodePath.dirname(dest);
-          if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
-          fs.writeFileSync(dest, entry.text.join('\n') + '\n', 'utf-8');
-          ok++;
-        } catch (e) { errs.push(`${entry.file}: ${e.message}`); }
-      }
-      let msg = `Збережено ${ok} / ${state.entries.length} файлів у:\n${folder}`;
-      if (errs.length) msg += '\n\nПомилки:\n' + errs.slice(0, 20).join('\n');
+      const files = state.entries.map(entry => ({
+        path: nodePath.join(folder, entry.file || `entry_${entry.index}.txt`),
+        text: entry.text.join('\n') + '\n',
+      }));
+      const result = await ioBatchWriteText(files);
+      let msg = `Збережено ${result.ok} / ${result.total} файлів у:\n${folder}`;
+      if (result.errs && result.errs.length) msg += '\n\nПомилки:\n' + result.errs.slice(0, 20).join('\n');
       await showInfo('Зберегти як', msg);
       setStatus(`Збережено як: ${ok} файлів → ${folder}`);
       return;
@@ -224,22 +218,19 @@ async function saveFileAs() {
 }
 
 async function writeJson(filePath, silent = false) {
-  let blob;
+  let data;
   try {
-    blob = JSON.stringify(state.entries.map(e => e.buildData()), null, 2);
+    data = state.entries.map(e => e.buildData());
   } catch (e) {
     if (!silent) await showInfo('Помилка', `Серіалізація JSON не вдалася:\n${e.message}`);
     return;
   }
 
-  try { JSON.parse(blob); } catch (e) {
-    if (!silent) await showInfo('Помилка', `Згенерований JSON невалідний:\n${e.message}`);
-    return;
-  }
-
   logVersion(filePath);
 
-  try { fs.writeFileSync(filePath, blob + '\n', 'utf-8'); } catch (e) {
+  try {
+    await ioSerializeWriteJSON(filePath, data);
+  } catch (e) {
     if (!silent) await showInfo('Помилка', `Запис файлу не вдався:\n${e.message}`);
     return;
   }

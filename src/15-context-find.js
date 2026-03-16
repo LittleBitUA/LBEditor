@@ -163,11 +163,37 @@ function getCtxTargetIndices() {
 
 function setupEntryContextMenu() {
   document.getElementById('ctx-translated').addEventListener('click', () => {
-    for (const idx of getCtxTargetIndices()) setEntryTag(idx, 'translated');
+    const indices = getCtxTargetIndices();
+    for (const idx of indices) {
+      const entry = state.entries[idx];
+      if (!entry) continue;
+      const key = getEntryTagKey(entry);
+      const existing = getEntryTagData(key);
+      state.entryTags[key] = { tag: 'translated', note: existing.note };
+    }
+    if (indices.length) {
+      saveEntryTags();
+      for (const idx of indices) updateVisibleEntry(idx);
+      updateProgress();
+      renderTabBar();
+    }
     hideEntryContextMenu();
   });
   document.getElementById('ctx-edited').addEventListener('click', () => {
-    for (const idx of getCtxTargetIndices()) setEntryTag(idx, 'edited');
+    const indices = getCtxTargetIndices();
+    for (const idx of indices) {
+      const entry = state.entries[idx];
+      if (!entry) continue;
+      const key = getEntryTagKey(entry);
+      const existing = getEntryTagData(key);
+      state.entryTags[key] = { tag: 'edited', note: existing.note };
+    }
+    if (indices.length) {
+      saveEntryTags();
+      for (const idx of indices) updateVisibleEntry(idx);
+      updateProgress();
+      renderTabBar();
+    }
     hideEntryContextMenu();
   });
   document.getElementById('ctx-note').addEventListener('click', () => {

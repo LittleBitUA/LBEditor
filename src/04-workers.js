@@ -225,6 +225,51 @@ function ioExistsBatch(paths) {
   });
 }
 
+/** Async serialize + write JSON (offloads JSON.stringify + fs.writeFileSync to worker) */
+function ioSerializeWriteJSON(filePath, data) {
+  return new Promise((resolve, reject) => {
+    if (_ioWorker) {
+      _ioRequestId++;
+      const reqId = _ioRequestId;
+      _ioPending.set(reqId, {
+        resolve: (r) => r.ok ? resolve() : reject(new Error(r.error || 'write failed')),
+      });
+      _ioWorker.postMessage({ type: 'serialize-write-json', path: filePath, data, requestId: reqId });
+    } else {
+      // Fallback: sync on main thread
+      try {
+        const blob = JSON.stringify(data, null, 2);
+        fs.writeFileSync(filePath, blob + '\n', 'utf-8');
+        resolve();
+      } catch (e) { reject(e); }
+    }
+  });
+}
+
+/** Async batch write text files (offloads loop of fs.writeFileSync to worker) */
+function ioBatchWriteText(files) {
+  return new Promise((resolve) => {
+    if (_ioWorker) {
+      _ioRequestId++;
+      const reqId = _ioRequestId;
+      _ioPending.set(reqId, { resolve });
+      _ioWorker.postMessage({ type: 'batch-write-text', files, requestId: reqId });
+    } else {
+      let ok = 0;
+      const errs = [];
+      for (const item of files) {
+        try {
+          const dir = nodePath.dirname(item.path);
+          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(item.path, item.text, 'utf-8');
+          ok++;
+        } catch (e) { errs.push(`${nodePath.basename(item.path)}: ${e.message}`); }
+      }
+      resolve({ ok, total: files.length, errs });
+    }
+  });
+}
+
 /** Fire-and-forget recovery write (offloads JSON.stringify to worker) */
 function ioWriteRecovery(filePath, snapshot) {
   if (_ioWorker) {
