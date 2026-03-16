@@ -286,13 +286,9 @@ function setupEntryContextMenu() {
     if (_ctxTargetIndex >= 0) {
       const entry = state.entries[_ctxTargetIndex];
       if (entry) {
-        let fullPath = '';
-        if (entry.filePath) {
-          fullPath = entry.filePath;
-        } else if (state.filePath) {
-          fullPath = state.filePath;
-        }
-        if (fullPath && fs.existsSync(fullPath)) {
+        let fullPath = entry.filePath || state.filePath || '';
+        if (fullPath) {
+          fullPath = nodePath.resolve(fullPath);
           shell.showItemInFolder(fullPath);
         }
       }

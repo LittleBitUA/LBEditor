@@ -6440,13 +6440,9 @@ function setupEntryContextMenu() {
     if (_ctxTargetIndex >= 0) {
       const entry = state.entries[_ctxTargetIndex];
       if (entry) {
-        let fullPath = '';
-        if (entry.filePath) {
-          fullPath = entry.filePath;
-        } else if (state.filePath) {
-          fullPath = state.filePath;
-        }
-        if (fullPath && fs.existsSync(fullPath)) {
+        let fullPath = entry.filePath || state.filePath || '';
+        if (fullPath) {
+          fullPath = nodePath.resolve(fullPath);
           shell.showItemInFolder(fullPath);
         }
       }
@@ -9691,8 +9687,24 @@ function setupKeyboard() {
     // Use e.code (physical key) — works regardless of keyboard layout (UA, EN, etc.)
     const code = e.code;
 
-    // Clipboard: Ctrl+C/X/A — let browser/Monaco handle natively
-    if (!e.shiftKey && !e.altKey && (code === 'KeyC' || code === 'KeyX' || code === 'KeyA')) return;
+    // Clipboard: Ctrl+C/X — let browser/Monaco handle natively
+    if (!e.shiftKey && !e.altKey && (code === 'KeyC' || code === 'KeyX')) return;
+
+    // Ctrl+A — select all entries if focus is NOT in editor/input, else let native handle
+    if (code === 'KeyA' && !e.shiftKey && !e.altKey) {
+      const editor = getActiveEditor();
+      if (editor && editor.hasTextFocus()) return; // let Monaco handle
+      const tag = document.activeElement && document.activeElement.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return; // let native handle
+      if (state.entries.length === 0) return;
+      e.preventDefault(); e.stopPropagation();
+      _multiSelected.clear();
+      for (const entry of _filteredEntries) _multiSelected.add(entry.index);
+      applyMultiSelectVisual();
+      dom.entryListContainer.focus();
+      setStatus(`Виділено: ${_multiSelected.size} записів`);
+      return;
+    }
 
     // Ctrl+V — manual paste via Electron clipboard (native paste broken in Electron without role)
     if (code === 'KeyV' && !e.shiftKey && !e.altKey) {
@@ -9834,6 +9846,22 @@ function setupKeyboard() {
     if (!document.getElementById('compare-overlay').classList.contains('hidden')) {
       if (e.key === 'ArrowUp')   { e.preventDefault(); comparePrev(); return; }
       if (e.key === 'ArrowDown') { e.preventDefault(); compareNext(); return; }
+    }
+
+    // Delete — remove selected entries from list (only when not in editor/input)
+    if (e.key === 'Delete' && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+      const editor = getActiveEditor();
+      if (editor && editor.hasTextFocus()) return;
+      const tag = document.activeElement && document.activeElement.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      const indices = _multiSelected.size > 0 ? getMultiSelectedIndices() : (state.currentIndex >= 0 ? [state.currentIndex] : []);
+      if (indices.length === 0) return;
+      e.preventDefault();
+      const sorted = indices.slice().sort((a, b) => b - a);
+      for (const idx of sorted) removeEntryFromList(idx);
+      clearMultiSelect();
+      setStatus(`Видалено зі списку: ${indices.length} записів`);
+      return;
     }
   });
 }
