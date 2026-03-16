@@ -12,6 +12,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  padding-top: 32px;
   background: #0e0e10;
   transition: opacity 0.6s cubic-bezier(0.4, 0, 0.2, 1);
   overflow: hidden;
