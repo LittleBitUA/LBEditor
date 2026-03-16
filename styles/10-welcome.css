@@ -5,7 +5,10 @@
 
 .loading-screen {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
   z-index: 100000;
   display: flex;
   align-items: center;

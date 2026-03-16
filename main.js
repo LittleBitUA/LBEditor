@@ -43,7 +43,7 @@ function createWindow() {
     width: 1400,
     height: 850,
     title: 'LB',
-    backgroundColor: isMac ? undefined : '#1b1b1b',
+    backgroundColor: isMac ? undefined : '#0e0e10',
     transparent: isMac,
     vibrancy: false,
     titleBarStyle: isMac ? 'hiddenInset' : 'default',
