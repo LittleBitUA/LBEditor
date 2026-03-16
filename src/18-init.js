@@ -311,6 +311,8 @@ function setupIPC() {
       case 'bookmarks-panel':  showBookmarksPanel(); break;
       case 'entry-history':    showHistoryPanel(); break;
       case 'cmd-palette':      showCmdPalette(); break;
+      case 'open-project':  await openProject(); break;
+      case 'save-project':  await saveProject(); break;
       case 'batch-export':  await batchExport(); break;
       case 'batch-import':  await batchImport(); break;
       case 'apply':         await applyChanges(); break;

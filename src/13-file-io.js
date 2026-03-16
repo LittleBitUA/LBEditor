@@ -470,6 +470,186 @@ async function saveJoJoJson(silent = false) {
 }
 
 // ═══════════════════════════════════════════════════════════
+//  Project Save / Open (.lbproj)
+// ═══════════════════════════════════════════════════════════
+
+async function saveProject() {
+  if (state.entries.length === 0) {
+    showInfo('Проєкт', 'Немає відкритих файлів для збереження в проєкт.');
+    return;
+  }
+
+  // Apply pending editor changes
+  if (state.currentIndex >= 0 && editorDirty()) await applyChanges();
+
+  // Build project descriptor
+  const proj = {
+    version: 1,
+    appMode: state.appMode,
+    currentIndex: state.currentIndex,
+  };
+
+  if (state.appMode === 'other') {
+    // Save each file path individually (supports mixed sources)
+    proj.files = state.entries.map(e => ({
+      filePath: nodePath.resolve(e.filePath),
+      displayName: e.file,
+    }));
+    proj.txtDirPath = state.txtDirPath || '';
+  } else if (state.appMode === 'ishin') {
+    proj.filePath = nodePath.resolve(state.filePath);
+    // Save which entry indices are still in the list (user may have removed some)
+    proj.entryIndices = state.entries.map(e => e.data && e.data._originalIndex != null ? e.data._originalIndex : e.index);
+  } else if (state.appMode === 'jojo') {
+    proj.filePath = nodePath.resolve(state.filePath);
+  }
+
+  const defaultName = state.appMode === 'other'
+    ? (state.txtDirPath ? nodePath.basename(state.txtDirPath) : 'project') + '.lbproj'
+    : nodePath.basename(state.filePath || 'project', nodePath.extname(state.filePath || '')) + '.lbproj';
+
+  if (_dialogBusy) return;
+  _dialogBusy = true;
+  try {
+    const savePath = await ipcRenderer.invoke('dialog:save-project', defaultName);
+    if (!savePath) return;
+    fs.writeFileSync(savePath, JSON.stringify(proj, null, 2), 'utf-8');
+    setStatus(`Проєкт збережено: ${nodePath.basename(savePath)}`);
+  } catch (e) {
+    showInfo('Помилка', `Не вдалося зберегти проєкт:\n${e.message}`);
+  } finally { _dialogBusy = false; }
+}
+
+async function openProject() {
+  if (_dialogBusy) return;
+  _dialogBusy = true;
+  let projPath;
+  try {
+    projPath = await ipcRenderer.invoke('dialog:open-project');
+    if (!projPath) return;
+  } finally { _dialogBusy = false; }
+
+  let proj;
+  try {
+    const raw = fs.readFileSync(projPath, 'utf-8');
+    proj = JSON.parse(raw);
+  } catch (e) {
+    showInfo('Помилка', `Не вдалося прочитати проєкт:\n${e.message}`);
+    return;
+  }
+
+  if (!proj || !proj.appMode) {
+    showInfo('Помилка', 'Невалідний файл проєкту.');
+    return;
+  }
+
+  if (!(await confirmDiscardAll())) return;
+
+  if (proj.appMode === 'other') {
+    await loadProjectTxt(proj);
+  } else if (proj.appMode === 'ishin') {
+    await loadProjectIshin(proj);
+  } else if (proj.appMode === 'jojo') {
+    if (proj.filePath && fs.existsSync(proj.filePath)) {
+      await loadJoJoJson(proj.filePath);
+    } else {
+      showInfo('Помилка', `Файл не знайдено:\n${proj.filePath || '(пусто)'}`);
+    }
+  }
+
+  setStatus(`Проєкт завантажено: ${nodePath.basename(projPath)}`);
+}
+
+async function loadProjectTxt(proj) {
+  if (isWelcomeVisible()) hideWelcomeScreen();
+  setStatus('Завантаження проєкту...');
+
+  state.appMode = 'other';
+  state.filePath = '';
+  state.txtDirPath = proj.txtDirPath || '';
+  state.bookmarks = {};
+  state.splitMode = false;
+  dom.flatContainer.style.display = 'flex';
+  dom.splitContainer.style.display = 'none';
+  state.entries = [];
+
+  const files = proj.files || [];
+  let loaded = 0;
+  for (let f = 0; f < files.length; f++) {
+    const item = files[f];
+    const fullPath = item.filePath;
+    if (!fs.existsSync(fullPath)) {
+      console.warn(`Project: file not found, skipping: ${fullPath}`);
+      continue;
+    }
+    try {
+      const raw = await fs.promises.readFile(fullPath, 'utf-8');
+      const lines = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+      if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+      const idx = state.entries.length;
+      const entry = new TxtEntry(fullPath, lines, idx);
+      entry.file = item.displayName || nodePath.basename(fullPath);
+      entry.external = true;
+      entry.externalDir = nodePath.basename(nodePath.dirname(fullPath));
+      state.entries.push(entry);
+      loaded++;
+    } catch (e) {
+      console.error(`Project: failed to read ${fullPath}:`, e);
+    }
+    if (f % 50 === 49) {
+      setStatus(`Завантаження проєкту: ${f + 1} / ${files.length}...`);
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
+
+  state.currentIndex = -1;
+  clearEntryTabs();
+  loadEntryTags();
+  loadEntryBookmarks();
+  loadEntryHistory();
+  refreshList();
+  updateProgress();
+
+  const startIdx = (proj.currentIndex >= 0 && proj.currentIndex < state.entries.length) ? proj.currentIndex : 0;
+  if (state.entries.length > 0) selectEntryByIndex(startIdx);
+
+  if (state.txtDirPath) setupProjectDict(nodePath.basename(state.txtDirPath));
+  requestNavPrecompute();
+
+  const dirName = state.txtDirPath ? nodePath.basename(state.txtDirPath) : 'Проєкт';
+  setTitle(`LB \u2014 ${dirName}/`);
+
+  if (loaded < files.length) {
+    setStatus(`Проєкт: завантажено ${loaded} з ${files.length} файлів (${files.length - loaded} не знайдено)`);
+  }
+}
+
+async function loadProjectIshin(proj) {
+  if (!proj.filePath || !fs.existsSync(proj.filePath)) {
+    showInfo('Помилка', `JSON файл не знайдено:\n${proj.filePath || '(пусто)'}`);
+    return;
+  }
+
+  // Load the full JSON first
+  await loadJson(proj.filePath);
+
+  // If the project saved specific entry indices, filter to only those
+  if (proj.entryIndices && Array.isArray(proj.entryIndices) && proj.entryIndices.length < state.entries.length) {
+    const keep = new Set(proj.entryIndices);
+    state.entries = state.entries.filter((_, i) => keep.has(i));
+    // Re-index
+    for (let i = 0; i < state.entries.length; i++) state.entries[i].index = i;
+    state.currentIndex = -1;
+    clearEntryTabs();
+    refreshList();
+    updateProgress();
+  }
+
+  const startIdx = (proj.currentIndex >= 0 && proj.currentIndex < state.entries.length) ? proj.currentIndex : 0;
+  if (state.entries.length > 0) selectEntryByIndex(startIdx);
+}
+
+// ═══════════════════════════════════════════════════════════
 //  Export / Import
 // ═══════════════════════════════════════════════════════════
 

@@ -95,6 +95,9 @@ function buildMenu() {
         { label: 'Зберегти як...', accelerator: 'CmdOrCtrl+Shift+S', registerAccelerator: false, click: () => send('menu:action', 'save-file-as') },
         { label: 'Зберегти все', accelerator: 'CmdOrCtrl+Alt+S', registerAccelerator: false, click: () => send('menu:action', 'save-all') },
         { type: 'separator' },
+        { label: 'Відкрити проєкт...', click: () => send('menu:action', 'open-project') },
+        { label: 'Зберегти проєкт...', click: () => send('menu:action', 'save-project') },
+        { type: 'separator' },
         { label: 'Batch Export...', click: () => send('menu:action', 'batch-export') },
         { label: 'Batch Import...', click: () => send('menu:action', 'batch-import') },
         { type: 'separator' },
@@ -240,6 +243,29 @@ function setupIpcHandlers() {
       title: 'Експорт',
       defaultPath: defaultName || 'export.txt',
       filters: [{ name: 'Text', extensions: ['txt'] }],
+    });
+    return result || null;
+  });
+
+  ipcMain.handle('dialog:open-project', async () => {
+    const result = dialog.showOpenDialogSync(mainWindow, {
+      title: 'Відкрити проєкт',
+      filters: [
+        { name: 'LB Project', extensions: ['lbproj'] },
+        { name: 'All', extensions: ['*'] },
+      ],
+      properties: ['openFile'],
+    });
+    return result ? result[0] : null;
+  });
+
+  ipcMain.handle('dialog:save-project', async (_event, defaultPath) => {
+    const result = dialog.showSaveDialogSync(mainWindow, {
+      title: 'Зберегти проєкт',
+      defaultPath: defaultPath || 'project.lbproj',
+      filters: [
+        { name: 'LB Project', extensions: ['lbproj'] },
+      ],
     });
     return result || null;
   });
