@@ -190,6 +190,7 @@ function setupEntryContextMenu() {
     if (indices.length) {
       saveEntryTags();
       for (const idx of indices) updateVisibleEntry(idx);
+      updateProgress();
     }
     hideEntryContextMenu();
   });

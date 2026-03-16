@@ -172,6 +172,7 @@ function setEntryTag(entryIndex, tag) {
   }
   saveEntryTags();
   updateVisibleEntry(entryIndex);
+  updateProgress();
 }
 
 function setEntryNote(entryIndex, note) {

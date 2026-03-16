@@ -528,7 +528,10 @@ async function openProject() {
     projPath = await ipcRenderer.invoke('dialog:open-project');
     if (!projPath) return;
   } finally { _dialogBusy = false; }
+  await openProjectFromPath(projPath);
+}
 
+async function openProjectFromPath(projPath) {
   let proj;
   try {
     const raw = fs.readFileSync(projPath, 'utf-8');

@@ -29,19 +29,27 @@ function setupDragDrop() {
   document.body.addEventListener('drop', (e) => {
     e.preventDefault();
     if (e.target.closest && e.target.closest('.migrate-slot')) return;
-    for (const file of e.dataTransfer.files) {
-      if (file.path) {
-        const lp = file.path.toLowerCase();
-        if (lp.endsWith('.json')) {
-          loadJsonAuto(file.path);
-          break;
-        }
-        if (getOtherExtensions().some(ext => lp.endsWith(ext))) {
-          openTxtFile(file.path);
-          break;
-        }
-      }
+    const files = [...e.dataTransfer.files].filter(f => f.path);
+    if (files.length === 0) return;
+
+    // Check if any JSON file is in the drop — load first JSON only
+    const jsonFile = files.find(f => f.path.toLowerCase().endsWith('.json'));
+    if (jsonFile) {
+      loadJsonAuto(jsonFile.path);
+      return;
     }
+
+    // Check for .lbproj file
+    const projFile = files.find(f => f.path.toLowerCase().endsWith('.lbproj'));
+    if (projFile) {
+      openProjectFromPath(projFile.path);
+      return;
+    }
+
+    // Load all matching text files
+    const exts = getOtherExtensions();
+    const txtFiles = files.filter(f => exts.some(ext => f.path.toLowerCase().endsWith(ext)));
+    for (const f of txtFiles) openTxtFile(f.path);
   });
 }
 

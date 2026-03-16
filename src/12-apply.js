@@ -196,9 +196,12 @@ function calcProgressSync() {
   let transE = 0, totalE = state.entries.length, transL = 0, totalL = 0;
   for (const entry of state.entries) {
     const p = getEntryProgress(entry);
+    // If entry has 'edited' or 'translated' tag — count all its lines as translated
+    const tagData = getEntryTagData(entry);
+    const tagDone = tagData.tag === 'edited' || tagData.tag === 'translated';
     totalL += p.totalL;
-    transL += p.transL;
-    if (p.isFullyTranslated) transE++;
+    transL += tagDone ? p.totalL : p.transL;
+    if (tagDone || p.isFullyTranslated) transE++;
   }
   return { transE, totalE, transL, totalL };
 }
