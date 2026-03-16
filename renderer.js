@@ -6442,10 +6442,8 @@ function setupEntryContextMenu() {
       if (entry) {
         let fullPath = '';
         if (entry.filePath) {
-          // TxtEntry — has its own file path
           fullPath = entry.filePath;
         } else if (state.filePath) {
-          // Ishin/JoJo — the loaded JSON file
           fullPath = state.filePath;
         }
         if (fullPath && fs.existsSync(fullPath)) {

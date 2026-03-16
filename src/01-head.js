@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const nodePath = require('path');
-const { ipcRenderer, clipboard } = require('electron');
+const { ipcRenderer, clipboard, shell } = require('electron');
 const nspell = require('nspell');
 const { Worker } = require('worker_threads');
 const { initMonaco } = require('./monaco-loader');

@@ -75,6 +75,13 @@
   const sideItem = document.getElementById('ctx-open-side');
   sideItem.textContent = (entryIndex === _sidePanelIdx) ? 'Закрити бічну панель' : 'Відкрити збоку';
 
+  // Show "Open in Explorer" when a file path is available
+  const explorerSep = document.getElementById('ctx-explorer-sep');
+  const explorerItem = document.getElementById('ctx-open-explorer');
+  const hasPath = !!(entry && (entry.filePath || state.filePath));
+  explorerSep.classList.toggle('hidden', !hasPath);
+  explorerItem.classList.toggle('hidden', !hasPath);
+
   // Position
   const x = Math.min(e.clientX, window.innerWidth - 190);
   const y = Math.min(e.clientY, window.innerHeight - 200);
@@ -270,6 +277,25 @@ function setupEntryContextMenu() {
       setStatus(`Видалено зі списку: ${indices.length} записів`);
     } else if (_ctxTargetIndex >= 0) {
       removeEntryFromList(_ctxTargetIndex);
+    }
+    hideEntryContextMenu();
+  });
+
+  // Open in system file explorer (select the file)
+  document.getElementById('ctx-open-explorer').addEventListener('click', () => {
+    if (_ctxTargetIndex >= 0) {
+      const entry = state.entries[_ctxTargetIndex];
+      if (entry) {
+        let fullPath = '';
+        if (entry.filePath) {
+          fullPath = entry.filePath;
+        } else if (state.filePath) {
+          fullPath = state.filePath;
+        }
+        if (fullPath && fs.existsSync(fullPath)) {
+          shell.showItemInFolder(fullPath);
+        }
+      }
     }
     hideEntryContextMenu();
   });
