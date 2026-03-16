@@ -77,22 +77,32 @@
         <div id="count-label">Записів: 0</div>
 
         <div class="progress-compact">
-          <div class="progress-bar-track">
-            <div class="progress-bar-fill" id="progress-bar"></div>
+          <div class="progress-section" id="progress-section-trans" title="">
+            <div class="progress-bar-track">
+              <div class="progress-bar-fill" id="progress-bar"></div>
+              <div class="progress-milestone" style="left:25%"></div>
+              <div class="progress-milestone" style="left:50%"></div>
+              <div class="progress-milestone" style="left:75%"></div>
+            </div>
+            <div class="progress-labels">
+              <span id="prog-label-entries">&mdash;</span>
+              <span class="progress-pct" id="progress-pct">0%</span>
+              <span id="prog-label-lines">&mdash;</span>
+              <button class="schema-btn" id="schema-btn" title="Схема підрахунку"></button>
+            </div>
           </div>
-          <div class="progress-labels">
-            <span id="prog-label-entries">&mdash;</span>
-            <span class="progress-pct" id="progress-pct">0%</span>
-            <span id="prog-label-lines">&mdash;</span>
-            <button class="schema-btn" id="schema-btn" title="Схема підрахунку"></button>
-          </div>
-          <div class="progress-bar-track progress-edit-track">
-            <div class="progress-bar-fill progress-edit-fill" id="progress-edit-bar"></div>
-          </div>
-          <div class="progress-labels progress-edit-labels" id="progress-edit-labels">
-            <span id="prog-edit-files">&mdash;</span>
-            <span class="progress-edit-pct" id="progress-edit-pct">0%</span>
-            <span id="prog-edit-lines">&mdash;</span>
+          <div class="progress-section progress-section-edit" id="progress-section-edit" title="">
+            <div class="progress-bar-track">
+              <div class="progress-bar-fill progress-edit-fill" id="progress-edit-bar"></div>
+              <div class="progress-milestone progress-milestone-edit" style="left:25%"></div>
+              <div class="progress-milestone progress-milestone-edit" style="left:50%"></div>
+              <div class="progress-milestone progress-milestone-edit" style="left:75%"></div>
+            </div>
+            <div class="progress-labels">
+              <span id="prog-edit-files">&mdash;</span>
+              <span class="progress-edit-pct" id="progress-edit-pct">0%</span>
+              <span id="prog-edit-lines">&mdash;</span>
+            </div>
           </div>
         </div>
       </div>
@@ -1013,30 +1023,30 @@
   <!-- Entry context menu -->
   <div id="entry-context-menu" class="entry-context-menu hidden">
     <div class="ctx-item ctx-translated" id="ctx-translated">
-      <span class="ctx-dot ctx-dot-translated"></span> Перекладено
+      <span class="ctx-dot ctx-dot-translated"></span><span class="ctx-icon">&#x2714;</span> Перекладено
     </div>
     <div class="ctx-item ctx-edited" id="ctx-edited">
-      <span class="ctx-dot ctx-dot-edited"></span> Зредаговано
+      <span class="ctx-dot ctx-dot-edited"></span><span class="ctx-icon">&#x270E;</span> Зредаговано
     </div>
     <div class="ctx-sep"></div>
-    <div class="ctx-item" id="ctx-note">Примітка&#x2026;</div>
+    <div class="ctx-item" id="ctx-note"><span class="ctx-icon">&#x1F4DD;</span> Примітка&#x2026;</div>
     <div class="ctx-sep"></div>
-    <div class="ctx-item ctx-clear" id="ctx-clear-tag">Зняти все</div>
+    <div class="ctx-item ctx-clear" id="ctx-clear-tag"><span class="ctx-icon">&#x2716;</span> Зняти все</div>
     <div class="ctx-sep"></div>
-    <div class="ctx-item" id="ctx-bookmark"><span class="ctx-dot ctx-dot-bookmark"></span> Закладка</div>
-    <div class="ctx-item" id="ctx-entry-history">Історія змін&#x2026;</div>
+    <div class="ctx-item" id="ctx-bookmark"><span class="ctx-dot ctx-dot-bookmark"></span><span class="ctx-icon">&#x2606;</span> Закладка</div>
+    <div class="ctx-item" id="ctx-entry-history"><span class="ctx-icon">&#x1F553;</span> Історія змін&#x2026;</div>
     <div class="ctx-sep hidden" id="ctx-discard-sep"></div>
-    <div class="ctx-item ctx-danger hidden" id="ctx-discard">Відкинути зміни</div>
-    <div class="ctx-item ctx-muted hidden" id="ctx-restore">Повернути зміни</div>
+    <div class="ctx-item ctx-danger hidden" id="ctx-discard"><span class="ctx-icon">&#x21B6;</span> Відкинути зміни</div>
+    <div class="ctx-item ctx-muted hidden" id="ctx-restore"><span class="ctx-icon">&#x21B7;</span> Повернути зміни</div>
     <div class="ctx-sep" id="ctx-side-sep"></div>
-    <div class="ctx-item" id="ctx-open-side">Відкрити збоку</div>
+    <div class="ctx-item" id="ctx-open-side"><span class="ctx-icon">&#x2B13;</span> Відкрити збоку</div>
     <div class="ctx-sep" id="ctx-compare-sep"></div>
-    <div class="ctx-item" id="ctx-compare">Порівняти&#x2026;</div>
-    <div class="ctx-item hidden" id="ctx-compare-cancel">Скасувати порівняння</div>
+    <div class="ctx-item" id="ctx-compare"><span class="ctx-icon">&#x21C4;</span> Порівняти&#x2026;</div>
+    <div class="ctx-item hidden" id="ctx-compare-cancel"><span class="ctx-icon">&#x2716;</span> Скасувати порівняння</div>
     <div class="ctx-sep hidden" id="ctx-remove-sep"></div>
-    <div class="ctx-item ctx-danger hidden" id="ctx-remove-entry">Видалити зі списку</div>
+    <div class="ctx-item ctx-danger hidden" id="ctx-remove-entry"><span class="ctx-icon">&#x1F5D1;</span> Видалити зі списку</div>
     <div class="ctx-sep" id="ctx-explorer-sep"></div>
-    <div class="ctx-item" id="ctx-open-explorer">Відкрити в провіднику</div>
+    <div class="ctx-item" id="ctx-open-explorer"><span class="ctx-icon">&#x1F4C2;</span> Відкрити в провіднику</div>
   </div>
 
   <!-- Note prompt mini-dialog -->

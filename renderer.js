@@ -4921,6 +4921,12 @@ function _applyProgress(transE, totalE, transL, totalL, editedFiles, editedLines
   dom.progEntries.textContent = `${transE}/${totalE} (${pctE.toFixed(0)}%)`;
   dom.progLines.textContent = `${transL}/${totalL}`;
 
+  // Tooltip for translation section
+  const remainE = totalE - transE;
+  const remainL = totalL - transL;
+  const secTrans = document.getElementById('progress-section-trans');
+  if (secTrans) secTrans.title = `Переклад: ${pctL.toFixed(1)}%\nФайлів: ${transE} / ${totalE}\nРядків: ${transL} / ${totalL}\nЗалишилось: ${remainE} файлів, ${remainL} рядків`;
+
   // Editing progress
   const editPctFiles = totalE > 0 ? (editedFiles / totalE * 100) : 0;
   const editPctLines = totalL > 0 ? (editedLines / totalL * 100) : 0;
@@ -4928,6 +4934,12 @@ function _applyProgress(transE, totalE, transL, totalL, editedFiles, editedLines
   dom.progEditPct.textContent = editPctLines.toFixed(1) + '%';
   dom.progEditFiles.textContent = `зредаговано ${editedFiles} із ${totalE}`;
   dom.progEditLines.textContent = `${editedLines}/${totalL} рядків`;
+
+  // Tooltip for editing section
+  const remainEditF = totalE - editedFiles;
+  const remainEditL = totalL - editedLines;
+  const secEdit = document.getElementById('progress-section-edit');
+  if (secEdit) secEdit.title = `Редагування: ${editPctLines.toFixed(1)}%\nФайлів: ${editedFiles} / ${totalE}\nРядків: ${editedLines} / ${totalL}\nЗалишилось: ${remainEditF} файлів, ${remainEditL} рядків`;
 }
 
 let _progressDebounce = null;
