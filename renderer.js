@@ -2358,6 +2358,10 @@ function renderThemeEditorList() {
     card.onclick = () => {
       state.settings.theme = id;
       applyTheme(id);
+      // Sync the dropdown in "Вигляд" tab
+      const sel = document.getElementById('set-theme');
+      if (sel) sel.value = id;
+      saveSettings();
       renderThemeEditorList();
     };
     list.appendChild(card);
@@ -2408,6 +2412,9 @@ function renderThemeEditorList() {
       card.onclick = () => {
         state.settings.theme = slug;
         applyTheme(slug);
+        const sel = document.getElementById('set-theme');
+        if (sel) sel.value = slug;
+        saveSettings();
         renderThemeEditorList();
       };
       list.appendChild(card);
