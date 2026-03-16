@@ -10118,19 +10118,28 @@ function setupKeyboard() {
       if (e.key === 'ArrowDown') { e.preventDefault(); compareNext(); return; }
     }
 
-    // Delete — remove selected entries from list (only when not in editor/input)
+    // Delete — remove selected entries from list
     if (e.key === 'Delete' && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+      // If multi-selected, always handle (regardless of editor focus)
+      if (_multiSelected.size > 0) {
+        e.preventDefault();
+        const indices = getMultiSelectedIndices();
+        const sorted = indices.slice().sort((a, b) => b - a);
+        for (const idx of sorted) removeEntryFromList(idx);
+        clearMultiSelect();
+        setStatus(`Видалено зі списку: ${indices.length} записів`);
+        return;
+      }
+      // Single entry: only if not in editor/input
       const editor = getActiveEditor();
       if (editor && editor.hasTextFocus()) return;
       const tag = document.activeElement && document.activeElement.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-      const indices = _multiSelected.size > 0 ? getMultiSelectedIndices() : (state.currentIndex >= 0 ? [state.currentIndex] : []);
-      if (indices.length === 0) return;
-      e.preventDefault();
-      const sorted = indices.slice().sort((a, b) => b - a);
-      for (const idx of sorted) removeEntryFromList(idx);
-      clearMultiSelect();
-      setStatus(`Видалено зі списку: ${indices.length} записів`);
+      if (state.currentIndex >= 0) {
+        e.preventDefault();
+        removeEntryFromList(state.currentIndex);
+        setStatus('Видалено зі списку: 1 запис');
+      }
       return;
     }
   });
