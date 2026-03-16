@@ -6,6 +6,7 @@
   flex-direction: row;
   overflow: hidden;
   min-height: 100px;
+  position: relative;
 }
 
 #editor-main {

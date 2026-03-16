@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const nodePath = require('path');
-const { ipcRenderer, clipboard } = require('electron');
+const { ipcRenderer, clipboard, shell } = require('electron');
 const nspell = require('nspell');
 const { Worker } = require('worker_threads');
 const { initMonaco } = require('./monaco-loader');
@@ -3074,8 +3074,13 @@ function showGlossaryModal() {
   // Load selected dict into table
   switchGlossaryDictView(select.value);
   document.getElementById('gloss-search').value = '';
-  overlay.classList.remove('hidden');
-  modal.classList.remove('hidden');
+  if (_glossaryDocked) {
+    // Already docked — just ensure visible
+    modal.classList.remove('hidden');
+  } else {
+    overlay.classList.remove('hidden');
+    modal.classList.remove('hidden');
+  }
 }
 
 function switchGlossaryDictView(which) {
@@ -3199,6 +3204,10 @@ function resolveImportConflicts(conflictKeys, current, imported) {
 }
 
 function hideGlossaryModal() {
+  if (_glossaryDocked) {
+    hideGlossaryDocked();
+    return;
+  }
   document.getElementById('glossary-overlay').classList.add('hidden');
   document.getElementById('glossary-modal').classList.add('hidden');
 }
@@ -6220,6 +6229,13 @@ function showEntryContextMenu(e, entryIndex) {
   const sideItem = document.getElementById('ctx-open-side');
   sideItem.textContent = (entryIndex === _sidePanelIdx) ? 'Закрити бічну панель' : 'Відкрити збоку';
 
+  // Show "Open in Explorer" when a file path is available
+  const explorerSep = document.getElementById('ctx-explorer-sep');
+  const explorerItem = document.getElementById('ctx-open-explorer');
+  const hasPath = !!(entry && (entry.filePath || state.filePath));
+  explorerSep.classList.toggle('hidden', !hasPath);
+  explorerItem.classList.toggle('hidden', !hasPath);
+
   // Position
   const x = Math.min(e.clientX, window.innerWidth - 190);
   const y = Math.min(e.clientY, window.innerHeight - 200);
@@ -6415,6 +6431,27 @@ function setupEntryContextMenu() {
       setStatus(`Видалено зі списку: ${indices.length} записів`);
     } else if (_ctxTargetIndex >= 0) {
       removeEntryFromList(_ctxTargetIndex);
+    }
+    hideEntryContextMenu();
+  });
+
+  // Open in system file explorer (select the file)
+  document.getElementById('ctx-open-explorer').addEventListener('click', () => {
+    if (_ctxTargetIndex >= 0) {
+      const entry = state.entries[_ctxTargetIndex];
+      if (entry) {
+        let fullPath = '';
+        if (entry.filePath) {
+          // TxtEntry — has its own file path
+          fullPath = entry.filePath;
+        } else if (state.filePath) {
+          // Ishin/JoJo — the loaded JSON file
+          fullPath = state.filePath;
+        }
+        if (fullPath && fs.existsSync(fullPath)) {
+          shell.showItemInFolder(fullPath);
+        }
+      }
     }
     hideEntryContextMenu();
   });
@@ -6807,9 +6844,11 @@ function showFindDialog(tab = 'find') {
 }
 
 function hideFindDialog() {
+  if (_findDialogDockState) undockFindDialog(true);
   document.getElementById('find-dialog').classList.add('hidden');
   document.getElementById('find-results-panel').classList.add('hidden');
   clearFindHighlights();
+  _relayoutEditors();
 }
 
 function isFindDialogVisible() {
@@ -7263,18 +7302,142 @@ function getActiveHighlightEl() {
   return null;
 }
 
+// ═══════════════════════════════════════════════════════════
+//  Dockable Panel System
+// ═══════════════════════════════════════════════════════════
+
+let _findDialogDockState = null; // null = floating, 'bottom' | 'right' | 'left'
+
+function _getDockZoneHit(clientX, clientY) {
+  const area = document.getElementById('editor-area');
+  if (!area) return null;
+  const r = area.getBoundingClientRect();
+  const margin = 50; // px zone near edges
+
+  if (clientX >= r.left && clientX <= r.right) {
+    if (clientY >= r.bottom - margin && clientY <= r.bottom) return 'bottom';
+  }
+  if (clientY >= r.top && clientY <= r.bottom) {
+    if (clientX >= r.right - margin && clientX <= r.right) return 'right';
+    if (clientX >= r.left && clientX <= r.left + margin) return 'left';
+  }
+  return null;
+}
+
+function _showDockZones() {
+  const overlay = document.getElementById('dock-zone-overlay');
+  if (overlay) overlay.classList.remove('hidden');
+}
+
+function _hideDockZones() {
+  const overlay = document.getElementById('dock-zone-overlay');
+  if (overlay) {
+    overlay.classList.add('hidden');
+    overlay.querySelectorAll('.dock-zone').forEach(z => z.classList.remove('dock-hover'));
+  }
+}
+
+function _highlightDockZone(zone) {
+  const overlay = document.getElementById('dock-zone-overlay');
+  if (!overlay) return;
+  overlay.querySelectorAll('.dock-zone').forEach(z => {
+    z.classList.toggle('dock-hover', z.dataset.dock === zone);
+  });
+}
+
+function dockFindDialog(zone) {
+  const dialog = document.getElementById('find-dialog');
+  const area = document.getElementById('editor-area');
+  const editorMain = document.getElementById('editor-main');
+  if (!dialog || !area || !editorMain) return;
+
+  // Undock first if already docked
+  if (_findDialogDockState) undockFindDialog(true);
+
+  _findDialogDockState = zone;
+  dialog.classList.add('docked', 'docked-' + zone);
+  dialog.style.left = '';
+  dialog.style.top = '';
+  dialog.style.right = '';
+  dialog.style.width = '';
+
+  // Show undock button, hide close button? No, keep close
+  document.getElementById('find-dialog-undock').classList.remove('hidden');
+
+  // Move dialog into the layout
+  if (zone === 'bottom') {
+    // Insert after editor-area, inside right-panel but below editor-area
+    area.parentNode.insertBefore(dialog, area.nextSibling);
+  } else if (zone === 'right') {
+    // Insert at end of editor-area (after side-panel or editor-main)
+    area.appendChild(dialog);
+  } else if (zone === 'left') {
+    // Insert at start of editor-area (before editor-main)
+    area.insertBefore(dialog, area.querySelector('#editor-main'));
+  }
+
+  // Relayout Monaco editors
+  _relayoutEditors();
+}
+
+function undockFindDialog(skipRelayout) {
+  const dialog = document.getElementById('find-dialog');
+  if (!dialog || !_findDialogDockState) return;
+
+  dialog.classList.remove('docked', 'docked-bottom', 'docked-right', 'docked-left');
+  _findDialogDockState = null;
+
+  // Move dialog back to body-level (after #app)
+  document.body.appendChild(dialog);
+
+  // Reset to default floating position
+  dialog.style.position = '';
+  dialog.style.top = '80px';
+  dialog.style.right = '40px';
+  dialog.style.left = '';
+  dialog.style.width = '';
+
+  document.getElementById('find-dialog-undock').classList.add('hidden');
+
+  if (!skipRelayout) _relayoutEditors();
+}
+
+function _relayoutEditors() {
+  setTimeout(() => {
+    if (_monacoFlat) _monacoFlat.layout();
+    if (_monacoText) _monacoText.layout();
+    if (_monacoSp) _monacoSp.layout();
+    if (_sideMonaco) _sideMonaco.layout();
+  }, 50);
+}
+
 function setupFindDialogDrag() {
   const dialog = document.getElementById('find-dialog');
   const titlebar = document.getElementById('find-dialog-titlebar');
+  const undockBtn = document.getElementById('find-dialog-undock');
   let isDragging = false, offsetX = 0, offsetY = 0;
+  let wasDocked = false;
 
   titlebar.addEventListener('mousedown', (e) => {
-    if (e.target.closest('.find-dialog-close')) return;
+    if (e.target.closest('.find-dialog-close') || e.target.closest('.find-dialog-undock')) return;
     isDragging = true;
+    wasDocked = !!_findDialogDockState;
+
+    // If docked, undock first to start floating drag
+    if (_findDialogDockState) {
+      undockFindDialog();
+      // Position dialog at cursor
+      dialog.style.left = (e.clientX - 200) + 'px';
+      dialog.style.top = (e.clientY - 15) + 'px';
+      dialog.style.right = 'auto';
+    }
+
     const rect = dialog.getBoundingClientRect();
     offsetX = e.clientX - rect.left;
     offsetY = e.clientY - rect.top;
     e.preventDefault();
+
+    _showDockZones();
   });
 
   document.addEventListener('mousemove', (e) => {
@@ -7286,9 +7449,185 @@ function setupFindDialogDrag() {
     dialog.style.left = x + 'px';
     dialog.style.top = y + 'px';
     dialog.style.right = 'auto';
+
+    // Check dock zone hover
+    const zone = _getDockZoneHit(e.clientX, e.clientY);
+    _highlightDockZone(zone);
   });
 
-  document.addEventListener('mouseup', () => { isDragging = false; });
+  document.addEventListener('mouseup', (e) => {
+    if (!isDragging) return;
+    isDragging = false;
+    _hideDockZones();
+
+    // Check if dropped on a dock zone
+    const zone = _getDockZoneHit(e.clientX, e.clientY);
+    if (zone) {
+      dockFindDialog(zone);
+    }
+  });
+
+  // Undock button
+  undockBtn.addEventListener('click', () => {
+    undockFindDialog();
+  });
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Glossary Dock (sidebar mode)
+// ═══════════════════════════════════════════════════════════
+
+let _glossaryDocked = false;
+
+function dockGlossary() {
+  const overlay = document.getElementById('glossary-overlay');
+  const modal = document.getElementById('glossary-modal');
+  const area = document.getElementById('editor-area');
+  if (!modal || !area) return;
+
+  _glossaryDocked = true;
+
+  // Hide overlay, show modal directly in layout
+  overlay.classList.add('hidden');
+  modal.classList.remove('hidden');
+  modal.classList.add('gloss-docked');
+
+  // Move modal into editor-area (right side)
+  area.appendChild(modal);
+
+  // Show undock button, hide dock button
+  document.getElementById('glossary-undock').classList.remove('hidden');
+  document.getElementById('glossary-dock').classList.add('hidden');
+
+  _relayoutEditors();
+}
+
+function undockGlossary() {
+  const overlay = document.getElementById('glossary-overlay');
+  const modal = document.getElementById('glossary-modal');
+  if (!modal || !_glossaryDocked) return;
+
+  _glossaryDocked = false;
+  modal.classList.remove('gloss-docked');
+
+  // Move modal back into overlay
+  overlay.appendChild(modal);
+
+  // Show both overlay and modal
+  overlay.classList.remove('hidden');
+  modal.classList.remove('hidden');
+
+  // Hide undock button, show dock button
+  document.getElementById('glossary-undock').classList.add('hidden');
+  document.getElementById('glossary-dock').classList.remove('hidden');
+
+  _relayoutEditors();
+}
+
+function hideGlossaryDocked() {
+  if (!_glossaryDocked) return;
+  const modal = document.getElementById('glossary-modal');
+  const overlay = document.getElementById('glossary-overlay');
+
+  _glossaryDocked = false;
+  modal.classList.remove('gloss-docked');
+  modal.classList.add('hidden');
+
+  // Move back to overlay
+  overlay.appendChild(modal);
+
+  document.getElementById('glossary-undock').classList.add('hidden');
+  document.getElementById('glossary-dock').classList.remove('hidden');
+
+  _relayoutEditors();
+}
+
+function setupGlossaryDock() {
+  const dockBtn = document.getElementById('glossary-dock');
+  const undockBtn = document.getElementById('glossary-undock');
+  const titlebar = document.getElementById('glossary-titlebar');
+
+  dockBtn.addEventListener('click', () => dockGlossary());
+  undockBtn.addEventListener('click', () => undockGlossary());
+
+  // Draggable titlebar when docked — drag to undock
+  let isDragging = false, offsetX = 0, offsetY = 0;
+
+  titlebar.addEventListener('mousedown', (e) => {
+    if (!_glossaryDocked) return;
+    if (e.target.closest('.modal-close') || e.target.closest('.modal-dock-btn')) return;
+    isDragging = true;
+    e.preventDefault();
+    _showDockZones();
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    const modal = document.getElementById('glossary-modal');
+    // On first significant move, undock and start floating
+    if (_glossaryDocked) {
+      // Undock: move to overlay but hide overlay, make position fixed
+      const overlay = document.getElementById('glossary-overlay');
+      _glossaryDocked = false;
+      modal.classList.remove('gloss-docked');
+      overlay.appendChild(modal);
+      overlay.classList.add('hidden');
+
+      modal.style.position = 'fixed';
+      modal.style.left = (e.clientX - 200) + 'px';
+      modal.style.top = (e.clientY - 20) + 'px';
+      modal.style.width = '500px';
+      modal.style.zIndex = '1000';
+
+      document.getElementById('glossary-undock').classList.add('hidden');
+      document.getElementById('glossary-dock').classList.remove('hidden');
+
+      const rect = modal.getBoundingClientRect();
+      offsetX = e.clientX - rect.left;
+      offsetY = e.clientY - rect.top;
+
+      _relayoutEditors();
+    }
+
+    let x = e.clientX - offsetX;
+    let y = e.clientY - offsetY;
+    x = Math.max(0, Math.min(x, window.innerWidth - modal.offsetWidth));
+    y = Math.max(0, Math.min(y, window.innerHeight - 40));
+    modal.style.left = x + 'px';
+    modal.style.top = y + 'px';
+
+    const zone = _getDockZoneHit(e.clientX, e.clientY);
+    _highlightDockZone(zone);
+  });
+
+  document.addEventListener('mouseup', (e) => {
+    if (!isDragging) return;
+    isDragging = false;
+    _hideDockZones();
+
+    const modal = document.getElementById('glossary-modal');
+    const zone = _getDockZoneHit(e.clientX, e.clientY);
+    if (zone === 'right' || zone === 'left') {
+      // Reset floating styles
+      modal.style.position = '';
+      modal.style.left = '';
+      modal.style.top = '';
+      modal.style.width = '';
+      modal.style.zIndex = '';
+      // Re-dock
+      dockGlossary();
+    } else {
+      // Stay floating — restore as overlay modal
+      modal.style.position = '';
+      modal.style.left = '';
+      modal.style.top = '';
+      modal.style.width = '';
+      modal.style.zIndex = '';
+      const overlay = document.getElementById('glossary-overlay');
+      overlay.classList.remove('hidden');
+      modal.classList.remove('hidden');
+    }
+  });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -7459,6 +7798,7 @@ function setLayout(id) {
 
 function setupFindDialog() {
   setupFindDialogDrag();
+  setupGlossaryDock();
 
   // Tab switching
   document.querySelectorAll('.find-tab-btn').forEach(btn => {
@@ -9612,6 +9952,30 @@ function setupEventListeners() {
       clearMultiSelect();
       return;
     }
+
+    // Ctrl+A — select all visible (filtered) entries
+    if (e.ctrlKey && e.key === 'a') {
+      e.preventDefault();
+      e.stopPropagation();
+      _multiSelected.clear();
+      for (const entry of _filteredEntries) _multiSelected.add(entry.index);
+      applyMultiSelectVisual();
+      setStatus(`Виділено: ${_multiSelected.size} записів`);
+      return;
+    }
+
+    // Delete — remove selected entries from list
+    if (e.key === 'Delete' && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+      const indices = _multiSelected.size > 0 ? getMultiSelectedIndices() : (state.currentIndex >= 0 ? [state.currentIndex] : []);
+      if (indices.length === 0) return;
+      e.preventDefault();
+      const sorted = indices.slice().sort((a, b) => b - a);
+      for (const idx of sorted) removeEntryFromList(idx);
+      clearMultiSelect();
+      setStatus(`Видалено зі списку: ${indices.length} записів`);
+      return;
+    }
+
     if (e.ctrlKey || e.altKey || e.shiftKey) return;
     if (e.key === 'ArrowDown') { e.preventDefault(); goNext(); return; }
     if (e.key === 'ArrowUp')   { e.preventDefault(); goPrev(); return; }

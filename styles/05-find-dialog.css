@@ -271,5 +271,151 @@
   border-radius: 2px; padding: 0 1px;
 }
 
+/* ─── Dock Zones ─── */
+
+.dock-zone-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 800;
+  pointer-events: none;
+}
+
+.dock-zone {
+  position: absolute;
+  pointer-events: all;
+  transition: background 0.15s, border-color 0.15s;
+  border: 2px dashed transparent;
+  border-radius: 8px;
+}
+
+.dock-zone-bottom {
+  left: 10%;
+  right: 10%;
+  bottom: 0;
+  height: 40px;
+}
+.dock-zone-right {
+  right: 0;
+  top: 10%;
+  bottom: 10%;
+  width: 40px;
+}
+.dock-zone-left {
+  left: 0;
+  top: 10%;
+  bottom: 10%;
+  width: 40px;
+}
+
+.dock-zone.dock-hover {
+  background: var(--accent-subtle, rgba(100, 180, 255, 0.12));
+  border-color: var(--accent, #5599ff);
+  box-shadow: inset 0 0 20px var(--accent-glow, rgba(100, 180, 255, 0.15));
+}
+
+/* ─── Undock button ─── */
+
+.find-dialog-undock {
+  width: 24px; height: 24px;
+  border: none; background: transparent;
+  color: var(--text-muted); cursor: pointer;
+  font-size: 14px; border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s; padding: 0;
+}
+.find-dialog-undock:hover {
+  color: var(--text-primary);
+  background: var(--bg-glass-hover);
+}
+
+/* ─── Docked find dialog states ─── */
+
+.find-dialog.docked {
+  position: relative;
+  top: auto !important;
+  left: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  z-index: auto;
+  border-radius: 0;
+  animation: none;
+  box-shadow: none;
+  flex-shrink: 0;
+}
+
+.find-dialog.docked .find-dialog-titlebar {
+  cursor: grab;
+}
+.find-dialog.docked .find-dialog-titlebar:active {
+  cursor: grabbing;
+}
+
+/* Docked bottom: full width, limited height */
+.find-dialog.docked-bottom {
+  width: 100%;
+  max-height: 50%;
+  border-top: 1px solid var(--border-glass);
+  border-bottom: none;
+  border-left: none;
+  border-right: none;
+  border-radius: 0;
+}
+
+/* Docked right: side panel style */
+.find-dialog.docked-right {
+  width: auto;
+  min-width: 340px;
+  max-width: 50%;
+  height: 100%;
+  border-left: 1px solid var(--border-glass);
+  border-top: none;
+  border-bottom: none;
+  border-right: none;
+  border-radius: 0;
+}
+
+/* Docked left: side panel style */
+.find-dialog.docked-left {
+  width: auto;
+  min-width: 340px;
+  max-width: 50%;
+  height: 100%;
+  border-right: 1px solid var(--border-glass);
+  border-top: none;
+  border-bottom: none;
+  border-left: none;
+  border-radius: 0;
+}
+
+/* Dock handle (resize) */
+.dock-resize-handle {
+  position: absolute;
+  z-index: 5;
+  flex-shrink: 0;
+}
+.dock-resize-handle-h {
+  width: 100%;
+  height: 4px;
+  top: -2px;
+  left: 0;
+  cursor: row-resize;
+}
+.dock-resize-handle-v {
+  height: 100%;
+  width: 4px;
+  top: 0;
+  cursor: col-resize;
+}
+.dock-resize-handle-v.left {
+  left: -2px;
+}
+.dock-resize-handle-v.right {
+  right: -2px;
+}
+.dock-resize-handle:hover {
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent-glow);
+}
+
 /* Find match highlight in editor (only current match — used in find-results-text) */
 

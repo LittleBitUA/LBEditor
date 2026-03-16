@@ -130,6 +130,12 @@
         <div id="tab-bar"></div>
 
         <div id="editor-area">
+          <!-- Dock zones (shown during find-dialog drag) -->
+          <div id="dock-zone-overlay" class="dock-zone-overlay hidden">
+            <div class="dock-zone dock-zone-bottom" data-dock="bottom"></div>
+            <div class="dock-zone dock-zone-right" data-dock="right"></div>
+            <div class="dock-zone dock-zone-left" data-dock="left"></div>
+          </div>
           <div id="editor-main">
             <div id="flat-editor-container">
               <div id="flat-monaco" class="monaco-container"></div>
@@ -399,9 +405,13 @@
   <!-- Glossary -->
   <div id="glossary-overlay" class="modal-overlay hidden">
     <div id="glossary-modal" class="modal hidden">
-      <div class="modal-header">
+      <div class="modal-header" id="glossary-titlebar">
         <h3>Словник</h3>
-        <button class="modal-close" id="glossary-close">&times;</button>
+        <div style="display:flex;gap:4px;align-items:center;">
+          <button class="modal-dock-btn hidden" id="glossary-undock" title="Від'єднати">&#x2197;</button>
+          <button class="modal-dock-btn" id="glossary-dock" title="Вбудувати збоку">&#x2B1C;</button>
+          <button class="modal-close" id="glossary-close">&times;</button>
+        </div>
       </div>
       <div class="modal-body">
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">
@@ -545,6 +555,7 @@
   <div id="find-dialog" class="find-dialog hidden">
     <div class="find-dialog-titlebar" id="find-dialog-titlebar">
       <span class="find-dialog-title" id="find-dialog-title">Пошук</span>
+      <button class="find-dialog-undock hidden" id="find-dialog-undock" title="Від'єднати (зробити плаваючим)">&#x2197;</button>
       <button class="find-dialog-close" id="find-dialog-close">&times;</button>
     </div>
     <div class="find-dialog-tabs">
@@ -1016,6 +1027,8 @@
     <div class="ctx-item hidden" id="ctx-compare-cancel">Скасувати порівняння</div>
     <div class="ctx-sep hidden" id="ctx-remove-sep"></div>
     <div class="ctx-item ctx-danger hidden" id="ctx-remove-entry">Видалити зі списку</div>
+    <div class="ctx-sep" id="ctx-explorer-sep"></div>
+    <div class="ctx-item" id="ctx-open-explorer">Відкрити в провіднику</div>
   </div>
 
   <!-- Note prompt mini-dialog -->

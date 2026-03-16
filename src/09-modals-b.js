@@ -3,8 +3,13 @@
   // Load selected dict into table
   switchGlossaryDictView(select.value);
   document.getElementById('gloss-search').value = '';
-  overlay.classList.remove('hidden');
-  modal.classList.remove('hidden');
+  if (_glossaryDocked) {
+    // Already docked — just ensure visible
+    modal.classList.remove('hidden');
+  } else {
+    overlay.classList.remove('hidden');
+    modal.classList.remove('hidden');
+  }
 }
 
 function switchGlossaryDictView(which) {
@@ -128,6 +133,10 @@ function resolveImportConflicts(conflictKeys, current, imported) {
 }
 
 function hideGlossaryModal() {
+  if (_glossaryDocked) {
+    hideGlossaryDocked();
+    return;
+  }
   document.getElementById('glossary-overlay').classList.add('hidden');
   document.getElementById('glossary-modal').classList.add('hidden');
 }
