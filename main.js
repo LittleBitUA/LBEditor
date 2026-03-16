@@ -42,6 +42,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 850,
+    show: false,
     title: 'LB',
     backgroundColor: isMac ? undefined : '#0e0e10',
     transparent: isMac,
@@ -51,6 +52,10 @@ function createWindow() {
       nodeIntegration: true,
       contextIsolation: false,
     },
+  });
+
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
   });
 
   mainWindow.loadFile('index.html');

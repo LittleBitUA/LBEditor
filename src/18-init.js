@@ -629,69 +629,72 @@ function init() {
   state.settings = loadSettings();
   applySettingsToUI();
 
-  // Yield to let browser paint loading screen, then run steps one-by-one
+  // Yield once to let browser paint loading screen, then init
   requestAnimationFrame(() => {
-    setTimeout(() => {
-      runSteps([
-        // ── IO Worker first (needed for async file writes) ──
-        () => { initIOWorker(); },
+    setTimeout(async () => {
+      // ── Workers (start immediately, no DOM dependency) ──
+      initIOWorker();
+      initHighlightWorker();
+      initAnalysisWorker();
 
-        // ── Event listeners (each on its own tick for smooth animation) ──
-        () => { loadFindHistory(); },
-        () => { setupEventListeners(); },
-        () => { setupIPC(); },
-        () => { setupKeyboard(); },
-        () => { setupScrollSync(); },
-        // ── Monaco Editor init (async — resolves before next step) ──
-        () => initMonacoEditors().then(() => { setupGutterListeners(); }),
-        () => { setupEntryContextMenu(); setupToolbar(); setupSidePanelHandle(); },
-        () => { setupFindDialog(); setupSchemaModal(); },
-        () => { setupSelectionHandler(); setupZoom(); setupDragDrop(); },
-        () => { setupMigrateModal(); },
-        () => { setupBookmarksPanel(); setupHistoryPanel(); },
-        () => { setupCmdPalette(); },
-        () => { setupMinimap(); setupSplitHandle(); setupWelcomeListeners(); },
-        () => {
-          document.getElementById('power-warning-dismiss').addEventListener('click', dismissPowerWarning);
-          document.getElementById('power-warning-overlay').addEventListener('click', (e) => {
-            if (e.target.id === 'power-warning-overlay') dismissPowerWarning();
-          });
-        },
+      // ── All event listeners in one batch (fast, no I/O) ──
+      loadFindHistory();
+      setupEventListeners();
+      setupIPC();
+      setupKeyboard();
+      setupScrollSync();
+      setupEntryContextMenu();
+      setupToolbar();
+      setupSidePanelHandle();
+      setupFindDialog();
+      setupSchemaModal();
+      setupSelectionHandler();
+      setupZoom();
+      setupDragDrop();
+      setupMigrateModal();
+      setupBookmarksPanel();
+      setupHistoryPanel();
+      setupCmdPalette();
+      setupMinimap();
+      setupSplitHandle();
+      setupWelcomeListeners();
+      document.getElementById('power-warning-dismiss').addEventListener('click', dismissPowerWarning);
+      document.getElementById('power-warning-overlay').addEventListener('click', (e) => {
+        if (e.target.id === 'power-warning-overlay') dismissPowerWarning();
+      });
 
-        // ── Welcome screen or CLI file ──
-        () => {
-          let fileLoadedFromArgs = false;
-          const args = process.argv;
-          for (let i = 1; i < args.length; i++) {
-            if (args[i] && !args[i].startsWith('-') && args[i].toLowerCase().endsWith('.json')) {
-              if (fs.existsSync(args[i])) {
-                hideWelcomeScreen();
-                loadJsonAuto(args[i]);
-                fileLoadedFromArgs = true;
-                break;
-              }
-            }
+      // ── Monaco Editor (heaviest — await it) ──
+      await initMonacoEditors();
+      setupGutterListeners();
+
+      // ── Welcome screen or CLI file ──
+      let fileLoadedFromArgs = false;
+      const args = process.argv;
+      for (let i = 1; i < args.length; i++) {
+        if (args[i] && !args[i].startsWith('-') && args[i].toLowerCase().endsWith('.json')) {
+          if (fs.existsSync(args[i])) {
+            hideWelcomeScreen();
+            loadJsonAuto(args[i]);
+            fileLoadedFromArgs = true;
+            break;
           }
-          if (!fileLoadedFromArgs) showWelcomeScreen();
-        },
+        }
+      }
+      if (!fileLoadedFromArgs) showWelcomeScreen();
 
-        // ── Heavy I/O — each on its own tick ──
-        () => { loadGlossary(); },
-        () => { startPowerWarningTimer(); startRecoveryTimer(); },
-        () => { checkRecoveryOnStartup(); },
-        () => { initHighlightWorker(); },
-        () => { initAnalysisWorker(); },
-        () => sendDictToWorker(),  // async — runSteps awaits the promise
+      // ── Background I/O (non-blocking) ──
+      loadGlossary();
+      startPowerWarningTimer();
+      startRecoveryTimer();
+      checkRecoveryOnStartup();
+      sendDictToWorker();
 
-        // ── Done — dismiss loading screen ──
-        () => {
-          const ls = document.getElementById('loading-screen');
-          if (ls) {
-            ls.classList.add('fade-out');
-            setTimeout(() => { ls.remove(); ipcRenderer.send('window:show-menu'); }, 500);
-          }
-        },
-      ]);
+      // ── Done — dismiss loading screen ──
+      const ls = document.getElementById('loading-screen');
+      if (ls) {
+        ls.classList.add('fade-out');
+        setTimeout(() => { ls.remove(); ipcRenderer.send('window:show-menu'); }, 500);
+      }
     }, 0);
   });
 }
