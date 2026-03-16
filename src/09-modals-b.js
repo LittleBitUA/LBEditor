@@ -72,6 +72,32 @@ async function importGlossary() {
   setStatus(`Імпорт: +${addedCount} нових, ${replacedCount} замінено, ${conflicts.length - replacedCount} збережено.`);
 }
 
+async function exportGlossary() {
+  const dict = getGlossaryFromTable();
+  const keys = Object.keys(dict);
+  if (keys.length === 0) {
+    showInfo('Експорт', 'Словник порожній — нічого експортувати.');
+    return;
+  }
+
+  if (_dialogBusy) return;
+  _dialogBusy = true;
+  let savePath;
+  try {
+    savePath = await ipcRenderer.invoke('dialog:save-file', 'glossary.json');
+  } finally { _dialogBusy = false; }
+  if (!savePath) return;
+
+  try {
+    const sorted = {};
+    for (const k of keys.sort((a, b) => a.localeCompare(b, 'uk'))) sorted[k] = dict[k];
+    fs.writeFileSync(savePath, JSON.stringify(sorted, null, 2), 'utf-8');
+    setStatus(`Словник експортовано: ${keys.length} записів → ${nodePath.basename(savePath)}`);
+  } catch (e) {
+    showInfo('Помилка', `Не вдалося зберегти:\n${e.message}`);
+  }
+}
+
 function resolveImportConflicts(conflictKeys, current, imported) {
   return new Promise((resolve) => {
     // Build conflict resolution UI

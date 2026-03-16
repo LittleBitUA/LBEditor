@@ -536,6 +536,7 @@ function setupEventListeners() {
   document.getElementById('gloss-search').addEventListener('input', (e) => filterGlossaryTable(e.target.value));
   document.getElementById('gloss-dict-select').addEventListener('change', (e) => switchGlossaryDictView(e.target.value));
   document.getElementById('gloss-import').addEventListener('click', importGlossary);
+  document.getElementById('gloss-export').addEventListener('click', exportGlossary);
 
   // Diff modal
   document.getElementById('diff-close').addEventListener('click', hideDiffModal);
