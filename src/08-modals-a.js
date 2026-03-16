@@ -179,6 +179,7 @@ function showSettingsModal() {
   document.getElementById('set-periodic-backup').checked = s.periodic_backup;
   document.getElementById('set-periodic-interval').value = s.periodic_backup_interval;
   document.getElementById('set-code-words').value = s.progress_code_words || '';
+  document.getElementById('set-progress-unit').value = s.progress_unit || 'lines';
   document.getElementById('set-other-ext').value = s.other_extensions || '.txt';
   document.getElementById('set-layout').value = s.layout || 'list-left';
   document.getElementById('set-show-bookmarks').checked = s.show_bookmarks !== false;
@@ -372,6 +373,7 @@ function saveSettingsFromModal() {
     split_mode_default: document.getElementById('set-split-default').checked,
     spellcheck_enabled: document.getElementById('set-spellcheck').checked,
     progress_code_words: document.getElementById('set-code-words').value,
+    progress_unit: document.getElementById('set-progress-unit').value || 'lines',
     other_extensions: document.getElementById('set-other-ext').value.trim() || '.txt',
     power_schedule: readPowerGridState(),
     show_bookmarks: document.getElementById('set-show-bookmarks').checked,
