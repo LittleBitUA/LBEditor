@@ -735,6 +735,9 @@ function renderTabBar() {
     if (idx === state.currentIndex) el.classList.add('active');
     if (entry.dirty) el.classList.add('has-dirty');
     if (idx === _previewTabIdx) el.classList.add('preview');
+    const tagData = getEntryTagData(entry);
+    if (tagData.tag === 'translated') el.classList.add('tab-translated');
+    else if (tagData.tag === 'edited') el.classList.add('tab-edited');
 
     const lbl = document.createElement('span');
     lbl.className = 'tab-label';
@@ -1891,6 +1894,7 @@ function setEntryTag(entryIndex, tag) {
   saveEntryTags();
   updateVisibleEntry(entryIndex);
   updateProgress();
+  renderTabBar();
 }
 
 function setEntryNote(entryIndex, note) {
@@ -6584,6 +6588,7 @@ function setupEntryContextMenu() {
       saveEntryTags();
       for (const idx of indices) updateVisibleEntry(idx);
       updateProgress();
+      renderTabBar();
     }
     hideEntryContextMenu();
   });

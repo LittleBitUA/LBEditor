@@ -173,6 +173,7 @@ function setEntryTag(entryIndex, tag) {
   saveEntryTags();
   updateVisibleEntry(entryIndex);
   updateProgress();
+  renderTabBar();
 }
 
 function setEntryNote(entryIndex, note) {

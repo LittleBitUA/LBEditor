@@ -1997,6 +1997,9 @@ body {
   font-style: italic;
 }
 
+.tab-item.tab-translated .tab-label { color: #4ade80; }
+.tab-item.tab-edited .tab-label { color: #fb923c; }
+
 .tab-label {
   overflow: hidden;
   text-overflow: ellipsis;

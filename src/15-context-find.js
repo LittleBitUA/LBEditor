@@ -191,6 +191,7 @@ function setupEntryContextMenu() {
       saveEntryTags();
       for (const idx of indices) updateVisibleEntry(idx);
       updateProgress();
+      renderTabBar();
     }
     hideEntryContextMenu();
   });
