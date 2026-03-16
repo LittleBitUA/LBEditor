@@ -952,6 +952,7 @@ body {
 
 .ctx-dot-translated { background: #4ade80; box-shadow: 0 0 4px #4ade80; }
 .ctx-dot-edited { background: #fb923c; box-shadow: 0 0 4px #fb923c; }
+.ctx-dot-none { background: rgba(128,128,128,0.3); border: 1px solid rgba(128,128,128,0.4); }
 
 .ctx-sep {
   height: 1px;

@@ -26,8 +26,8 @@
   // Update tag menu items with count (preserve inner <span> dot elements)
   const ctxTranslated = document.getElementById('ctx-translated');
   const ctxEdited = document.getElementById('ctx-edited');
-  const ctxClear = document.getElementById('ctx-clear-tag');
   const setCtxText = (el, text) => {
+    if (!el) return;
     const dot = el.querySelector('.ctx-dot');
     if (dot) {
       for (const child of [...el.childNodes]) {
@@ -40,7 +40,7 @@
   };
   setCtxText(ctxTranslated, 'Перекладено' + bulkSuffix);
   setCtxText(ctxEdited, 'Зредаговано' + bulkSuffix);
-  ctxClear.textContent = 'Зняти все' + bulkSuffix;
+  setCtxText(document.getElementById('ctx-no-status'), 'Без статусу' + bulkSuffix);
 
   // Update bookmark menu item
   const bmItem = document.getElementById('ctx-bookmark');
@@ -162,14 +162,14 @@ function getCtxTargetIndices() {
 }
 
 function setupEntryContextMenu() {
-  document.getElementById('ctx-translated').addEventListener('click', () => {
+  function setTagBulk(tag) {
     const indices = getCtxTargetIndices();
     for (const idx of indices) {
       const entry = state.entries[idx];
       if (!entry) continue;
       const key = getEntryTagKey(entry);
       const existing = getEntryTagData(key);
-      state.entryTags[key] = { tag: 'translated', note: existing.note };
+      state.entryTags[key] = { tag: tag, note: existing.note };
     }
     if (indices.length) {
       saveEntryTags();
@@ -178,15 +178,21 @@ function setupEntryContextMenu() {
       renderTabBar();
     }
     hideEntryContextMenu();
-  });
-  document.getElementById('ctx-edited').addEventListener('click', () => {
+  }
+  document.getElementById('ctx-translated').addEventListener('click', () => setTagBulk('translated'));
+  document.getElementById('ctx-edited').addEventListener('click', () => setTagBulk('edited'));
+  document.getElementById('ctx-no-status').addEventListener('click', () => {
     const indices = getCtxTargetIndices();
     for (const idx of indices) {
       const entry = state.entries[idx];
       if (!entry) continue;
       const key = getEntryTagKey(entry);
       const existing = getEntryTagData(key);
-      state.entryTags[key] = { tag: 'edited', note: existing.note };
+      if (existing.note) {
+        state.entryTags[key] = { tag: null, note: existing.note };
+      } else {
+        delete state.entryTags[key];
+      }
     }
     if (indices.length) {
       saveEntryTags();
@@ -207,20 +213,8 @@ function setupEntryContextMenu() {
       hideEntryContextMenu();
     }
   });
-  document.getElementById('ctx-clear-tag').addEventListener('click', () => {
-    const indices = getCtxTargetIndices();
-    for (const idx of indices) {
-      const entry = state.entries[idx];
-      if (entry) delete state.entryTags[getEntryTagKey(entry)];
-    }
-    if (indices.length) {
-      saveEntryTags();
-      for (const idx of indices) updateVisibleEntry(idx);
-      updateProgress();
-      renderTabBar();
-    }
-    hideEntryContextMenu();
-  });
+  // "Без статусу" — remove tag only, keep note
+  // (replaces old ctx-clear-tag which removed both tag and note)
 
   // Compare
   document.getElementById('ctx-compare').addEventListener('click', () => {
