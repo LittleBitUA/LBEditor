@@ -402,28 +402,7 @@ function setupEventListeners() {
       return;
     }
 
-    // Ctrl+A — select all visible (filtered) entries
-    if (e.ctrlKey && e.key === 'a') {
-      e.preventDefault();
-      e.stopPropagation();
-      _multiSelected.clear();
-      for (const entry of _filteredEntries) _multiSelected.add(entry.index);
-      applyMultiSelectVisual();
-      setStatus(`Виділено: ${_multiSelected.size} записів`);
-      return;
-    }
-
-    // Delete — remove selected entries from list
-    if (e.key === 'Delete' && !e.ctrlKey && !e.altKey && !e.shiftKey) {
-      const indices = _multiSelected.size > 0 ? getMultiSelectedIndices() : (state.currentIndex >= 0 ? [state.currentIndex] : []);
-      if (indices.length === 0) return;
-      e.preventDefault();
-      const sorted = indices.slice().sort((a, b) => b - a);
-      for (const idx of sorted) removeEntryFromList(idx);
-      clearMultiSelect();
-      setStatus(`Видалено зі списку: ${indices.length} записів`);
-      return;
-    }
+    // Ctrl+A and Delete are handled globally (capture/bubble phase handlers above)
 
     if (e.ctrlKey || e.altKey || e.shiftKey) return;
     if (e.key === 'ArrowDown') { e.preventDefault(); goNext(); return; }
