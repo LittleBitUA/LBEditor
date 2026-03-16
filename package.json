@@ -13,7 +13,7 @@
   },
   "build": {
     "appId": "com.littlebit.lb-tool",
-    "productName": "LB",
+    "productName": "LB Editor",
     "files": [
       "main.js",
       "renderer.js",
@@ -53,12 +53,12 @@
       "icon": "build/icon.ico"
     },
     "portable": {
-      "artifactName": "LB.exe"
+      "artifactName": "LB Editor.exe"
     },
     "nsis": {
       "oneClick": true,
       "perMachine": false,
-      "artifactName": "LB-Setup.exe"
+      "artifactName": "LB Editor-Setup.exe"
     },
     "mac": {
       "target": [{ "target": "dmg" }],
