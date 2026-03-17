@@ -60,6 +60,9 @@ function createWindow() {
 
   mainWindow.loadFile('index.html');
 
+  // Prevent Electron default drag-drop behavior (navigation to dropped file)
+  mainWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
+
   // Hide menu during loading screen
   mainWindow.setMenuBarVisibility(false);
 
@@ -200,10 +203,11 @@ function buildMenu() {
 function setupIpcHandlers() {
   ipcMain.handle('dialog:open-file', async () => {
     const result = dialog.showOpenDialogSync(mainWindow, {
-      title: 'Відкрити JSON',
+      title: 'Відкрити файл',
       filters: [
         { name: 'JSON', extensions: ['json'] },
-        { name: 'Text', extensions: ['txt'] },
+        { name: 'Text / CSV', extensions: ['txt', 'csv', 'tsv'] },
+        { name: 'Excel', extensions: ['xlsx', 'xls', 'ods'] },
         { name: 'All', extensions: ['*'] },
       ],
       properties: ['openFile'],

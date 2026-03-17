@@ -25,12 +25,14 @@
       "styles.css",
       "node_modules/nspell/**/*",
       "node_modules/is-buffer/**/*",
-      "node_modules/monaco-editor/**/*"
+      "node_modules/monaco-editor/**/*",
+      "node_modules/xlsx/**/*"
     ],
     "asarUnpack": [
       "highlight-worker.js",
       "analysis-worker.js",
       "io-worker.js",
+      "compute-worker.js",
       "node_modules/nspell/**/*",
       "node_modules/is-buffer/**/*",
       "node_modules/monaco-editor/min/**"
@@ -61,12 +63,20 @@
       "artifactName": "LB Editor-Setup.exe"
     },
     "mac": {
-      "target": [{ "target": "dmg" }],
+      "target": [
+        {
+          "target": "dmg"
+        }
+      ],
       "icon": "build/icon.icns",
       "artifactName": "LB-mac.dmg"
     },
     "linux": {
-      "target": [{ "target": "AppImage" }],
+      "target": [
+        {
+          "target": "AppImage"
+        }
+      ],
       "icon": "build/icon.png",
       "artifactName": "LB-linux.AppImage"
     }
@@ -77,7 +87,8 @@
   },
   "dependencies": {
     "monaco-editor": "^0.55.1",
-    "nspell": "^2.1.5"
+    "nspell": "^2.1.5",
+    "xlsx": "^0.18.5"
   },
   "optionalDependencies": {
     "electron-liquid-glass": "^1.1.1"

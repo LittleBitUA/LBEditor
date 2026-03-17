@@ -441,6 +441,52 @@ function applyGlossaryToEntry(entry, orig, trans) {
 // ═══════════════════════════════════════════════════════════
 
 let _originalEditorLines = [];
+let _schemaViewActive = true;      // default: show schema text when schema exists
+let _schemaViewOrigText = '';      // original schema text for dirty check
+// _schemaViewCurrentlyUsed is declared in 01-head.js (needed by getActiveEditor)
+
+function _isSchemaViewApplicable(entry) {
+  if (!entry) return false;
+  const schema = getFileSchema(entry);
+  if (!schema) return false;
+  if (schema.customSchemaIdx != null) return false; // regex schemas → use table view
+  // Check that schema actually filters something (has textPaths)
+  if (!schema.textPaths || schema.textPaths.length === 0) return false;
+  return true;
+}
+
+function toggleSchemaView() {
+  if (state.currentIndex < 0 || state.currentIndex >= state.entries.length) return;
+  const entry = state.entries[state.currentIndex];
+  if (!_isSchemaViewApplicable(entry) && !_schemaViewCurrentlyUsed) return;
+
+  // Just switch display mode — no auto-save, this is purely visual
+  _schemaViewActive = !_schemaViewActive;
+  loadEditor();
+
+  const btn = document.getElementById('tb-schema-view');
+  if (btn) {
+    btn.classList.toggle('active', _schemaViewCurrentlyUsed);
+    btn.title = _schemaViewCurrentlyUsed
+      ? 'Режим схеми (тільки текст для перекладу). Натисніть для повного файлу'
+      : 'Повний файл. Натисніть для режиму схеми';
+  }
+
+  setStatus(_schemaViewCurrentlyUsed ? 'Режим схеми: тільки текст для перекладу' : 'Повний файл');
+}
+
+function updateSchemaViewButton() {
+  const btn = document.getElementById('tb-schema-view');
+  if (!btn) return;
+  const entry = (state.currentIndex >= 0 && state.currentIndex < state.entries.length)
+    ? state.entries[state.currentIndex] : null;
+  const applicable = _isSchemaViewApplicable(entry);
+  btn.style.display = applicable ? '' : 'none';
+  btn.classList.toggle('active', _schemaViewCurrentlyUsed);
+  btn.title = _schemaViewCurrentlyUsed
+    ? 'Режим схеми (тільки текст для перекладу). Натисніть для повного файлу'
+    : 'Повний файл. Натисніть для режиму схеми';
+}
 
 function loadEditor(deferHeavy) {
   if (state.currentIndex < 0 || state.currentIndex >= state.entries.length) return;
@@ -464,14 +510,52 @@ function loadEditor(deferHeavy) {
   _modifiedDecoIds = getActiveEditor().deltaDecorations(_modifiedDecoIds, []);
   if (_monaco) _monaco.editor.setModelMarkers(getActiveEditor().getModel(), 'spellcheck', []);
 
+  // Spreadsheet view for xlsx/csv entries
+  if ((entry._isSpreadsheet || entry._isCsv) && typeof showSpreadsheetView === 'function') {
+    showSpreadsheetView(entry);
+    _schemaViewCurrentlyUsed = false;
+    _schemaViewOrigText = '';
+    // Store original for dirty check
+    _originalEditorLines = [...entry.text];
+    state.loadingEditor = false;
+    updateMeta();
+    updateEditorDirtyVisual();
+    updateSchemaViewButton();
+    if (typeof renderSheetTabs === 'function') renderSheetTabs(entry);
+    return;
+  }
+
+  // Not spreadsheet — ensure spreadsheet view is hidden
+  if (_ssViewActive && typeof hideSpreadsheetView === 'function') hideSpreadsheetView();
+
+  // Determine if schema view should be used for this entry
+  _schemaViewCurrentlyUsed = _schemaViewActive && _isSchemaViewApplicable(entry) && !_tableViewActive;
+
   // Set editor content (suppress change events during programmatic setValue)
   _suppressMonacoChange = true;
-  if (state.appMode === 'other' || state.appMode === 'jojo') {
+  if (_schemaViewCurrentlyUsed) {
+    const schemaText = getTextLinesForEntry(entry).join('\n');
+    _schemaViewOrigText = schemaText;
+    _monacoFlat.setValue(schemaText);
+    // Always use flat editor in schema view (hide split)
+    if (state.splitMode && state.appMode === 'ishin') {
+      document.getElementById('split-editor-container').style.display = 'none';
+      document.getElementById('flat-editor-container').style.display = '';
+    }
+  } else if (state.appMode === 'other' || state.appMode === 'jojo') {
+    _schemaViewOrigText = '';
     _monacoFlat.setValue(entry.toFlat());
   } else if (state.splitMode) {
+    _schemaViewOrigText = '';
+    // Restore split editor containers if they were hidden by schema view
+    document.getElementById('split-editor-container').style.display = '';
+    document.getElementById('flat-editor-container').style.display = 'none';
     _monacoText.setValue(entry.text.join('\n'));
     _monacoSp.setValue(entry.visibleSpeakers().join('\n'));
   } else {
+    _schemaViewOrigText = '';
+    // Restore flat editor if it was hidden
+    document.getElementById('flat-editor-container').style.display = '';
     _monacoFlat.setValue(entry.toFlat(state.useSeparator));
   }
   _suppressMonacoChange = false;
@@ -482,6 +566,10 @@ function loadEditor(deferHeavy) {
   state.loadingEditor = false;
   updateMeta();
   updateEditorDirtyVisual();
+  updateSchemaViewButton();
+
+  // Sheet tabs for multi-sheet spreadsheets
+  if (typeof renderSheetTabs === 'function') renderSheetTabs(entry);
 
   if (deferHeavy) {
     updateHighlights(false);
@@ -518,10 +606,11 @@ function updateCharCount() {
     return;
   }
   const currentEntry = state.entries[state.currentIndex];
-  const schema = getFileSchema(currentEntry);
-  const raw = schema
-    ? getTextLinesForEntry(currentEntry).join('\n')
-    : getActiveEditorText();
+  const raw = _schemaViewCurrentlyUsed
+    ? getActiveEditorText()
+    : (getFileSchema(currentEntry)
+      ? getTextLinesForEntry(currentEntry).join('\n')
+      : getActiveEditorText());
   const { total, clean } = countChars(raw);
   const wc = countWords(raw);
   dom.metaChars.textContent = `${clean} / ${total} сим.`;
@@ -579,9 +668,16 @@ function updateHint() {
 
 function editorDirty() {
   if (state.currentIndex < 0 || state.currentIndex >= state.entries.length) return false;
-  if (!_monacoReady) return false;
   const entry = state.entries[state.currentIndex];
 
+  // Spreadsheet view: dirty is tracked via entry.dirty
+  if (_ssViewActive) return entry.dirty;
+
+  if (!_monacoReady) return false;
+
+  if (_schemaViewCurrentlyUsed) {
+    return _monacoFlat.getValue() !== _schemaViewOrigText;
+  }
   if (state.appMode === 'other' || state.appMode === 'jojo') {
     return _monacoFlat.getValue() !== entry.toFlat();
   }
@@ -715,15 +811,35 @@ function checkGlossaryHints() {
 //  Duplicate entry detection
 // ═══════════════════════════════════════════════════════════
 
+// Precomputed duplicate lookup map: hash → [entry, ...]
+let _dupMapCache = null;
+let _dupMapCacheLen = -1;
+
+function _getDupKey(entry) {
+  return entry.originalText.join('\n') + '\x00' + entry.originalSpeakers.join('\n');
+}
+
+function _ensureDupMap() {
+  if (_dupMapCache && _dupMapCacheLen === state.entries.length) return _dupMapCache;
+  _dupMapCache = new Map();
+  for (const e of state.entries) {
+    const key = _getDupKey(e);
+    if (!_dupMapCache.has(key)) _dupMapCache.set(key, []);
+    _dupMapCache.get(key).push(e);
+  }
+  _dupMapCacheLen = state.entries.length;
+  return _dupMapCache;
+}
+
+function invalidateDupMap() { _dupMapCache = null; _dupMapCacheLen = -1; }
+
 function findDuplicateEntries(entry) {
   if (state.appMode === 'other' || state.appMode === 'jojo') return [];
-  const origText = entry.originalText.join('\n');
-  const origSp = entry.originalSpeakers.join('\n');
-  return state.entries.filter(e =>
-    e.index !== entry.index &&
-    e.originalText.join('\n') === origText &&
-    e.originalSpeakers.join('\n') === origSp
-  );
+  const map = _ensureDupMap();
+  const key = _getDupKey(entry);
+  const group = map.get(key);
+  if (!group || group.length <= 1) return [];
+  return group.filter(e => e.index !== entry.index);
 }
 
 // ═══════════════════════════════════════════════════════════

@@ -186,6 +186,7 @@ function showSettingsModal() {
   document.getElementById('set-plugin-glossary').checked = s.plugin_glossary !== false;
   renderPowerGrid(s.power_schedule);
   renderParseKeysSettings();
+  _populateCsvFormatsTab(s);
 
   // Reset to first tab, reset theme editor state
   document.querySelectorAll('#settings-modal .tab-btn').forEach(b => b.classList.remove('active'));
@@ -381,6 +382,7 @@ function saveSettingsFromModal() {
     layout: newLayout,
     plugin_glossary: document.getElementById('set-plugin-glossary').checked,
     parse_keys: collectParseKeysFromUI(),
+    csv_formats: _collectCsvFormatsFromUI(),
   });
   setLayout(newLayout);
   saveSettings();
@@ -388,6 +390,131 @@ function saveSettingsFromModal() {
   updateProgress();
   hideSettingsModal();
   setStatus('Налаштування збережено.');
+}
+
+// ─── CSV Formats tab helpers ────────────────────────────────
+
+function _delimLabel(d) {
+  if (d === ',') return ', (кома)';
+  if (d === ';') return '; (крапка з комою)';
+  if (d === '\t') return 'Tab';
+  if (d === '|') return '| (вертикальна риска)';
+  return d;
+}
+
+function _populateCsvFormatsTab(s) {
+  const fmt = s.csv_formats || {};
+  _csvFormatsBuffer = JSON.parse(JSON.stringify(fmt));
+  // Default delimiter
+  const defaultDelim = fmt._default_delimiter || 'auto';
+  const defaultHeaders = fmt._default_headers || 'auto';
+  document.getElementById('set-csv-delim-default').value = defaultDelim;
+  document.getElementById('set-csv-headers-default').value = defaultHeaders;
+
+  // Per-file overrides list
+  _renderCsvOverrides(_csvFormatsBuffer);
+}
+
+function _renderCsvOverrides(fmt) {
+  const container = document.getElementById('csv-format-overrides');
+  container.innerHTML = '';
+  const overrideKeys = Object.keys(fmt).filter(k => !k.startsWith('_'));
+  if (overrideKeys.length === 0) {
+    container.innerHTML = '<div style="color:var(--text-muted);font-size:11px;padding:4px;">Немає перевизначень</div>';
+    return;
+  }
+  for (const key of overrideKeys) {
+    const val = fmt[key];
+    const row = document.createElement('div');
+    row.className = 'csv-override-row';
+    row.innerHTML = `
+      <span class="csv-override-name" title="${key}">${key}</span>
+      <select class="csv-override-delim" data-key="${key}">
+        <option value=","${val.delimiter === ',' ? ' selected' : ''}>, (кома)</option>
+        <option value=";"${val.delimiter === ';' ? ' selected' : ''}>; (крапка з комою)</option>
+        <option value="&#9;"${val.delimiter === '\t' ? ' selected' : ''}>Tab</option>
+        <option value="|"${val.delimiter === '|' ? ' selected' : ''}>| (вертикальна риска)</option>
+      </select>
+      <button class="csv-override-del" data-key="${key}" title="Видалити">\u00d7</button>
+    `;
+    container.appendChild(row);
+  }
+  // Attach delete handlers
+  container.querySelectorAll('.csv-override-del').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const k = btn.dataset.key;
+      delete _csvFormatsBuffer[k];
+      _renderCsvOverrides(_csvFormatsBuffer);
+    });
+  });
+}
+
+let _csvFormatsBuffer = {};
+
+function _collectCsvFormatsFromUI() {
+  const result = Object.assign({}, _csvFormatsBuffer);
+  const defaultDelim = document.getElementById('set-csv-delim-default').value;
+  const defaultHeaders = document.getElementById('set-csv-headers-default').value;
+  if (defaultDelim !== 'auto') result._default_delimiter = defaultDelim;
+  if (defaultHeaders !== 'auto') result._default_headers = defaultHeaders;
+
+  // Collect per-file delimiter changes from UI
+  document.querySelectorAll('.csv-override-delim').forEach(sel => {
+    const key = sel.dataset.key;
+    if (!result[key]) result[key] = {};
+    result[key].delimiter = sel.value;
+  });
+
+  return result;
+}
+
+function _setupCsvFormatsUI() {
+  document.getElementById('csv-format-add').addEventListener('click', () => {
+    // Show a list of currently open CSV/spreadsheet files to choose from
+    const csvEntries = state.entries.filter(e => e._isCsv || e._isSpreadsheet);
+    if (csvEntries.length === 0) {
+      showInfo('Формати', 'Немає відкритих CSV/Excel файлів. Відкрийте файл спочатку.');
+      return;
+    }
+    // Build a simple selection list
+    const names = csvEntries.map(e => e.file || e.filePath);
+    const uniqueNames = [...new Set(names)];
+    // Use ask() with file list
+    const listHtml = uniqueNames.map((n, i) => `<div class="csv-pick-item" data-idx="${i}" style="padding:4px 8px;cursor:pointer;border-radius:4px;">${n}</div>`).join('');
+    const overlay = document.createElement('div');
+    overlay.className = 'csv-pick-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:9999;display:flex;align-items:center;justify-content:center;';
+    const panel = document.createElement('div');
+    panel.style.cssText = 'background:var(--bg-primary);border:1px solid var(--border);border-radius:8px;padding:16px;max-height:300px;overflow-y:auto;min-width:280px;';
+    panel.innerHTML = `<div style="font-weight:600;margin-bottom:8px;font-size:13px;">Оберіть файл</div>${listHtml}`;
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) { overlay.remove(); return; }
+      const item = e.target.closest('.csv-pick-item');
+      if (!item) return;
+      const name = uniqueNames[parseInt(item.dataset.idx, 10)];
+      if (!_csvFormatsBuffer[name]) _csvFormatsBuffer[name] = {};
+      if (!_csvFormatsBuffer[name].delimiter) _csvFormatsBuffer[name].delimiter = ',';
+      _renderCsvOverrides(_csvFormatsBuffer);
+      overlay.remove();
+    });
+    // Hover effect
+    panel.querySelectorAll('.csv-pick-item').forEach(el => {
+      el.addEventListener('mouseenter', () => el.style.background = 'var(--bg-glass-hover)');
+      el.addEventListener('mouseleave', () => el.style.background = '');
+    });
+  });
+
+  document.getElementById('csv-format-clear').addEventListener('click', () => {
+    // Clear all overrides (keep defaults)
+    const def = {};
+    if (_csvFormatsBuffer._default_delimiter) def._default_delimiter = _csvFormatsBuffer._default_delimiter;
+    if (_csvFormatsBuffer._default_headers) def._default_headers = _csvFormatsBuffer._default_headers;
+    _csvFormatsBuffer = def;
+    _renderCsvOverrides(_csvFormatsBuffer);
+  });
 }
 
 // ─── Glossary modal ─────────────────────────────────────────

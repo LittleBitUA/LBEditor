@@ -55,7 +55,7 @@
   // Show "Remove from list" only for other/jojo modes or external entries
   const removeSep = document.getElementById('ctx-remove-sep');
   const removeItem = document.getElementById('ctx-remove-entry');
-  const canRemove = state.appMode === 'other' || state.appMode === 'jojo' || (entry && entry.external);
+  const canRemove = true; // allow removing entries in any mode
   removeSep.classList.toggle('hidden', !canRemove);
   removeItem.classList.toggle('hidden', !canRemove);
   if (canRemove) removeItem.textContent = 'Видалити зі списку' + bulkSuffix;
@@ -139,6 +139,10 @@ function removeEntryFromList(idx) {
       _monacoFlat.setValue('');
       _monacoText.setValue('');
       _monacoSp.setValue('');
+      // Return to welcome screen when all entries removed
+      showWelcomeScreen();
+      setStatus(`Видалено зі списку: ${name}`);
+      return;
     } else {
       state.currentIndex = Math.min(idx, state.entries.length - 1);
       selectEntryByIndex(state.currentIndex);

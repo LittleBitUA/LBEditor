@@ -460,17 +460,75 @@ function applyHighlightResult(msg) {
   applySpellMarkers(editor, msg.spellRanges || []);
 }
 
+let _glossRangesForHover = [];
+
 function applyGlossaryDecorations(editor, ranges) {
   if (!_monaco) return;
   const model = editor.getModel();
+  _glossRangesForHover = ranges;
   const decs = ranges.map(r => ({
     range: offsetToRange(model, r.start, r.end),
-    options: {
-      inlineClassName: 'glossary-highlight',
-      hoverMessage: { value: r.text ? `**${r.text}** → ${state.glossary[r.text] || ''}` : '' }
-    }
+    options: { inlineClassName: 'glossary-highlight' }
   }));
   _glossDecorationIds = editor.deltaDecorations(_glossDecorationIds, decs);
+}
+
+function _glossLookup(term) {
+  return state.glossary[term]
+    || state.glossary[term.toLowerCase()]
+    || state.glossary[Object.keys(state.glossary).find(k => k.toLowerCase() === term.toLowerCase())]
+    || '';
+}
+
+function setupEditorGlossaryHover(editor) {
+  let hideTimer = null;
+  const cloud = document.getElementById('gloss-cloud');
+  if (!cloud) return;
+
+  editor.onMouseMove((e) => {
+    if (!e.target || !e.target.position) return;
+    const el = e.target.element;
+    if (!el || !el.classList.contains('glossary-highlight')) {
+      if (!hideTimer) hideTimer = setTimeout(() => { cloud.classList.add('hidden'); hideTimer = null; }, 400);
+      return;
+    }
+    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+
+    const model = editor.getModel();
+    const offset = model.getOffsetAt(e.target.position);
+    let match = null;
+    for (const r of _glossRangesForHover) {
+      if (offset >= r.start && offset < r.end) { match = r; break; }
+    }
+    if (!match) return;
+
+    const term = match.text;
+    const trans = _glossLookup(term);
+    if (!trans) return;
+
+    document.getElementById('gloss-cloud-orig').textContent = term;
+    document.getElementById('gloss-cloud-trans').textContent = trans;
+    glossCloudState = { editor, start: match.start, end: match.end, term, trans };
+
+    const coords = editor.getScrolledVisiblePosition(e.target.position);
+    if (coords) {
+      const domNode = editor.getDomNode();
+      const rect = domNode.getBoundingClientRect();
+      const x = Math.min(rect.left + coords.left, window.innerWidth - 260);
+      const y = Math.min(rect.top + coords.top + coords.height + 4, window.innerHeight - 100);
+      cloud.style.left = x + 'px';
+      cloud.style.top = Math.max(4, y) + 'px';
+    }
+    cloud.classList.remove('hidden');
+  });
+
+  cloud.addEventListener('mouseenter', () => {
+    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+  });
+  cloud.addEventListener('mouseleave', () => {
+    if (hideTimer) clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => { cloud.classList.add('hidden'); hideTimer = null; }, 300);
+  });
 }
 
 function applySpellMarkers(editor, ranges) {

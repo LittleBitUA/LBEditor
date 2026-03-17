@@ -4,6 +4,41 @@ async function applyChanges() {
   if (state.currentIndex < 0 || state.currentIndex >= state.entries.length) return;
   const entry = state.entries[state.currentIndex];
 
+  // Schema view write-back
+  if (_schemaViewCurrentlyUsed) {
+    const editedLines = _monacoFlat.getValue().split('\n');
+    const oldText = Array.isArray(entry.text) ? [...entry.text] : entry.text;
+    const oldSp = entry.speakers ? [...entry.speakers] : undefined;
+
+    const ok = applySchemaLinesToEntry(entry, editedLines);
+    if (!ok) {
+      setStatus('Не вдалося зберегти зміни через схему. Перемкніться в повний режим.');
+      return;
+    }
+
+    const newText = Array.isArray(entry.text) ? entry.text : entry.text;
+    const newSp = entry.speakers || undefined;
+    recordHistory(entry, oldText, newText, oldSp, newSp, 'edit');
+    entry.dirty = true;
+    entry._invalidateCaches();
+    _navHintsCache.delete(entry.index);
+
+    // Update schema orig text so editorDirty() knows the new baseline
+    _schemaViewOrigText = getTextLinesForEntry(entry).join('\n');
+    _suppressMonacoChange = true;
+    _monacoFlat.setValue(_schemaViewOrigText);
+    _suppressMonacoChange = false;
+    _originalEditorLines = _schemaViewOrigText.split('\n');
+
+    updateVisibleEntry(entry.index);
+    updateMeta();
+    updateEditorDirtyVisual();
+    updateProgress();
+    markRecoveryDirty();
+    setStatus(`Застосовано (схема): [${entry.index + 1}] ${entry.file}`);
+    return;
+  }
+
   if (state.appMode === 'jojo') {
     const val = _monacoFlat.getValue();
     recordHistory(entry, entry.text, val, undefined, undefined, 'edit');
@@ -129,6 +164,18 @@ function silentApply() {
   if (state.currentIndex < 0 || state.currentIndex >= state.entries.length) return;
   if (!_monacoReady) return;
   const entry = state.entries[state.currentIndex];
+
+  if (_schemaViewCurrentlyUsed) {
+    const editedLines = _monacoFlat.getValue().split('\n');
+    if (applySchemaLinesToEntry(entry, editedLines)) {
+      entry._invalidateCaches();
+      _schemaViewOrigText = getTextLinesForEntry(entry).join('\n');
+    }
+    updateVisibleEntry(entry.index);
+    updateMeta();
+    updateEditorDirtyVisual();
+    return;
+  }
 
   if (state.appMode === 'jojo') {
     entry.applyChanges(_monacoFlat.getValue());

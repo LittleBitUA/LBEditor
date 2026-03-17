@@ -266,6 +266,52 @@
   color: var(--text-muted);
 }
 
+/* ─── Drop zone ─── */
+
+.welcome-drop-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 20px 16px;
+  margin-bottom: 24px;
+  border: 2px dashed var(--border-glass);
+  border-radius: 14px;
+  background: transparent;
+  transition: border-color 0.2s, background 0.2s, transform 0.2s;
+  pointer-events: none; /* clicks pass through to body drop handler */
+}
+.welcome-drop-icon {
+  font-size: 24px;
+  color: var(--text-muted);
+  transition: color 0.2s, transform 0.2s;
+}
+.welcome-drop-text {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  transition: color 0.2s;
+}
+.welcome-drop-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+/* Active state when dragging over */
+.welcome-drop-active .welcome-drop-zone {
+  border-color: var(--accent);
+  background: rgba(99, 132, 255, 0.06);
+  transform: scale(1.02);
+}
+.welcome-drop-active .welcome-drop-icon {
+  color: var(--accent);
+  transform: translateY(-2px);
+}
+.welcome-drop-active .welcome-drop-text {
+  color: var(--accent);
+}
+
 /* ─── Recent files section ─── */
 
 .welcome-recent-section {

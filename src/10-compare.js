@@ -74,7 +74,7 @@ function buildSideBySideDiff(linesA, linesB) {
 let _compareDiffs = [];
 let _compareDiffIdx = -1;
 
-function showCompareModal(idxA, idxB) {
+async function showCompareModal(idxA, idxB) {
   const entryA = state.entries[idxA];
   const entryB = state.entries[idxB];
   if (!entryA || !entryB) return;
@@ -83,7 +83,16 @@ function showCompareModal(idxA, idxB) {
   const textB = getEntryCurrentText(idxB);
   const linesA = textA.split('\n');
   const linesB = textB.split('\n');
-  const rows = buildSideBySideDiff(linesA, linesB);
+
+  // Offload diff computation to worker thread
+  let rows;
+  try {
+    const result = await sendToComputeWorker({ type: 'diff', linesA, linesB });
+    rows = result.rows;
+  } catch (_) {
+    // Fallback: compute on main thread
+    rows = buildSideBySideDiff(linesA, linesB);
+  }
 
   // Titles
   const nameA = entryA.file || '#' + idxA;
@@ -278,9 +287,9 @@ function loadMigrateSlot(key, filePath) {
     return;
   }
 
-  if (key === 'old') _migrate.oldLines = lines;
-  else if (key === 'new') _migrate.newLines = lines;
-  else if (key === 'ua') _migrate.uaLines = lines;
+  if (key === 'old') { _migrate.oldLines = lines; _migrate.oldPath = filePath; }
+  else if (key === 'new') { _migrate.newLines = lines; _migrate.newPath = filePath; }
+  else if (key === 'ua') { _migrate.uaLines = lines; _migrate.uaPath = filePath; }
 
   // Update slot UI
   const slot = document.getElementById('migrate-slot-' + key);
@@ -350,13 +359,30 @@ function migrateTexts(oldLines, newLines, uaLines) {
   return { result, matched, unmatched, total: newLines.length };
 }
 
-function runMigration() {
+async function runMigration() {
   if (_migrate.mode === 'dir') return runMigrationDir();
 
   if (!_migrate.oldLines || !_migrate.newLines || !_migrate.uaLines) return;
 
-  const { result, matched, unmatched, total } = migrateTexts(_migrate.oldLines, _migrate.newLines, _migrate.uaLines);
+  document.getElementById('migrate-run').disabled = true;
+  document.getElementById('migrate-stats').textContent = 'Обробка...';
+
+  let result, matched, unmatched, total;
+  try {
+    // Try worker thread first
+    const msg = await sendToComputeWorker({
+      type: 'migrate-file',
+      oldPath: _migrate.oldPath, newPath: _migrate.newPath, uaPath: _migrate.uaPath,
+    });
+    if (!msg.ok) throw new Error(msg.error);
+    ({ result, matched, unmatched, total } = msg);
+  } catch (_) {
+    // Fallback: compute on main thread
+    ({ result, matched, unmatched, total } = migrateTexts(_migrate.oldLines, _migrate.newLines, _migrate.uaLines));
+  }
+
   _migrate.result = result;
+  document.getElementById('migrate-run').disabled = false;
 
   // Stats
   document.getElementById('migrate-stats').textContent =
@@ -375,40 +401,49 @@ function runMigration() {
   document.getElementById('migrate-save').classList.remove('hidden');
 }
 
-function runMigrationDir() {
+async function runMigrationDir() {
   if (!_migrate.oldDir || !_migrate.newDir || !_migrate.uaDir) return;
 
-  const newFiles = _migrate.newFiles;
-  const results = [];
-  let totalMatched = 0, totalUnmatched = 0, totalLines = 0;
+  document.getElementById('migrate-run').disabled = true;
+  document.getElementById('migrate-stats').textContent = 'Обробка директорій...';
 
-  for (const filename of newFiles) {
-    const oldPath = nodePath.join(_migrate.oldDir, filename);
-    const newPath = nodePath.join(_migrate.newDir, filename);
-    const uaPath = nodePath.join(_migrate.uaDir, filename);
-
-    const newLines = readTxtLines(newPath);
-
-    if (fs.existsSync(oldPath) && fs.existsSync(uaPath)) {
-      const oldLines = readTxtLines(oldPath);
-      const uaLines = readTxtLines(uaPath);
-      const r = migrateTexts(oldLines, newLines, uaLines);
-      results.push({ filename, ...r, status: 'migrated' });
-      totalMatched += r.matched;
-      totalUnmatched += r.unmatched;
-    } else {
-      results.push({
-        filename,
-        result: newLines.map(t => ({ text: t, matched: false })),
-        matched: 0, unmatched: newLines.length, total: newLines.length,
-        status: 'new'
-      });
-      totalUnmatched += newLines.length;
+  let results, totalMatched, totalUnmatched, totalLines;
+  try {
+    // Offload entire dir migration to worker thread
+    const msg = await sendToComputeWorker({
+      type: 'migrate-dir',
+      oldDir: _migrate.oldDir, newDir: _migrate.newDir, uaDir: _migrate.uaDir,
+      newFiles: _migrate.newFiles,
+    });
+    if (!msg.ok) throw new Error(msg.error);
+    ({ results, totalMatched, totalUnmatched, totalLines } = msg);
+  } catch (_) {
+    // Fallback: compute on main thread
+    const newFiles = _migrate.newFiles;
+    results = [];
+    totalMatched = 0; totalUnmatched = 0; totalLines = 0;
+    for (const filename of newFiles) {
+      const oldPath = nodePath.join(_migrate.oldDir, filename);
+      const newPath = nodePath.join(_migrate.newDir, filename);
+      const uaPath = nodePath.join(_migrate.uaDir, filename);
+      const newLines = readTxtLines(newPath);
+      if (fs.existsSync(oldPath) && fs.existsSync(uaPath)) {
+        const oldLines = readTxtLines(oldPath);
+        const uaLines = readTxtLines(uaPath);
+        const r = migrateTexts(oldLines, newLines, uaLines);
+        results.push({ filename, ...r, status: 'migrated' });
+        totalMatched += r.matched; totalUnmatched += r.unmatched;
+      } else {
+        results.push({ filename, result: newLines.map(t => ({ text: t, matched: false })),
+          matched: 0, unmatched: newLines.length, total: newLines.length, status: 'new' });
+        totalUnmatched += newLines.length;
+      }
+      totalLines += newLines.length;
     }
-    totalLines += newLines.length;
   }
 
   _migrate.dirResults = results;
+  document.getElementById('migrate-run').disabled = false;
 
   // Stats
   const changedCount = results.filter(r => r.matched > 0).length;

@@ -47,6 +47,12 @@
           </button>
         </div>
 
+        <div class="welcome-drop-zone">
+          <div class="welcome-drop-icon">&#x21E9;</div>
+          <div class="welcome-drop-text">Перетягніть файл або теку сюди</div>
+          <div class="welcome-drop-hint">.txt .json .csv .xlsx .xls .ods</div>
+        </div>
+
         <div class="welcome-recent-section">
           <h2 class="welcome-section-title">Останні файли</h2>
           <div class="welcome-recent-list" id="welcome-recent-list">
@@ -152,6 +158,7 @@
           <button class="tb-btn tb-icon-side-panel" id="tb-side-panel" title="Відкрити збоку"></button>
           <button class="tb-btn" id="tb-original" title="Оригінал збоку" style="font-size:10px;padding:0 4px;">A|Б</button>
           <button class="tb-btn" id="tb-table-view" title="Табличний вигляд" style="font-size:10px;padding:0 4px;">&#x2637;</button>
+          <button class="tb-btn" id="tb-schema-view" title="Режим схеми" style="font-size:10px;padding:0 4px;display:none;">{T}</button>
         </div>
 
         <div id="tab-bar"></div>
@@ -164,6 +171,34 @@
             <div class="dock-zone dock-zone-left" data-dock="left"></div>
           </div>
           <div id="editor-main">
+            <!-- Spreadsheet grid view for xlsx/csv -->
+            <div id="spreadsheet-container" style="display:none;">
+              <div class="ss-toolbar" id="ss-toolbar">
+                <div class="ss-toolbar-left">
+                  <span class="ss-toolbar-info" id="ss-toolbar-info"></span>
+                </div>
+                <div class="ss-toolbar-right">
+                  <span class="ss-toolbar-badge" id="ss-encoding-badge">UTF-8</span>
+                  <span class="ss-toolbar-badge" id="ss-delim-badge">COMMA</span>
+                  <label class="ss-header-toggle">
+                    <input type="checkbox" id="ss-header-check" />
+                    <span>Header</span>
+                  </label>
+                </div>
+              </div>
+              <div class="ss-scroll">
+                <table class="ss-table" id="ss-table">
+                  <thead id="ss-thead"></thead>
+                  <tbody id="ss-tbody"></tbody>
+                </table>
+              </div>
+              <div id="ss-sheet-tabs-bar" class="ss-sheet-tabs-bar" style="display:none;"></div>
+              <div class="ss-statusbar" id="ss-statusbar">
+                <span id="ss-status-selection">Selection: —</span>
+                <span id="ss-status-rows"></span>
+              </div>
+            </div>
+
             <div id="flat-editor-container">
               <div id="flat-monaco" class="monaco-container"></div>
             </div>
@@ -188,9 +223,9 @@
                       <tr>
                         <th style="width:40px">#</th>
                         <th style="width:100px">Ключ</th>
-                        <th>Оригінал</th>
-                        <th>Переклад</th>
-                        <th style="width:50px">Рядок</th>
+                        <th style="width:35%">Оригінал</th>
+                        <th style="width:35%">Переклад</th>
+                        <th style="width:55px">Рядок</th>
                       </tr>
                     </thead>
                     <tbody id="table-view-body"></tbody>
@@ -208,6 +243,8 @@
               </div>
             </div>
           </div>
+          <!-- Sheet tabs for multi-sheet spreadsheets -->
+          <div id="sheet-tabs-bar" class="sheet-tabs-bar" style="display:none;"></div>
 
           <div id="side-panel-handle" class="hidden"></div>
           <div id="side-panel" class="hidden">
@@ -260,6 +297,7 @@
           <button class="tab-btn" data-tab="editor">Редактор</button>
           <button class="tab-btn" data-tab="save">Збереження</button>
           <button class="tab-btn" data-tab="parsekeys">Ключі</button>
+          <button class="tab-btn" data-tab="formats">Формати</button>
           <button class="tab-btn" data-tab="plugins">Плагіни</button>
           <button class="tab-btn" data-tab="themes">Теми</button>
         </div>
@@ -370,6 +408,44 @@
           </p>
           <div id="parse-keys-list"></div>
           <button class="btn-secondary btn-sm" id="parse-keys-add" style="margin-top:8px;">+ Додати ключ</button>
+        </div>
+
+        <!-- Tab: Формати -->
+        <div class="tab-content" data-tab="formats">
+          <p style="color:var(--fg-dim);font-size:11px;margin:0 0 10px;">
+            Налаштування форматів CSV / Excel. Роздільник за замовчуванням використовується при відкритті нових файлів.
+          </p>
+          <div class="form-row">
+            <label>Роздільник за замовчуванням:</label>
+            <select id="set-csv-delim-default" style="width:160px">
+              <option value="auto">Авто-визначення</option>
+              <option value=",">, (кома)</option>
+              <option value=";">; (крапка з комою)</option>
+              <option value="&#9;">Tab (табуляція)</option>
+              <option value="|">| (вертикальна риска)</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>Заголовки:</label>
+            <select id="set-csv-headers-default" style="width:160px">
+              <option value="auto">Авто-визначення</option>
+              <option value="yes">Завжди є</option>
+              <option value="no">Немає</option>
+            </select>
+          </div>
+          <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+              <label style="font-size:12px;font-weight:600;">Роздільник для окремих файлів</label>
+            </div>
+            <p style="color:var(--fg-dim);font-size:11px;margin:0 0 8px;">
+              Оберіть файли зі списку та задайте їм інший роздільник. Це перевизначає роздільник за замовчуванням.
+            </p>
+            <div id="csv-format-overrides" style="max-height:180px;overflow-y:auto;"></div>
+            <div style="display:flex;gap:6px;margin-top:8px;">
+              <button class="btn-secondary btn-sm" id="csv-format-add">+ Задати для файлу</button>
+              <button class="btn-secondary btn-sm" id="csv-format-clear" style="color:var(--text-muted);">Очистити все</button>
+            </div>
+          </div>
         </div>
 
         <!-- Tab: Збереження -->

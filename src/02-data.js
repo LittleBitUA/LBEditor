@@ -25,7 +25,8 @@ const DEFAULT_SETTINGS = {
   progress_games_path: '',
   progress_game_id: '',
   progress_code_words: '',
-  other_extensions: '.txt .json .csv',
+  other_extensions: '.txt .json .csv .xlsx .xls .ods .tsv',
+  csv_formats: {}, // { filePath_or_ext: { delimiter, quoting, hasHeaders, encoding } }
   power_warning_enabled: true,
   power_schedule: null, // { 0: Array(48), ..., 6: Array(48) } — per day, half-hour slots
   show_bookmarks: true,

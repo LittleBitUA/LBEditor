@@ -190,6 +190,8 @@ function showTableView() {
     `${_tableEntries.length} записів  ·  перекладено: ${done}/${_tableEntries.length}`;
 
   renderTableBody();
+  // Init resize handles after table is visible and rendered
+  requestAnimationFrame(() => _initTableResizeHandles());
 }
 
 function hideTableView() {
@@ -292,6 +294,64 @@ function applyTableTranslationsToEntry() {
   }
 }
 
+function _initTableResizeHandles() {
+  const table = document.getElementById('table-view');
+  if (!table) return;
+  const ths = table.querySelectorAll('thead th');
+
+  // Remove old handles
+  table.querySelectorAll('.tv-resize-handle').forEach(h => h.remove());
+
+  // Convert all widths to pixels so drag math works correctly
+  ths.forEach(th => {
+    th.style.width = th.offsetWidth + 'px';
+  });
+
+  // Add resize handle to every column except the last
+  for (let i = 0; i < ths.length - 1; i++) {
+    const handle = document.createElement('div');
+    handle.className = 'tv-resize-handle';
+    ths[i].appendChild(handle);
+
+    let startX, startW, nextStartW, th, nextTh;
+
+    handle.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      th = ths[i];
+      nextTh = ths[i + 1];
+      startX = e.clientX;
+      startW = th.offsetWidth;
+      nextStartW = nextTh.offsetWidth;
+      handle.classList.add('tv-resizing');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+
+      const onMove = (ev) => {
+        const dx = ev.clientX - startX;
+        const newW = Math.max(30, startW + dx);
+        const newNextW = Math.max(30, nextStartW - dx);
+        // Only resize if both columns stay above minimum
+        if (newW >= 30 && newNextW >= 30) {
+          th.style.width = newW + 'px';
+          nextTh.style.width = newNextW + 'px';
+        }
+      };
+
+      const onUp = () => {
+        handle.classList.remove('tv-resizing');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  }
+}
+
 function setupTableView() {
   // Table row click
   document.getElementById('table-view-body').addEventListener('click', (e) => {
@@ -305,6 +365,7 @@ function setupTableView() {
   document.getElementById('table-view-back').addEventListener('click', () => {
     applyTableTranslationsToEntry();
     hideTableView();
+    loadEditor(); // refresh editor content (schema view or normal)
   });
 
   // Copy original
@@ -339,8 +400,14 @@ function setupTableView() {
     if (_tableViewActive) {
       applyTableTranslationsToEntry();
       hideTableView();
+      loadEditor(); // refresh editor content (schema view or normal)
     } else {
       showTableView();
     }
+  });
+
+  // Schema view toggle button
+  document.getElementById('tb-schema-view').addEventListener('click', () => {
+    toggleSchemaView();
   });
 }

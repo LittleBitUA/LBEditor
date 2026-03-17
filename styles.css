@@ -2266,6 +2266,10 @@ textarea.editor-dirty {
   opacity: 0 !important;
 }
 
+/* ─── Monaco: hide sticky scroll widget, fix hover z-index ─── */
+.monaco-editor .sticky-widget { display: none !important; }
+.monaco-editor .editor-hover { z-index: 100 !important; }
+
 /* ─── Monaco Decoration: Glossary Highlights ─── */
 .glossary-highlight {
   background: var(--accent-subtle);
@@ -3824,6 +3828,52 @@ select option:checked {
   color: var(--text-muted);
 }
 
+/* ─── Drop zone ─── */
+
+.welcome-drop-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 20px 16px;
+  margin-bottom: 24px;
+  border: 2px dashed var(--border-glass);
+  border-radius: 14px;
+  background: transparent;
+  transition: border-color 0.2s, background 0.2s, transform 0.2s;
+  pointer-events: none; /* clicks pass through to body drop handler */
+}
+.welcome-drop-icon {
+  font-size: 24px;
+  color: var(--text-muted);
+  transition: color 0.2s, transform 0.2s;
+}
+.welcome-drop-text {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  transition: color 0.2s;
+}
+.welcome-drop-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+/* Active state when dragging over */
+.welcome-drop-active .welcome-drop-zone {
+  border-color: var(--accent);
+  background: rgba(99, 132, 255, 0.06);
+  transform: scale(1.02);
+}
+.welcome-drop-active .welcome-drop-icon {
+  color: var(--accent);
+  transform: translateY(-2px);
+}
+.welcome-drop-active .welcome-drop-text {
+  color: var(--accent);
+}
+
 /* ─── Recent files section ─── */
 
 .welcome-recent-section {
@@ -4133,6 +4183,7 @@ select option:checked {
   width: 100%;
   border-collapse: collapse;
   font-size: 12px;
+  table-layout: fixed;
 }
 .table-view th {
   position: sticky;
@@ -4147,6 +4198,35 @@ select option:checked {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  overflow: visible;
+}
+
+/* ─── Column resize handles ─── */
+.tv-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 7px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 4;
+  user-select: none;
+}
+.tv-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 20%;
+  right: 3px;
+  width: 1px;
+  height: 60%;
+  background: var(--border);
+  transition: background 0.15s;
+}
+.tv-resize-handle:hover::after,
+.tv-resize-handle.tv-resizing::after {
+  background: var(--accent, #7b8fff);
+  width: 2px;
+  right: 2px;
 }
 .table-view td {
   padding: 5px 8px;
@@ -4284,5 +4364,319 @@ select option:checked {
 }
 .pk-delete:hover {
   background: rgba(248,113,113,0.15);
+}
+
+/* ─── CSV format overrides (settings) ─── */
+.csv-override-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  padding: 4px 8px;
+  background: var(--bg-surface, #1e1e22);
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  font-size: 11px;
+}
+.csv-override-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}
+.csv-override-delim {
+  width: 130px;
+  font-size: 11px;
+  background: var(--bg, #16161a);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--fg);
+  padding: 2px 4px;
+}
+.csv-override-del {
+  background: none;
+  border: none;
+  color: #f87171;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.csv-override-del:hover {
+  background: rgba(248,113,113,0.15);
+}
+
+/* ─── Spreadsheet toolbar ─── */
+.ss-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  background: var(--bg-panel, #1e1e22);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  min-height: 32px;
+  gap: 10px;
+}
+.ss-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.ss-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.ss-toolbar-info {
+  font-size: 11px;
+  color: var(--fg-dim, #888);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ss-toolbar-badge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.06);
+  color: var(--fg-dim, #999);
+  white-space: nowrap;
+}
+.ss-header-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--fg-dim, #999);
+  cursor: pointer;
+  user-select: none;
+}
+.ss-header-toggle input[type="checkbox"] {
+  accent-color: var(--accent, #7b8fff);
+}
+
+/* ─── Spreadsheet statusbar ─── */
+.ss-statusbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 10px;
+  background: var(--bg-panel, #1e1e22);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--fg-dim, #888);
+  min-height: 22px;
+}
+
+/* ─── Spreadsheet grid view ─── */
+#spreadsheet-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.ss-scroll {
+  flex: 1;
+  overflow: auto;
+}
+.ss-table {
+  border-collapse: collapse;
+  font-size: 13px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  table-layout: fixed;
+  min-width: 100%;
+}
+.ss-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-surface, #2a2a2e);
+  color: var(--fg, #e0e0e0);
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: normal;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+  text-align: left;
+  user-select: none;
+  position: relative;
+}
+
+/* ─── Spreadsheet column resize handles ─── */
+.ss-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  width: 9px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 4;
+  user-select: none;
+}
+/* Завжди видима полоска-роздільник */
+.ss-resize-handle::before {
+  content: '';
+  position: absolute;
+  top: 15%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 1px;
+  height: 70%;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 1px;
+  transition: background 0.15s, width 0.15s, box-shadow 0.15s;
+}
+/* Підсвітка при наведенні */
+.ss-resize-handle:hover::before {
+  width: 3px;
+  background: var(--accent, #7b8fff);
+  box-shadow: 0 0 6px rgba(123, 143, 255, 0.4);
+}
+/* Під час перетягування */
+.ss-resize-handle.ss-resizing::before {
+  width: 3px;
+  background: var(--accent, #7b8fff);
+  box-shadow: 0 0 8px rgba(123, 143, 255, 0.6);
+}
+.ss-table th.ss-row-num {
+  width: 50px;
+  min-width: 50px;
+  text-align: center;
+  color: var(--fg-dim, #888);
+  background: var(--bg-surface, #2a2a2e);
+  position: sticky;
+  left: 0;
+  z-index: 3;
+}
+.ss-table td {
+  padding: 0;
+  border: 1px solid var(--border);
+  vertical-align: middle;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  height: 28px;
+  max-height: 28px;
+}
+.ss-cell-td {
+  padding: 4px 12px;
+  cursor: default;
+  color: var(--fg, #e0e0e0);
+  font-size: 13px;
+  user-select: text;
+  border: 1px solid var(--border);
+  box-shadow: inset 0 0 0 0 transparent;
+  transition: box-shadow 0.1s;
+}
+.ss-cell-td:hover {
+  background: rgba(255,255,255,0.04);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
+}
+.ss-table td.ss-row-num {
+  width: 50px;
+  min-width: 50px;
+  text-align: center;
+  padding: 5px 6px;
+  color: var(--fg-dim, #888);
+  font-size: 12px;
+  background: var(--bg-surface, #2a2a2e);
+  user-select: none;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+.ss-cell {
+  display: block;
+  width: 100%;
+  min-height: 26px;
+  padding: 5px 12px;
+  border: none;
+  background: transparent;
+  color: var(--fg, #e0e0e0);
+  font-size: 13px;
+  font-family: inherit;
+  resize: none;
+  overflow: hidden;
+  outline: none;
+  box-sizing: border-box;
+}
+.ss-cell:focus {
+  background: rgba(99, 132, 255, 0.10);
+  outline: 2px solid var(--accent, #7b8fff);
+  outline-offset: -2px;
+}
+.ss-table tr:hover td:not(.ss-row-num) {
+  background: rgba(255,255,255,0.03);
+}
+.ss-table tr.ss-selected td {
+  background: rgba(99, 132, 255, 0.12);
+}
+.ss-table tr.ss-selected td.ss-row-num {
+  background: rgba(99, 132, 255, 0.18);
+  color: var(--accent, #7b8fff);
+}
+
+/* ─── Sheet tabs (bottom of editor for xlsx) ─── */
+.sheet-tabs-bar {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 0 4px;
+  background: var(--bg-surface, #1e1e22);
+  border-top: 1px solid var(--border);
+  overflow-x: auto;
+  min-height: 28px;
+  flex-shrink: 0;
+}
+.sheet-tab, .ss-sheet-tab {
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  background: none;
+  border: none;
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.sheet-tab:hover, .ss-sheet-tab:hover {
+  background: var(--bg-glass-hover, rgba(255,255,255,0.06));
+  color: var(--text-primary, #e0e0e0);
+}
+.sheet-tab.active, .ss-sheet-tab.active {
+  background: var(--accent-subtle, rgba(99,132,255,0.12));
+  color: var(--accent, #7b8fff);
+  font-weight: 600;
+}
+
+/* ─── Sheet tabs inside spreadsheet container (Google Sheets style) ─── */
+.ss-sheet-tabs-bar {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 0 4px;
+  background: var(--bg-surface, #1e1e22);
+  border-top: 1px solid var(--border);
+  overflow-x: auto;
+  min-height: 32px;
+  flex-shrink: 0;
+}
+.ss-sheet-tabs-bar::-webkit-scrollbar {
+  height: 3px;
+}
+.ss-sheet-tabs-bar::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.15);
+  border-radius: 2px;
 }
 

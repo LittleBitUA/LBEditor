@@ -2,8 +2,9 @@
 
 const fs = require('fs');
 const nodePath = require('path');
-const { ipcRenderer, clipboard, shell } = require('electron');
+const { ipcRenderer, clipboard, shell, webUtils } = require('electron');
 const nspell = require('nspell');
+const XLSX = require('xlsx');
 const { Worker } = require('worker_threads');
 const { initMonaco } = require('./monaco-loader');
 
@@ -22,6 +23,7 @@ let _suppressMonacoChange = false; // suppress onDidChangeModelContent during se
 let _sideMonaco = null;       // side panel Monaco editor (read-only)
 let _sidePanelIdx = -1;       // entry index shown in side panel (-1 = hidden)
 let _sideOriginalMode = false; // true = side panel shows original text (auto-follows current entry)
+let _schemaViewCurrentlyUsed = false; // whether current editor content is schema-filtered
 
 // ── Worker thread state ────────────────────────────────────
 let _highlightWorker = null;
@@ -36,6 +38,10 @@ const _analysisPending = new Map();
 let _ioWorker = null;
 let _ioRequestId = 0;
 const _ioPending = new Map();
+
+let _computeWorker = null;
+let _computeRequestId = 0;
+const _computePending = new Map();
 
 function getWorkerPath(filename) {
   const devPath = nodePath.join(__dirname, filename);
@@ -131,12 +137,14 @@ async function initMonacoEditors() {
       updateCursorPosition();
       scheduleDecorationUpdate();
     });
+    if (typeof setupEditorGlossaryHover === 'function') setupEditorGlossaryHover(ed);
   }
 
   _monacoReady = true;
 }
 
 function getActiveEditor() {
+  if (_schemaViewCurrentlyUsed) return _monacoFlat;
   if (state.appMode === 'other' || state.appMode === 'jojo') return _monacoFlat;
   if (state.splitMode) return _monacoText;
   return _monacoFlat;

@@ -125,6 +125,10 @@ textarea.editor-dirty {
   opacity: 0 !important;
 }
 
+/* ─── Monaco: hide sticky scroll widget, fix hover z-index ─── */
+.monaco-editor .sticky-widget { display: none !important; }
+.monaco-editor .editor-hover { z-index: 100 !important; }
+
 /* ─── Monaco Decoration: Glossary Highlights ─── */
 .glossary-highlight {
   background: var(--accent-subtle);

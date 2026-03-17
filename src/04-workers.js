@@ -142,6 +142,38 @@ function invalidateNavHints() {
   _navHintsCache.clear();
 }
 
+// ── Compute Worker (diff, CSV parsing, migration, duplicates) ──
+function initComputeWorker() {
+  try {
+    _computeWorker = new Worker(getWorkerPath('compute-worker.js'));
+    _computeWorker.on('message', (msg) => {
+      const pending = _computePending.get(msg.requestId);
+      if (pending) {
+        _computePending.delete(msg.requestId);
+        pending.resolve(msg);
+      }
+    });
+    _computeWorker.on('error', (err) => {
+      console.error('Compute worker crashed:', err);
+      for (const [, p] of _computePending) p.reject(err);
+      _computePending.clear();
+      _computeWorker = null;
+    });
+  } catch (e) {
+    console.error('Failed to create compute worker:', e);
+  }
+}
+
+function sendToComputeWorker(msg) {
+  return new Promise((resolve, reject) => {
+    if (!_computeWorker) { reject(new Error('no compute worker')); return; }
+    _computeRequestId++;
+    msg.requestId = _computeRequestId;
+    _computePending.set(msg.requestId, { resolve, reject });
+    _computeWorker.postMessage(msg);
+  });
+}
+
 // ── IO Worker ──────────────────────────────────────────────
 function initIOWorker() {
   try {
@@ -296,6 +328,12 @@ function terminateWorkers() {
     for (const [, p] of _ioPending) p.reject(new Error('terminated'));
     _ioPending.clear();
     _ioWorker = null;
+  }
+  if (_computeWorker) {
+    try { _computeWorker.terminate(); } catch (_e) { /* ignore */ }
+    for (const [, p] of _computePending) p.reject(new Error('terminated'));
+    _computePending.clear();
+    _computeWorker = null;
   }
 }
 

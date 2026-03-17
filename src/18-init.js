@@ -21,35 +21,92 @@ function setupZoom() {
 // ═══════════════════════════════════════════════════════════
 
 function setupDragDrop() {
-  document.body.addEventListener('dragover', (e) => {
+  // Visual feedback on welcome screen
+  const welcomeEl = document.getElementById('welcome-screen');
+  let _dragCounter = 0;
+
+  document.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    _dragCounter++;
+    if (welcomeEl && !welcomeEl.classList.contains('hidden')) {
+      welcomeEl.classList.add('welcome-drop-active');
+    }
+  });
+  document.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    _dragCounter--;
+    if (_dragCounter <= 0) {
+      _dragCounter = 0;
+      if (welcomeEl) welcomeEl.classList.remove('welcome-drop-active');
+    }
+  });
+  document.addEventListener('dragover', (e) => {
     if (e.target.closest && e.target.closest('.migrate-slot')) return;
     e.preventDefault();
+    e.stopPropagation();
     e.dataTransfer.dropEffect = 'copy';
   });
-  document.body.addEventListener('drop', (e) => {
+  document.addEventListener('drop', (e) => {
     e.preventDefault();
+    e.stopPropagation();
+    _dragCounter = 0;
+    if (welcomeEl) welcomeEl.classList.remove('welcome-drop-active');
     if (e.target.closest && e.target.closest('.migrate-slot')) return;
-    const files = [...e.dataTransfer.files].filter(f => f.path);
-    if (files.length === 0) return;
 
-    // Check if any JSON file is in the drop — load first JSON only
-    const jsonFile = files.find(f => f.path.toLowerCase().endsWith('.json'));
+    // Electron 29+: File.path is deprecated, use webUtils.getPathForFile()
+    const rawFiles = [...e.dataTransfer.files];
+    const items = [];
+    for (const f of rawFiles) {
+      let p = f.path;
+      if (!p && webUtils && webUtils.getPathForFile) {
+        try { p = webUtils.getPathForFile(f); } catch (_) {}
+      }
+      if (p) items.push({ path: p, name: f.name });
+    }
+    if (items.length === 0) return;
+
+    // Check if a directory was dropped
+    for (const item of items) {
+      try {
+        if (fs.statSync(item.path).isDirectory()) {
+          loadTxtDirectory(item.path);
+          return;
+        }
+      } catch (_) {}
+    }
+
+    // Check if any JSON file is in the drop — known formats or fallback to text
+    const jsonFile = items.find(f => f.path.toLowerCase().endsWith('.json'));
     if (jsonFile) {
-      loadJsonAuto(jsonFile.path);
+      loadJsonAuto(jsonFile.path, true);
       return;
     }
 
     // Check for .lbproj file
-    const projFile = files.find(f => f.path.toLowerCase().endsWith('.lbproj'));
+    const projFile = items.find(f => f.path.toLowerCase().endsWith('.lbproj'));
     if (projFile) {
       openProjectFromPath(projFile.path);
       return;
     }
 
-    // Load all matching text files
+    // Check for spreadsheet files
+    const xlsxFile = items.find(f => _SPREADSHEET_EXTS.includes(nodePath.extname(f.path).toLowerCase()));
+    console.log('[drop] xlsx check:', xlsxFile ? xlsxFile.path : 'none', 'exts:', items.map(f => nodePath.extname(f.path).toLowerCase()));
+    if (xlsxFile) {
+      console.log('[drop] opening spreadsheet:', xlsxFile.path);
+      openSpreadsheetFile(xlsxFile.path).catch(err => console.error('Drop xlsx error:', err));
+      return;
+    }
+
+    // Load all matching text/csv files
     const exts = getOtherExtensions();
-    const txtFiles = files.filter(f => exts.some(ext => f.path.toLowerCase().endsWith(ext)));
-    for (const f of txtFiles) openTxtFile(f.path);
+    const txtFiles = items.filter(f => exts.some(ext => f.path.toLowerCase().endsWith(ext)));
+    if (txtFiles.length === 0) {
+      // Fallback: try to open any dropped file as text
+      for (const f of items) openTxtFile(f.path);
+    } else {
+      for (const f of txtFiles) openTxtFile(f.path);
+    }
   });
 }
 
@@ -646,6 +703,7 @@ function init() {
       initIOWorker();
       initHighlightWorker();
       initAnalysisWorker();
+      initComputeWorker();
 
       // ── All event listeners in one batch (fast, no I/O) ──
       loadFindHistory();
@@ -668,6 +726,7 @@ function init() {
       setupMinimap();
       setupSplitHandle();
       setupParseKeysSettings();
+      _setupCsvFormatsUI();
       setupTableView();
       setupWelcomeListeners();
       document.getElementById('power-warning-dismiss').addEventListener('click', dismissPowerWarning);

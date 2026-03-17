@@ -472,6 +472,147 @@ function getTextLinesForEntry(entry) {
   return lines.length > 0 ? lines : _getRawTextLines(entry);
 }
 
+// ── Schema view: write-back helpers ─────────────────────────
+
+function _collectWritableSlots(obj, pathStr) {
+  const parts = pathStr.split('.');
+  let slots = [{ container: { _root: obj }, key: '_root' }];
+
+  for (const part of parts) {
+    const nextSlots = [];
+    for (const slot of slots) {
+      const val = slot.container[slot.key];
+      if (val == null) continue;
+      if (part === '*') {
+        if (Array.isArray(val)) {
+          for (let i = 0; i < val.length; i++) nextSlots.push({ container: val, key: i });
+        }
+      } else {
+        if (typeof val === 'object' && !Array.isArray(val) && part in val) {
+          nextSlots.push({ container: val, key: part });
+        }
+      }
+    }
+    slots = nextSlots;
+  }
+
+  // Expand: slots pointing to string arrays → individual elements
+  const result = [];
+  for (const slot of slots) {
+    const val = slot.container[slot.key];
+    if (typeof val === 'string') {
+      result.push(slot);
+    } else if (Array.isArray(val)) {
+      for (let i = 0; i < val.length; i++) {
+        if (typeof val[i] === 'string') result.push({ container: val, key: i });
+      }
+    }
+  }
+  return result;
+}
+
+function _getSchemaOrigValues(entry) {
+  const schema = getFileSchema(entry);
+  if (!schema || !schema.textPaths || schema.textPaths.length === 0) return null;
+  if (schema.customSchemaIdx != null) return null;
+
+  const data = _tryParseEntryData(entry);
+  if (!data) return null;
+
+  const items = Array.isArray(data) ? data : [data];
+  const values = [];
+  for (const item of items) {
+    for (const pathStr of schema.textPaths) {
+      const vals = extractByPath(item, pathStr);
+      for (const v of vals) values.push({ value: v, lineCount: v.split('\n').length });
+    }
+  }
+  return values;
+}
+
+function applySchemaLinesToEntry(entry, editedLines) {
+  const schema = getFileSchema(entry);
+  if (!schema || !schema.textPaths || schema.textPaths.length === 0) return false;
+  if (schema.customSchemaIdx != null) return false;
+
+  if (state.appMode === 'ishin') {
+    return _applySchemaIshin(entry, editedLines, schema);
+  }
+  return _applySchemaOther(entry, editedLines, schema);
+}
+
+function _applySchemaIshin(entry, editedLines, schema) {
+  const data = entry.data;
+  if (!data) return false;
+
+  // Collect original values to know line counts
+  const origValues = [];
+  for (const pathStr of schema.textPaths) {
+    const vals = extractByPath(data, pathStr);
+    for (const v of vals) origValues.push({ lineCount: v.split('\n').length });
+  }
+
+  // Map edited lines back to values
+  const newValues = [];
+  let lineIdx = 0;
+  for (const ov of origValues) {
+    newValues.push(editedLines.slice(lineIdx, lineIdx + ov.lineCount).join('\n'));
+    lineIdx += ov.lineCount;
+  }
+
+  // Write back via writable slots
+  let valIdx = 0;
+  for (const pathStr of schema.textPaths) {
+    const slots = _collectWritableSlots(data, pathStr);
+    for (const slot of slots) {
+      if (valIdx < newValues.length) slot.container[slot.key] = newValues[valIdx++];
+    }
+  }
+
+  // Sync entry fields from data
+  entry.text = toStrList(data.text);
+  if (data.speakers) entry.speakers = toStrList(data.speakers);
+  return true;
+}
+
+function _applySchemaOther(entry, editedLines, schema) {
+  const data = _tryParseEntryData(entry);
+  if (!data) return false;
+
+  const cloned = JSON.parse(JSON.stringify(data));
+  const isArr = Array.isArray(cloned);
+  const items = isArr ? cloned : [cloned];
+  const origItems = isArr ? data : [data];
+
+  let lineIdx = 0;
+  for (let ei = 0; ei < items.length; ei++) {
+    for (const pathStr of schema.textPaths) {
+      const origVals = extractByPath(origItems[ei], pathStr);
+      const slots = _collectWritableSlots(items[ei], pathStr);
+      for (let i = 0; i < Math.min(origVals.length, slots.length); i++) {
+        const lc = origVals[i].split('\n').length;
+        slots[i].container[slots[i].key] = editedLines.slice(lineIdx, lineIdx + lc).join('\n');
+        lineIdx += lc;
+      }
+    }
+  }
+
+  // Detect original indent for JSON re-serialization
+  const origText = Array.isArray(entry.text) ? entry.text.join('\n') : entry.text;
+  const indentMatch = origText.match(/\n(\s+)/);
+  let indent = 2;
+  if (indentMatch) indent = indentMatch[1].includes('\t') ? '\t' : indentMatch[1].length;
+
+  const serialized = JSON.stringify(isArr ? cloned : cloned, null, indent);
+
+  if (state.appMode === 'jojo') {
+    entry.text = serialized;
+  } else {
+    entry.text = serialized.split('\n');
+  }
+  return true;
+}
+
 function showSchemaModal() {
   if (state.entries.length === 0) {
     showInfo('Схема', 'Спочатку завантажте файл.');
