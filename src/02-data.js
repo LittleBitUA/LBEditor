@@ -33,6 +33,7 @@ const DEFAULT_SETTINGS = {
   custom_themes: {},
   file_schemas: {},
   custom_schemas: [],
+  parse_keys: [],  // [{name, pattern, textGroup, labelGroup, color}]
 };
 
 const DEFAULT_GLOSSARY = {

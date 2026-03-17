@@ -151,6 +151,7 @@
           <span class="tb-sep"></span>
           <button class="tb-btn tb-icon-side-panel" id="tb-side-panel" title="Відкрити збоку"></button>
           <button class="tb-btn" id="tb-original" title="Оригінал збоку" style="font-size:10px;padding:0 4px;">A|Б</button>
+          <button class="tb-btn" id="tb-table-view" title="Табличний вигляд" style="font-size:10px;padding:0 4px;">&#x2637;</button>
         </div>
 
         <div id="tab-bar"></div>
@@ -172,6 +173,39 @@
               <div id="text-monaco" class="monaco-container" style="flex:3;"></div>
               <label class="editor-label">Speakers</label>
               <div id="sp-monaco" class="monaco-container" style="flex:1;"></div>
+            </div>
+
+            <!-- Table view for parse keys -->
+            <div id="table-view-container" style="display:none;">
+              <div class="table-view-toolbar">
+                <span class="table-view-info" id="table-view-info"></span>
+                <button class="btn-sm btn-secondary" id="table-view-back">&#x21A9; Редактор</button>
+              </div>
+              <div class="table-view-split">
+                <div class="table-view-scroll">
+                  <table class="table-view" id="table-view">
+                    <thead>
+                      <tr>
+                        <th style="width:40px">#</th>
+                        <th style="width:100px">Ключ</th>
+                        <th>Оригінал</th>
+                        <th>Переклад</th>
+                        <th style="width:50px">Рядок</th>
+                      </tr>
+                    </thead>
+                    <tbody id="table-view-body"></tbody>
+                  </table>
+                </div>
+                <div class="table-view-editor" id="table-view-editor">
+                  <div class="tve-header">
+                    <span class="tve-label" id="tve-label">Оберіть рядок</span>
+                    <button class="btn-sm btn-secondary" id="tve-copy">&#x29C9; Копіювати</button>
+                  </div>
+                  <div class="tve-original" id="tve-original"></div>
+                  <label class="tve-tr-label">Переклад:</label>
+                  <textarea class="tve-translation" id="tve-translation" placeholder="Введіть переклад..."></textarea>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -225,6 +259,7 @@
           <button class="tab-btn active" data-tab="look">Вигляд</button>
           <button class="tab-btn" data-tab="editor">Редактор</button>
           <button class="tab-btn" data-tab="save">Збереження</button>
+          <button class="tab-btn" data-tab="parsekeys">Ключі</button>
           <button class="tab-btn" data-tab="plugins">Плагіни</button>
           <button class="tab-btn" data-tab="themes">Теми</button>
         </div>
@@ -326,6 +361,15 @@
             <label>Кодові слова:</label>
             <textarea id="set-code-words" rows="3" style="width:180px;resize:vertical;font-size:11px" placeholder="Одне слово/фраза на рядок" title="Рядки що збігаються з кодовими словами рахуються як перекладені"></textarea>
           </div>
+        </div>
+
+        <!-- Tab: Ключі парсингу -->
+        <div class="tab-content" data-tab="parsekeys">
+          <p style="color:var(--fg-dim);font-size:11px;margin:0 0 10px;">
+            Regex-ключі для парсингу файлів у таблицю. Група тексту — номер capture group з перекладним текстом.
+          </p>
+          <div id="parse-keys-list"></div>
+          <button class="btn-secondary btn-sm" id="parse-keys-add" style="margin-top:8px;">+ Додати ключ</button>
         </div>
 
         <!-- Tab: Збереження -->

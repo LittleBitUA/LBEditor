@@ -185,6 +185,7 @@ function showSettingsModal() {
   document.getElementById('set-show-bookmarks').checked = s.show_bookmarks !== false;
   document.getElementById('set-plugin-glossary').checked = s.plugin_glossary !== false;
   renderPowerGrid(s.power_schedule);
+  renderParseKeysSettings();
 
   // Reset to first tab, reset theme editor state
   document.querySelectorAll('#settings-modal .tab-btn').forEach(b => b.classList.remove('active'));
@@ -379,6 +380,7 @@ function saveSettingsFromModal() {
     show_bookmarks: document.getElementById('set-show-bookmarks').checked,
     layout: newLayout,
     plugin_glossary: document.getElementById('set-plugin-glossary').checked,
+    parse_keys: collectParseKeysFromUI(),
   });
   setLayout(newLayout);
   saveSettings();

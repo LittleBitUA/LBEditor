@@ -667,6 +667,8 @@ function init() {
       setupCmdPalette();
       setupMinimap();
       setupSplitHandle();
+      setupParseKeysSettings();
+      setupTableView();
       setupWelcomeListeners();
       document.getElementById('power-warning-dismiss').addEventListener('click', dismissPowerWarning);
       document.getElementById('power-warning-overlay').addEventListener('click', (e) => {
