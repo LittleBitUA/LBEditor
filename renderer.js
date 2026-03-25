@@ -5,14 +5,22 @@ const nodePath = require('path');
 const { ipcRenderer, clipboard, shell, webUtils } = require('electron');
 const nspell = require('nspell');
 const XLSX = require('xlsx');
-const { Worker } = require('worker_threads');
+const { fork } = require('child_process');
 const { initMonaco } = require('./monaco-loader');
+
+/** Wrapper around child_process.fork() that mimics worker_threads.Worker API */
+function forkWorker(scriptPath) {
+  const child = fork(scriptPath, [], { stdio: 'ignore' });
+  child.postMessage = (msg) => child.send(msg);
+  return child;
+}
 
 // ── Monaco Editor state ──────────────────────────────────────
 let _monaco = null;       // monaco namespace
 let _monacoFlat = null;   // monaco.editor.IStandaloneCodeEditor — flat/other/jojo
 let _monacoText = null;   // split mode — text editor
 let _monacoSp = null;     // split mode — speakers editor
+let _lastFocusedEditor = null; // tracks which editor panel was focused last
 let _glossDecorationIds = [];
 let _spellDecorationIds = [];
 let _findDecorationIds = [];
@@ -137,6 +145,7 @@ async function initMonacoEditors() {
       updateCursorPosition();
       scheduleDecorationUpdate();
     });
+    ed.onDidFocusEditorWidget(() => { _lastFocusedEditor = ed; });
     if (typeof setupEditorGlossaryHover === 'function') setupEditorGlossaryHover(ed);
   }
 
@@ -144,8 +153,15 @@ async function initMonacoEditors() {
 }
 
 function getActiveEditor() {
+  // If side panel editor was last focused, return it for read operations (find, etc.)
+  if (_lastFocusedEditor === _sideMonaco && _sidePanelIdx >= 0) return _sideMonaco;
   if (_schemaViewCurrentlyUsed) return _monacoFlat;
   if (state.appMode === 'other' || state.appMode === 'jojo') return _monacoFlat;
+  // In split mode, return whichever editor was last focused
+  if (state.splitMode && _lastFocusedEditor &&
+      (_lastFocusedEditor === _monacoFlat || _lastFocusedEditor === _monacoText || _lastFocusedEditor === _monacoSp)) {
+    return _lastFocusedEditor;
+  }
   if (state.splitMode) return _monacoText;
   return _monacoFlat;
 }
@@ -202,7 +218,14 @@ function updateModifiedLineDecorations() {
 const CYRILLIC_RE = /[\u0400-\u04FF]/;
 
 // Get writable data dir and read-only resources dir from main process
-const { dataDir: DATA_DIR, resourcesDir: RESOURCES_DIR } = ipcRenderer.sendSync('app:get-paths');
+let DATA_DIR, RESOURCES_DIR;
+try {
+  ({ dataDir: DATA_DIR, resourcesDir: RESOURCES_DIR } = ipcRenderer.sendSync('app:get-paths'));
+} catch (e) {
+  console.error('Failed to get paths from main process:', e);
+  DATA_DIR = '.';
+  RESOURCES_DIR = '.';
+}
 
 const SESSIONS_FILE = nodePath.join(DATA_DIR, 'editor_sessions.json');
 const SETTINGS_FILE = nodePath.join(DATA_DIR, 'editor_settings.json');
@@ -718,10 +741,18 @@ function closeEntryTab(entryIdx) {
   _openTabs.splice(pos, 1);
   if (_previewTabIdx === entryIdx) _previewTabIdx = -1;
 
-  // If closing the active entry, switch to neighbour tab
-  if (state.currentIndex === entryIdx && _openTabs.length > 0) {
-    const newIdx = _openTabs[Math.min(pos, _openTabs.length - 1)];
-    onListItemClick(newIdx);
+  // If closing the active entry, switch to neighbour tab or go to welcome
+  if (state.currentIndex === entryIdx) {
+    if (_openTabs.length > 0) {
+      const newIdx = _openTabs[Math.min(pos, _openTabs.length - 1)];
+      onListItemClick(newIdx);
+    } else {
+      state.currentIndex = -1;
+      if (_monacoFlat) _monacoFlat.setValue('');
+      if (_monacoText) _monacoText.setValue('');
+      if (_monacoSp) _monacoSp.setValue('');
+      showWelcomeScreen();
+    }
   }
   renderTabBar();
 }
@@ -853,7 +884,7 @@ async function initSpellCheckerFallback() {
 // ── Highlight Worker ───────────────────────────────────────
 function initHighlightWorker() {
   try {
-    _highlightWorker = new Worker(getWorkerPath('highlight-worker.js'));
+    _highlightWorker = forkWorker(getWorkerPath('highlight-worker.js'));
     _highlightWorker.on('message', (msg) => {
       if (msg.type === 'ready') {
         _highlightWorkerReady = true;
@@ -913,7 +944,7 @@ async function initSpellChecker() {
 // ── Analysis Worker ────────────────────────────────────────
 function initAnalysisWorker() {
   try {
-    _analysisWorker = new Worker(getWorkerPath('analysis-worker.js'));
+    _analysisWorker = forkWorker(getWorkerPath('analysis-worker.js'));
     _analysisWorker.on('message', (msg) => {
       const pending = _analysisPending.get(msg.requestId);
       if (pending) {
@@ -981,7 +1012,7 @@ function invalidateNavHints() {
 // ── Compute Worker (diff, CSV parsing, migration, duplicates) ──
 function initComputeWorker() {
   try {
-    _computeWorker = new Worker(getWorkerPath('compute-worker.js'));
+    _computeWorker = forkWorker(getWorkerPath('compute-worker.js'));
     _computeWorker.on('message', (msg) => {
       const pending = _computePending.get(msg.requestId);
       if (pending) {
@@ -1013,7 +1044,7 @@ function sendToComputeWorker(msg) {
 // ── IO Worker ──────────────────────────────────────────────
 function initIOWorker() {
   try {
-    _ioWorker = new Worker(getWorkerPath('io-worker.js'));
+    _ioWorker = forkWorker(getWorkerPath('io-worker.js'));
     _ioWorker.on('message', (msg) => {
       const pending = _ioPending.get(msg.requestId);
       if (pending) {
@@ -1059,11 +1090,11 @@ function ioMergeWriteJSON(filePath, key, value) {
 
 /** Async read JSON with Promise */
 function ioReadJSON(filePath) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     if (_ioWorker) {
       _ioRequestId++;
       const reqId = _ioRequestId;
-      _ioPending.set(reqId, { resolve });
+      _ioPending.set(reqId, { resolve, reject });
       _ioWorker.postMessage({ type: 'read-json', path: filePath, requestId: reqId });
     } else {
       try {
@@ -1077,11 +1108,11 @@ function ioReadJSON(filePath) {
 
 /** Async batch-exists with Promise */
 function ioExistsBatch(paths) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     if (_ioWorker) {
       _ioRequestId++;
       const reqId = _ioRequestId;
-      _ioPending.set(reqId, { resolve });
+      _ioPending.set(reqId, { resolve, reject });
       _ioWorker.postMessage({ type: 'exists-batch', paths, requestId: reqId });
     } else {
       const results = {};
@@ -1101,26 +1132,32 @@ function ioSerializeWriteJSON(filePath, data) {
       const reqId = _ioRequestId;
       _ioPending.set(reqId, {
         resolve: (r) => r.ok ? resolve() : reject(new Error(r.error || 'write failed')),
+        reject,
       });
       _ioWorker.postMessage({ type: 'serialize-write-json', path: filePath, data, requestId: reqId });
     } else {
-      // Fallback: sync on main thread
+      // Fallback: sync on main thread (atomic write via temp + rename)
       try {
         const blob = JSON.stringify(data, null, 2);
-        fs.writeFileSync(filePath, blob + '\n', 'utf-8');
+        const tmpPath = filePath + '.tmp';
+        fs.writeFileSync(tmpPath, blob + '\n', 'utf-8');
+        fs.renameSync(tmpPath, filePath);
         resolve();
-      } catch (e) { reject(e); }
+      } catch (e) {
+        try { fs.unlinkSync(filePath + '.tmp'); } catch (_) {}
+        reject(e);
+      }
     }
   });
 }
 
 /** Async batch write text files (offloads loop of fs.writeFileSync to worker) */
 function ioBatchWriteText(files) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     if (_ioWorker) {
       _ioRequestId++;
       const reqId = _ioRequestId;
-      _ioPending.set(reqId, { resolve });
+      _ioPending.set(reqId, { resolve, reject });
       _ioWorker.postMessage({ type: 'batch-write-text', files, requestId: reqId });
     } else {
       let ok = 0;
@@ -1149,24 +1186,24 @@ function ioWriteRecovery(filePath, snapshot) {
 
 function terminateWorkers() {
   if (_highlightWorker) {
-    try { _highlightWorker.terminate(); } catch (_e) { /* ignore */ }
+    try { _highlightWorker.kill(); } catch (_e) { /* ignore */ }
     _highlightWorker = null;
     _highlightWorkerReady = false;
   }
   if (_analysisWorker) {
-    try { _analysisWorker.terminate(); } catch (_e) { /* ignore */ }
+    try { _analysisWorker.kill(); } catch (_e) { /* ignore */ }
     for (const [, p] of _analysisPending) p.reject(new Error('terminated'));
     _analysisPending.clear();
     _analysisWorker = null;
   }
   if (_ioWorker) {
-    try { _ioWorker.terminate(); } catch (_e) { /* ignore */ }
+    try { _ioWorker.kill(); } catch (_e) { /* ignore */ }
     for (const [, p] of _ioPending) p.reject(new Error('terminated'));
     _ioPending.clear();
     _ioWorker = null;
   }
   if (_computeWorker) {
-    try { _computeWorker.terminate(); } catch (_e) { /* ignore */ }
+    try { _computeWorker.kill(); } catch (_e) { /* ignore */ }
     for (const [, p] of _computePending) p.reject(new Error('terminated'));
     _computePending.clear();
     _computeWorker = null;
@@ -1259,7 +1296,7 @@ function getTagsKey() {
 }
 
 function getEntryTagKey(entry) {
-  if (state.appMode === 'other') return entry.file || String(entry.index);
+  if (state.appMode === 'other') return entry.filePath || entry.file || String(entry.index);
   return String(entry.index);
 }
 
@@ -1288,6 +1325,39 @@ function loadEntryTags() {
           }
           saveEntryTags();
         }
+      }
+    }
+
+    // Fallback for "other" mode: if current dir has no/few tags, look for matching
+    // filenames in tags from other directories (same files opened from different path)
+    if (state.appMode === 'other' && state.entries.length > 0) {
+      const currentNames = new Set(state.entries.map(e => nodePath.basename(e.filePath || e.file)));
+      const existingKeys = new Set(Object.keys(state.entryTags));
+
+      // Only import if we have very few tags for this dir
+      if (existingKeys.size < state.entries.length / 2) {
+        // Build basename→tag map from all other txtdir entries
+        const otherTags = {};
+        for (const [dirKey, tags] of Object.entries(all)) {
+          if (!dirKey.startsWith('txtdir:') || dirKey === key) continue;
+          for (const [filePath, tagData] of Object.entries(tags)) {
+            const bn = nodePath.basename(filePath);
+            if (currentNames.has(bn) && !otherTags[bn]) otherTags[bn] = tagData;
+          }
+        }
+
+        // Import tags by matching basename to current entries
+        let imported = 0;
+        for (const entry of state.entries) {
+          const entryKey = getEntryTagKey(entry);
+          if (existingKeys.has(entryKey)) continue;
+          const bn = nodePath.basename(entry.filePath || entry.file);
+          if (otherTags[bn]) {
+            state.entryTags[entryKey] = otherTags[bn];
+            imported++;
+          }
+        }
+        if (imported > 0) saveEntryTags();
       }
     }
   } catch (_) {}
@@ -1576,9 +1646,9 @@ function undoLastChange() {
   if (records.length === 0) return false;
   const record = records[records.length - 1];
 
-  // Save redo info before applying
+  // Save redo info before applying (store entry ref, not index — index shifts on delete)
   _redoStack.push({
-    entryIndex: state.currentIndex,
+    entry,
     record: { ...record },
   });
 
@@ -1610,12 +1680,13 @@ function undoLastChange() {
 function redoLastChange() {
   if (_redoStack.length === 0) return false;
   const redo = _redoStack.pop();
-  if (redo.entryIndex !== state.currentIndex) {
+  const currentEntry = state.entries[state.currentIndex];
+  if (!currentEntry || redo.entry !== currentEntry) {
     // Redo is for a different entry — discard
     _redoStack.length = 0;
     return false;
   }
-  const entry = state.entries[state.currentIndex];
+  const entry = currentEntry;
   const record = redo.record;
 
   // Re-apply the change (newText is what was undone)
@@ -1729,7 +1800,7 @@ function renderMinimap() {
   const hasBookmarks = state.settings.show_bookmarks !== false && getBookmarkIndices().length > 0;
   canvas.style.display = hasBookmarks ? '' : 'none';
   if (!hasBookmarks) return;
-  const entries = state.entries;
+  const entries = (_currentFilter || _statusFilter !== 'all') ? _filteredEntries : state.entries;
   const n = entries.length;
   const h = canvas.parentElement.clientHeight;
   const w = 28;
@@ -1764,8 +1835,11 @@ function renderMinimap() {
   }
 
   // Current entry indicator
-  if (state.currentIndex >= 0 && state.currentIndex < n) {
-    const cy = Math.floor(state.currentIndex * h / n);
+  const curPos = entries === state.entries
+    ? state.currentIndex
+    : entries.findIndex(e => e.index === state.currentIndex);
+  if (curPos >= 0 && curPos < n) {
+    const cy = Math.floor(curPos * h / n);
     const ch = Math.max(3, Math.ceil(rowH));
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 1.5;
@@ -1859,12 +1933,13 @@ function filterCmdResults(query) {
   _cmdFilteredItems = [];
 
   if (query.startsWith('#')) {
-    // Go to entry by number
+    // Go to entry by number (user types 1-based, entry.index is 0-based)
     const num = parseInt(query.slice(1), 10);
-    if (!isNaN(num)) {
-      const entry = state.entries.find(e => e.index === num);
+    if (!isNaN(num) && num >= 1) {
+      const idx = num - 1;
+      const entry = state.entries[idx];
       if (entry) {
-        _cmdFilteredItems = [{ label: 'Перейти до [' + num + '] ' + entry.file, action: () => selectEntryByIndex(num) }];
+        _cmdFilteredItems = [{ label: 'Перейти до [' + num + '] ' + entry.file, action: () => selectEntryByIndex(idx) }];
       }
     }
   } else if (query.startsWith('@')) {
@@ -2235,7 +2310,8 @@ async function _buildRecentFilesListAsync(container) {
 function removeFromRecent(key) {
   const sessions = loadSessions();
   delete sessions[key];
-  saveSessions(sessions);
+  // Write synchronously so the next loadSessions() reads updated data
+  try { fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2), 'utf-8'); } catch (_) {}
 }
 
 function openRecentFile(filePath, mode) {
@@ -2543,7 +2619,7 @@ function openThemeEditor(slug) {
   } else {
     nameInput.value = '';
     baseSelect.value = state.settings.theme?.startsWith('custom:')
-      ? (state.settings.custom_themes[state.settings.theme]?.base || 'dark')
+      ? (state.settings.custom_themes?.[state.settings.theme]?.base || 'dark')
       : (state.settings.theme || 'dark');
     vars = readThemeVars(baseSelect.value);
     delBtn.classList.add('hidden');
@@ -3675,6 +3751,9 @@ function buildHunks(edits, origLines, currLines, context) {
 function getEntryCurrentText(idx) {
   const entry = state.entries[idx];
   if (!entry) return '';
+  // Use schema-parsed view if a schema is active (same as editor shows)
+  const schema = getFileSchema(entry);
+  if (schema) return getTextLinesForEntry(entry).join('\n');
   if (state.appMode === 'jojo') return entry.text;
   if (state.appMode === 'other') return entry.text.join('\n');
   return entry.toFlat(state.useSeparator);
@@ -4329,6 +4408,8 @@ function rebuildFilteredEntries() {
   _filteredEntries = [];
   _filterSnippets.clear();
   _filteredIndexByEntry.clear();
+  // Clear multi-select to avoid actions on entries not visible in filtered list
+  clearMultiSelect();
 
   for (const entry of state.entries) {
     if (filt && !entryMatchesFilter(entry, filt)) continue;
@@ -4524,29 +4605,57 @@ function refreshList() {
 }
 
 async function onListItemClick(newIdx) {
-  if (newIdx === state.currentIndex) {
-    // Already selected — ensure tab exists and stats are current
-    if (!_openTabs.includes(newIdx)) openEntryTab(newIdx, false);
-    return;
-  }
+  if (newIdx === state.currentIndex) return;
 
   if (state.currentIndex >= 0 && editorDirty()) {
-    // If user edited the preview, auto-pin it before switching
-    if (_previewTabIdx === state.currentIndex) pinCurrentTab();
     await applyChanges();
   }
 
   state.currentIndex = newIdx;
+  openEntryTab(newIdx, false);
   loadEditor();
   saveSession();
-  openEntryTab(newIdx, false); // preview (not pinned)
+
+  // O(1) active class swap
+  if (_activeListEl) _activeListEl.classList.remove('active');
+
+  // Scroll file list so current entry stays visible
+  const filtIdx = _filteredIndexByEntry.get(newIdx);
+  if (filtIdx !== undefined) {
+    const itemH = _getItemHeight();
+    const container = dom.entryListContainer;
+    const targetTop = filtIdx * itemH;
+    if (container && (targetTop < container.scrollTop || targetTop + itemH > container.scrollTop + container.clientHeight)) {
+      container.scrollTop = Math.max(0, targetTop - container.clientHeight / 2 + itemH / 2);
+    }
+    // Force synchronous render so the target element exists in the DOM
+    _vForceRender = true;
+    virtualRender();
+    const target = dom.entryList.querySelector(`[data-index="${newIdx}"]`);
+    if (target) {
+      target.classList.add('active');
+      _activeListEl = target;
+    } else {
+      _activeListEl = null;
+    }
+  } else {
+    _activeListEl = null;
+  }
   updateSidePanelForEntry(newIdx);
+  // Update left panel header if side panel is open
+  const mainTitle = document.getElementById('editor-main-title');
+  const mainHeader = document.getElementById('editor-main-header');
+  if (mainTitle && mainHeader && _sidePanelIdx >= 0) {
+    const curEntry = state.entries[newIdx];
+    mainTitle.textContent = curEntry ? `[${newIdx + 1}] ${curEntry.file || ''}` : '';
+  }
 
   // If search filter is active, highlight the first match in the editor
   const filt = dom.searchInput.value.trim();
   if (filt) {
     jumpToTextInEditor(filt);
   }
+  renderTabBar();
 }
 
 async function onListItemDblClick(idx) {
@@ -4580,9 +4689,8 @@ function jumpToTextInEditor(query) {
 let _activeListEl = null;
 function selectEntryByIndex(idx, deferHeavy) {
   state.currentIndex = idx;
+  openEntryTab(idx, false);
   loadEditor(deferHeavy);
-  // Ensure a tab exists for the selected entry
-  if (!_openTabs.includes(idx)) openEntryTab(idx, false);
   // O(1) active class swap
   if (_activeListEl) _activeListEl.classList.remove('active');
 
@@ -4775,6 +4883,9 @@ function loadEditor(deferHeavy) {
   _find.matches = [];
   _find.currentIdx = -1;
   document.getElementById('find-results-panel').classList.add('hidden');
+  // Close compare modal if open
+  const cmpOverlay = document.getElementById('compare-overlay');
+  if (cmpOverlay && !cmpOverlay.classList.contains('hidden')) hideCompareModal();
   const frEl = document.getElementById('find-result');
   const frrEl = document.getElementById('find-replace-result');
   if (frEl) frEl.textContent = '';
@@ -4986,7 +5097,6 @@ function onEditorChanged(e) {
   }
   if (_find.currentIdx >= 0) { _find.currentIdx = -1; }
 
-  hideAddGlossPopup();
   markRecoveryDirty();
 
   if (_editorHeavyDebounce) clearTimeout(_editorHeavyDebounce);
@@ -5139,7 +5249,7 @@ async function applyChanges() {
       return;
     }
 
-    const newText = Array.isArray(entry.text) ? entry.text : entry.text;
+    const newText = Array.isArray(entry.text) ? [...entry.text] : [entry.text];
     const newSp = entry.speakers || undefined;
     recordHistory(entry, oldText, newText, oldSp, newSp, 'edit');
     entry.dirty = true;
@@ -5426,7 +5536,7 @@ function _applyProgress(transE, totalE, transL, totalL, editedFiles, editedLines
   if (secTrans) secTrans.title = `Переклад: ${pct.toFixed(1)}%\nФайлів: ${transE} / ${totalE}\n${useWords ? 'Слів' : 'Рядків'}: ${tVal} / ${tTotal}\nЗалишилось: ${remainE} файлів, ${remain} ${unit}`;
 
   // Editing progress
-  const editPct = tTotal > 0 ? (editedLines / totalL * 100) : 0;
+  const editPct = totalL > 0 ? (editedLines / totalL * 100) : 0;
   dom.progEditBar.style.width = editPct.toFixed(1) + '%';
   dom.progEditPct.textContent = editPct.toFixed(1) + '%';
   dom.progEditFiles.textContent = `зредаговано ${editedFiles} із ${totalE}`;
@@ -6705,6 +6815,8 @@ async function saveFile() {
   if (state.appMode === 'jojo') { await saveJoJoJson(); return; }
   if (!state.filePath) { await saveFileAs(); return; }
   await writeJson(state.filePath);
+  // Refresh side panel if open (so it reflects saved content)
+  if (_sidePanelIdx >= 0) refreshSidePanel();
 }
 
 async function saveAll() {
@@ -6984,14 +7096,19 @@ async function saveTxtFiles(silent = false) {
     try {
       const content = entry.text.join('\n') + '\n';
       const enc = entry._encoding || _ENC_UTF8;
+      // Atomic write: temp file + rename to avoid corruption on crash/disk-full
+      const tmpPath = entry.filePath + '.tmp';
       if (enc === _ENC_UTF8) {
-        fs.writeFileSync(entry.filePath, content, 'utf-8');
+        fs.writeFileSync(tmpPath, content, 'utf-8');
       } else {
-        fs.writeFileSync(entry.filePath, _encodeString(content, enc));
+        fs.writeFileSync(tmpPath, _encodeString(content, enc));
       }
+      fs.renameSync(tmpPath, entry.filePath);
       entry.markSaved();
       ok++;
     } catch (e) {
+      // Clean up temp file if rename failed
+      try { fs.unlinkSync(entry.filePath + '.tmp'); } catch (_) {}
       errs.push(`${entry.file}: ${e.message}`);
     }
   }
@@ -7002,6 +7119,8 @@ async function saveTxtFiles(silent = false) {
   saveSession();
   deleteRecoveryFile();
   renderTabBar();
+  // Refresh side panel if open
+  if (_sidePanelIdx >= 0) refreshSidePanel();
 
   if (errs.length > 0 && !silent) {
     await showInfo('Помилки при збереженні', errs.join('\n'));
@@ -7039,7 +7158,7 @@ async function loadJoJoJson(filePath) {
   dom.flatContainer.style.display = 'flex';
   dom.splitContainer.style.display = 'none';
 
-  const fullText = data.map(item => String(item)).join('\n');
+  const fullText = data.map(item => String(item).replace(/\n/g, '\\n').replace(/\r/g, '\\r')).join('\n');
   const entry = new JoJoEntry(0, fullText);
   entry.file = nodePath.basename(filePath);
   state.entries = [entry];
@@ -7070,7 +7189,7 @@ async function saveJoJoJson(silent = false) {
 
   // Split single entry text back into array lines
   const text = state.entries.length > 0 ? state.entries[0].text : '';
-  const arr = text.split('\n');
+  const arr = text.split('\n').map(line => line.replace(/\\r/g, '\r').replace(/\\n/g, '\n'));
   const blob = JSON.stringify(arr, null, 2);
 
   try {
@@ -7924,6 +8043,7 @@ function applyGlossaryDecorations(editor, ranges) {
 }
 
 function _glossLookup(term) {
+  if (!term) return '';
   return state.glossary[term]
     || state.glossary[term.toLowerCase()]
     || state.glossary[Object.keys(state.glossary).find(k => k.toLowerCase() === term.toLowerCase())]
@@ -8157,11 +8277,16 @@ function showEntryContextMenu(e, entryIndex) {
   explorerSep.classList.toggle('hidden', !hasPath);
   explorerItem.classList.toggle('hidden', !hasPath);
 
-  // Position
-  const x = Math.min(e.clientX, window.innerWidth - 190);
-  const y = Math.min(e.clientY, window.innerHeight - 200);
+  // Position — measure actual menu height to prevent going off-screen
+  menu.style.left = '0px';
+  menu.style.top = '0px';
+  const menuRect = menu.getBoundingClientRect();
+  const menuW = menuRect.width || 190;
+  const menuH = menuRect.height || 200;
+  const x = Math.min(e.clientX, window.innerWidth - menuW - 4);
+  const y = Math.min(e.clientY, window.innerHeight - menuH - 4);
   menu.style.left = x + 'px';
-  menu.style.top = y + 'px';
+  menu.style.top = Math.max(0, y) + 'px';
 }
 
 function hideEntryContextMenu() {
@@ -8197,11 +8322,17 @@ function removeEntryFromList(idx) {
     state.entries[i].index = i;
   }
 
-  // Close tab if open
-  closeEntryTab(idx);
+  // Remove tab directly (don't use closeEntryTab — it may trigger
+  // onListItemClick → applyChanges which would corrupt the next entry
+  // since state.entries has already been spliced)
+  const _tabPos = _openTabs.indexOf(idx);
+  if (_tabPos >= 0) _openTabs.splice(_tabPos, 1);
+  if (_previewTabIdx === idx) _previewTabIdx = -1;
 
   // Fix open tab indices (shift down indices above removed)
-  _openTabs = _openTabs.map(t => t > idx ? t - 1 : t);
+  for (let i = 0; i < _openTabs.length; i++) {
+    if (_openTabs[i] > idx) _openTabs[i]--;
+  }
 
   // Fix compare selection
   if (_compareFirstIdx === idx) clearCompareSelection();
@@ -8216,6 +8347,7 @@ function removeEntryFromList(idx) {
       _monacoSp.setValue('');
       // Return to welcome screen when all entries removed
       showWelcomeScreen();
+      updateProgress();
       setStatus(`Видалено зі списку: ${name}`);
       return;
     } else {
@@ -9096,6 +9228,9 @@ function doReplaceOne() {
 }
 
 function doReplaceAllEntries() {
+  // Flush unsaved editor changes to entry.text before replacing
+  silentApply();
+
   const params = getFindParams('replace');
   addToFindHistory('find', params.query);
   addToFindHistory('replace', params.replaceWith);
@@ -9196,6 +9331,7 @@ function doReplaceAllEntries() {
   forceVirtualRender();
   updateProgress();
 
+  if (entriesAffected > 0) _programmaticEdit = true;
   const msg = `Замінено: ${totalReplacements} у ${entriesAffected} записах`;
   setFindResult(msg, false, true);
   setStatus(msg);
@@ -9588,14 +9724,30 @@ function showSidePanel(entryIdx, originalMode) {
     ? `Оригінал: [${entryIdx + 1}] ${entry.file || ''}`
     : `[${entryIdx + 1}] ${entry.file || ''}`;
 
+  // Show left panel header with current entry name when side panel is open
+  const mainHeader = document.getElementById('editor-main-header');
+  const mainTitle = document.getElementById('editor-main-title');
+  if (mainHeader && mainTitle) {
+    const curEntry = state.entries[state.currentIndex];
+    mainTitle.textContent = curEntry ? `[${state.currentIndex + 1}] ${curEntry.file || ''}` : '';
+    mainHeader.classList.remove('hidden');
+  }
+
   // Get entry text for display
   let text;
   if (isOrig) {
+    // Original mode: show raw original text
     text = (entry.originalText || entry.text).join('\n');
-  } else if (state.appMode === 'ishin' && state.splitMode) {
-    text = entry.text.join('\n') + '\n---\n' + entry.visibleSpeakers().join('\n');
   } else {
-    text = entry.toFlat(state.appMode === 'ishin' ? state.useSeparator : undefined);
+    // Schema mode: show parsed view if schema is active, otherwise raw
+    const schema = getFileSchema(entry);
+    if (schema) {
+      text = getTextLinesForEntry(entry).join('\n');
+    } else if (state.appMode === 'ishin' && state.splitMode) {
+      text = entry.text.join('\n') + '\n---\n' + entry.visibleSpeakers().join('\n');
+    } else {
+      text = entry.toFlat(state.appMode === 'ishin' ? state.useSeparator : undefined);
+    }
   }
 
   // Create or update Monaco editor
@@ -9625,6 +9777,12 @@ function showSidePanel(entryIdx, originalMode) {
         renderLineHighlight: 'none',
       }
     );
+    // Track focus so getActiveEditor() returns side panel when focused
+    _sideMonaco.onDidFocusEditorWidget(() => { _lastFocusedEditor = _sideMonaco; });
+    // Redirect Find/Replace to our dialogs
+    _sideMonaco.addCommand(_monaco.KeyMod.CtrlCmd | _monaco.KeyCode.KeyF, () => { showFindDialog('find'); });
+    _sideMonaco.addCommand(_monaco.KeyMod.CtrlCmd | _monaco.KeyCode.KeyH, () => { showFindDialog('replace'); });
+    _sideMonaco.addCommand(_monaco.KeyMod.CtrlCmd | _monaco.KeyCode.KeyL, () => { showFindDialog('goto'); });
   }
 
   _sideMonaco.setValue(text);
@@ -9650,6 +9808,11 @@ function hideSidePanel() {
   document.getElementById('side-panel-handle').classList.add('hidden');
   _sidePanelIdx = -1;
   _sideOriginalMode = false;
+  // Reset focus away from closed side panel
+  if (_lastFocusedEditor === _sideMonaco) _lastFocusedEditor = null;
+  // Hide left panel header
+  const mainHeader = document.getElementById('editor-main-header');
+  if (mainHeader) mainHeader.classList.add('hidden');
 
   const btn = document.getElementById('tb-side-panel');
   if (btn) btn.classList.remove('active');
@@ -9679,9 +9842,17 @@ function toggleOriginalSidePanel() {
   document.getElementById('tb-original').classList.toggle('active', _sideOriginalMode);
 }
 
-/** Called when user navigates to a new entry — update side panel if in original mode */
+/** Called when user navigates to a new entry — update side panel only if in "Original" mode.
+ *  When a specific file is pinned via context menu, it stays pinned. */
 function updateSidePanelForEntry(entryIdx) {
-  if (_sideOriginalMode && entryIdx >= 0) showSidePanel(entryIdx, true);
+  if (entryIdx < 0) return;
+  // Only auto-follow current entry in original mode; pinned files stay put
+  if (_sidePanelIdx >= 0 && _sideOriginalMode) showSidePanel(entryIdx, true);
+}
+
+/** Called after save — refresh side panel content for whatever entry it's showing */
+function refreshSidePanel() {
+  if (_sidePanelIdx >= 0) showSidePanel(_sidePanelIdx, _sideOriginalMode);
 }
 
 function setupSidePanelHandle() {
@@ -10066,6 +10237,8 @@ function saveFileSchema(textPaths, parseAs) {
     state.settings.file_schemas[key] = schemaEntry;
   }
   saveSettings(state.settings);
+  // Invalidate progress cache on all entries — schema change affects word counting
+  for (const e of state.entries) e._progressCache = null;
   updateProgress();
   updateMeta();
   forceVirtualRender();
@@ -10469,6 +10642,19 @@ function _applySchemaIshin(entry, editedLines, schema) {
 }
 
 function _applySchemaOther(entry, editedLines, schema) {
+  const origText = Array.isArray(entry.text) ? entry.text.join('\n') : entry.text;
+  const fmt = _detectEntryFormat(entry);
+
+  // XML: modify DOM directly and serialize back to XML
+  if (fmt === 'xml') {
+    return _applySchemaXml(entry, editedLines, schema, origText);
+  }
+
+  // Key=Value: update values in original text
+  if (fmt === 'keyvalue') {
+    return _applySchemaKeyValue(entry, editedLines, schema, origText);
+  }
+
   const data = _tryParseEntryData(entry);
   if (!data) return false;
 
@@ -10490,8 +10676,12 @@ function _applySchemaOther(entry, editedLines, schema) {
     }
   }
 
+  // CSV: re-serialize as CSV
+  if (fmt === 'csv') {
+    return _applySchemaCsv(entry, editedLines, schema, origText, cloned, isArr);
+  }
+
   // Detect original indent for JSON re-serialization
-  const origText = Array.isArray(entry.text) ? entry.text.join('\n') : entry.text;
   const indentMatch = origText.match(/\n(\s+)/);
   let indent = 2;
   if (indentMatch) indent = indentMatch[1].includes('\t') ? '\t' : indentMatch[1].length;
@@ -10503,6 +10693,176 @@ function _applySchemaOther(entry, editedLines, schema) {
   } else {
     entry.text = serialized.split('\n');
   }
+  return true;
+}
+
+function _detectEntryFormat(entry) {
+  const parseAs = getFileParseAs(entry);
+  if (parseAs !== 'auto') return parseAs;
+  const raw = Array.isArray(entry.text) ? entry.text.join('\n') : (entry.text || '');
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('<')) {
+    try {
+      const doc = new DOMParser().parseFromString(trimmed, 'application/xml');
+      if (!doc.querySelector('parsererror')) return 'xml';
+    } catch (_) {}
+  }
+  try { const p = JSON.parse(trimmed); if (p && typeof p === 'object') return 'json'; } catch (_) {}
+  // Check CSV
+  if (entry.filePath && entry.filePath.toLowerCase().endsWith('.csv')) return 'csv';
+  // Check key=value
+  const lines = raw.split('\n');
+  let kvCount = 0;
+  for (const l of lines) { if (l.indexOf('=') > 0) kvCount++; }
+  if (kvCount >= 2 && kvCount / lines.filter(l => l.trim()).length > 0.5) return 'keyvalue';
+  return 'json';
+}
+
+function _applySchemaXml(entry, editedLines, schema, origText) {
+  // Parse to JS object to get old values via extractByPath
+  const data = _tryParseEntryXml(entry);
+  if (!data) return false;
+
+  // Collect old values (in document order)
+  const origVals = [];
+  for (const pathStr of schema.textPaths) {
+    const vals = extractByPath(data, pathStr);
+    for (const v of vals) origVals.push(v);
+  }
+
+  // Map edited lines to new values (preserving line counts per value)
+  const newVals = [];
+  let lineIdx = 0;
+  for (const ov of origVals) {
+    const lc = ov.split('\n').length;
+    newVals.push(editedLines.slice(lineIdx, lineIdx + lc).join('\n'));
+    lineIdx += lc;
+  }
+
+  // Replace values directly in the original XML text to preserve formatting.
+  // Handles both element text content (>value<) and attribute values (="value").
+  let result = origText;
+  let searchPos = 0;
+  for (let i = 0; i < origVals.length; i++) {
+    if (origVals[i] === newVals[i]) continue;
+    const oldEnc = _xmlEncodeText(origVals[i]);
+    const newEnc = _xmlEncodeText(newVals[i]);
+    // Also encode for attribute context (& " < > but keep single quotes)
+    const oldAttr = _xmlEncodeAttr(origVals[i]);
+    const newAttr = _xmlEncodeAttr(newVals[i]);
+
+    // Try 1: element text content (between > and <)
+    let found = false;
+    let pos = searchPos;
+    while (pos < result.length) {
+      pos = result.indexOf(oldEnc, pos);
+      if (pos < 0) break;
+      const lastGt = result.lastIndexOf('>', pos);
+      const lastLt = result.lastIndexOf('<', pos);
+      if (lastGt >= 0 && lastGt > lastLt) {
+        result = result.substring(0, pos) + newEnc + result.substring(pos + oldEnc.length);
+        searchPos = pos + newEnc.length;
+        found = true;
+        break;
+      }
+      pos += oldEnc.length;
+    }
+
+    // Try 2: attribute value (="oldValue" or ='oldValue')
+    if (!found) {
+      const patterns = ['="' + oldAttr + '"', "='" + oldAttr + "'"];
+      const replacements = ['="' + newAttr + '"', "='" + newAttr + "'"];
+      for (let pi = 0; pi < patterns.length; pi++) {
+        const apos = result.indexOf(patterns[pi], searchPos);
+        if (apos >= 0) {
+          result = result.substring(0, apos) + replacements[pi] + result.substring(apos + patterns[pi].length);
+          searchPos = apos + replacements[pi].length;
+          found = true;
+          break;
+        }
+      }
+    }
+  }
+
+  entry.text = result.split('\n');
+  return true;
+}
+
+function _xmlEncodeText(text) {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function _xmlEncodeAttr(text) {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function _applySchemaKeyValue(entry, editedLines, schema, origText) {
+  const data = _tryParseEntryKeyValue(entry);
+  if (!data) return false;
+
+  // Collect original values
+  const origVals = [];
+  for (const pathStr of schema.textPaths) {
+    const vals = extractByPath(data, pathStr);
+    for (const v of vals) origVals.push({ path: pathStr, value: v });
+  }
+
+  // Map edited lines to new values
+  const newVals = [];
+  let lineIdx = 0;
+  for (const ov of origVals) {
+    const lc = ov.value.split('\n').length;
+    newVals.push({ path: ov.path, value: editedLines.slice(lineIdx, lineIdx + lc).join('\n') });
+    lineIdx += lc;
+  }
+
+  // Replace values in original text
+  const lines = origText.split('\n');
+  for (const nv of newVals) {
+    // For key=value, path is just the key name
+    const key = nv.path;
+    for (let i = 0; i < lines.length; i++) {
+      const eqIdx = lines[i].indexOf('=');
+      if (eqIdx > 0 && lines[i].substring(0, eqIdx).trim() === key) {
+        lines[i] = lines[i].substring(0, eqIdx + 1) + nv.value;
+        break;
+      }
+    }
+  }
+
+  entry.text = lines;
+  return true;
+}
+
+function _applySchemaCsv(entry, editedLines, schema, origText, cloned, isArr) {
+  // For CSV, rebuild from the modified object array
+  const items = isArr ? cloned : [cloned];
+  if (items.length === 0) return false;
+
+  const raw = origText;
+  const rawLines = raw.split('\n').filter(l => l.trim());
+  const delim = _detectCsvDelimiter(rawLines.slice(0, 5));
+  const hasHeaders = _detectCsvHeaders(rawLines[0], delim);
+
+  const result = [];
+  if (hasHeaders) {
+    result.push(rawLines[0]); // preserve original header line
+  }
+
+  for (const item of items) {
+    const keys = hasHeaders ? _splitCsvRow(rawLines[0], delim) : Object.keys(item);
+    const vals = keys.map(k => {
+      const v = item[k] || '';
+      // Quote if contains delimiter, quote, or newline
+      if (v.includes(delim) || v.includes('"') || v.includes('\n')) {
+        return '"' + v.replace(/"/g, '""') + '"';
+      }
+      return v;
+    });
+    result.push(vals.join(delim));
+  }
+
+  entry.text = result;
   return true;
 }
 
@@ -10701,12 +11061,18 @@ function setupSchemaModal() {
     const parseAs = document.getElementById('schema-parse-type').value;
     saveFileSchema(paths, parseAs);
     hideSchemaModal();
+    // Reload editor to reflect new schema immediately
+    loadEditor();
+    updateSchemaViewButton();
     setStatus(`Схему збережено: ${paths.length > 0 ? paths.join(', ') : 'стандартна'}${parseAs !== 'auto' ? ' (' + parseAs.toUpperCase() + ')' : ''}`);
   });
 
   document.getElementById('schema-reset-btn').addEventListener('click', () => {
     saveFileSchema([], 'auto');
     hideSchemaModal();
+    // Reload editor to reflect schema reset immediately
+    loadEditor();
+    updateSchemaViewButton();
     setStatus('Схему скинуто до стандартної');
   });
 
@@ -10920,6 +11286,7 @@ function _setupCustomSchemaUI() {
     if (!key) return;
     state.settings.file_schemas[key] = { textPaths: [], customSchemaIdx: idx };
     saveSettings(state.settings);
+    for (const e of state.entries) e._progressCache = null;
     updateProgress();
     updateMeta();
     forceVirtualRender();
@@ -11921,12 +12288,21 @@ function setupKeyboard() {
       return;
     }
 
-    // Ctrl+Z — only intercept for programmatic undo, else let Monaco handle
+    // Ctrl+Z — programmatic undo, or history undo when editor is clean (e.g. after save)
     if (code === 'KeyZ' && !e.shiftKey && !e.altKey) {
       if (_programmaticEdit) {
         e.preventDefault(); e.stopPropagation();
         _programmaticEdit = false;
         undoLastChange();
+        return;
+      }
+      if (!editorDirty() && state.currentIndex >= 0) {
+        const entry = state.entries[state.currentIndex];
+        if (entry && getEntryHistory(entry).length > 0) {
+          e.preventDefault(); e.stopPropagation();
+          undoLastChange();
+          return;
+        }
       }
       return;
     }
@@ -12043,6 +12419,8 @@ function setupKeyboard() {
       if (e.key === 'ArrowDown') { e.preventDefault(); compareNext(); return; }
     }
 
+
+
     // Delete — remove selected entries from list
     if (e.key === 'Delete' && !e.ctrlKey && !e.altKey && !e.shiftKey) {
       // If multi-selected, always handle (regardless of editor focus)
@@ -12068,6 +12446,64 @@ function setupKeyboard() {
       return;
     }
   });
+
+  // ── Paste event: handles Win+V clipboard history and other non-Ctrl+V paste sources ──
+  document.addEventListener('paste', (e) => {
+    const text = (e.clipboardData || window.clipboardData || '').getData &&
+                 (e.clipboardData || window.clipboardData).getData('text');
+    if (!text) return;
+    // Let INPUT/TEXTAREA handle paste natively
+    const el = document.activeElement;
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
+    // Insert into Monaco editor (even if it lost focus due to Win+V panel)
+    const editor = getActiveEditor();
+    if (editor) {
+      e.preventDefault();
+      editor.focus();
+      editor.trigger('keyboard', 'type', { text });
+    }
+  });
+
+  // ── Win+V clipboard history: detect clipboard change when window regains focus ──
+  // Windows updates the clipboard AFTER focus returns to the app, so we poll
+  // a few times with short delays to catch the update reliably.
+  let _clipSnapshotBeforeBlur = '';
+  let _blurTimestamp = 0;
+  window.addEventListener('blur', () => {
+    _clipSnapshotBeforeBlur = clipboard.readText() || '';
+    _blurTimestamp = Date.now();
+  });
+  window.addEventListener('focus', () => {
+    const elapsed = Date.now() - _blurTimestamp;
+    if (!_blurTimestamp || elapsed > 5000) return;
+    const snap = _clipSnapshotBeforeBlur;
+    let attempts = 0;
+    const poll = () => {
+      const now = clipboard.readText() || '';
+      if (now && now !== snap) {
+        pasteTextIntoActive(now);
+      } else if (++attempts < 6) {
+        setTimeout(poll, 80);
+      }
+    };
+    setTimeout(poll, 50);
+  });
+
+  function pasteTextIntoActive(text) {
+    const el = document.activeElement;
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
+      const s = el.selectionStart, end = el.selectionEnd;
+      el.value = el.value.slice(0, s) + text + el.value.slice(end);
+      el.selectionStart = el.selectionEnd = s + text.length;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    } else {
+      const editor = getActiveEditor();
+      if (editor) {
+        editor.focus();
+        editor.trigger('keyboard', 'type', { text });
+      }
+    }
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -12224,11 +12660,13 @@ function setupEventListeners() {
     }
 
     if (e.shiftKey && _lastClickedIdx >= 0) {
-      // Shift+click — range selection from anchor to clicked
+      // Shift+click — range selection from anchor to clicked (filtered only)
       _multiSelected.clear();
       const from = Math.min(_lastClickedIdx, idx);
       const to = Math.max(_lastClickedIdx, idx);
-      for (let i = from; i <= to; i++) _multiSelected.add(i);
+      for (const fe of _filteredEntries) {
+        if (fe.index >= from && fe.index <= to) _multiSelected.add(fe.index);
+      }
       applyMultiSelectVisual();
       dom.entryListContainer.focus();
       return;

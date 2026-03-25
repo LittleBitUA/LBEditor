@@ -212,12 +212,21 @@ function setupKeyboard() {
       return;
     }
 
-    // Ctrl+Z — only intercept for programmatic undo, else let Monaco handle
+    // Ctrl+Z — programmatic undo, or history undo when editor is clean (e.g. after save)
     if (code === 'KeyZ' && !e.shiftKey && !e.altKey) {
       if (_programmaticEdit) {
         e.preventDefault(); e.stopPropagation();
         _programmaticEdit = false;
         undoLastChange();
+        return;
+      }
+      if (!editorDirty() && state.currentIndex >= 0) {
+        const entry = state.entries[state.currentIndex];
+        if (entry && getEntryHistory(entry).length > 0) {
+          e.preventDefault(); e.stopPropagation();
+          undoLastChange();
+          return;
+        }
       }
       return;
     }
@@ -334,6 +343,8 @@ function setupKeyboard() {
       if (e.key === 'ArrowDown') { e.preventDefault(); compareNext(); return; }
     }
 
+
+
     // Delete — remove selected entries from list
     if (e.key === 'Delete' && !e.ctrlKey && !e.altKey && !e.shiftKey) {
       // If multi-selected, always handle (regardless of editor focus)
@@ -359,6 +370,64 @@ function setupKeyboard() {
       return;
     }
   });
+
+  // ── Paste event: handles Win+V clipboard history and other non-Ctrl+V paste sources ──
+  document.addEventListener('paste', (e) => {
+    const text = (e.clipboardData || window.clipboardData || '').getData &&
+                 (e.clipboardData || window.clipboardData).getData('text');
+    if (!text) return;
+    // Let INPUT/TEXTAREA handle paste natively
+    const el = document.activeElement;
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
+    // Insert into Monaco editor (even if it lost focus due to Win+V panel)
+    const editor = getActiveEditor();
+    if (editor) {
+      e.preventDefault();
+      editor.focus();
+      editor.trigger('keyboard', 'type', { text });
+    }
+  });
+
+  // ── Win+V clipboard history: detect clipboard change when window regains focus ──
+  // Windows updates the clipboard AFTER focus returns to the app, so we poll
+  // a few times with short delays to catch the update reliably.
+  let _clipSnapshotBeforeBlur = '';
+  let _blurTimestamp = 0;
+  window.addEventListener('blur', () => {
+    _clipSnapshotBeforeBlur = clipboard.readText() || '';
+    _blurTimestamp = Date.now();
+  });
+  window.addEventListener('focus', () => {
+    const elapsed = Date.now() - _blurTimestamp;
+    if (!_blurTimestamp || elapsed > 5000) return;
+    const snap = _clipSnapshotBeforeBlur;
+    let attempts = 0;
+    const poll = () => {
+      const now = clipboard.readText() || '';
+      if (now && now !== snap) {
+        pasteTextIntoActive(now);
+      } else if (++attempts < 6) {
+        setTimeout(poll, 80);
+      }
+    };
+    setTimeout(poll, 50);
+  });
+
+  function pasteTextIntoActive(text) {
+    const el = document.activeElement;
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
+      const s = el.selectionStart, end = el.selectionEnd;
+      el.value = el.value.slice(0, s) + text + el.value.slice(end);
+      el.selectionStart = el.selectionEnd = s + text.length;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    } else {
+      const editor = getActiveEditor();
+      if (editor) {
+        editor.focus();
+        editor.trigger('keyboard', 'type', { text });
+      }
+    }
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -515,11 +584,13 @@ function setupEventListeners() {
     }
 
     if (e.shiftKey && _lastClickedIdx >= 0) {
-      // Shift+click — range selection from anchor to clicked
+      // Shift+click — range selection from anchor to clicked (filtered only)
       _multiSelected.clear();
       const from = Math.min(_lastClickedIdx, idx);
       const to = Math.max(_lastClickedIdx, idx);
-      for (let i = from; i <= to; i++) _multiSelected.add(i);
+      for (const fe of _filteredEntries) {
+        if (fe.index >= from && fe.index <= to) _multiSelected.add(fe.index);
+      }
       applyMultiSelectVisual();
       dom.entryListContainer.focus();
       return;

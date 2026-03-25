@@ -55,7 +55,7 @@ function getTagsKey() {
 }
 
 function getEntryTagKey(entry) {
-  if (state.appMode === 'other') return entry.file || String(entry.index);
+  if (state.appMode === 'other') return entry.filePath || entry.file || String(entry.index);
   return String(entry.index);
 }
 
@@ -84,6 +84,39 @@ function loadEntryTags() {
           }
           saveEntryTags();
         }
+      }
+    }
+
+    // Fallback for "other" mode: if current dir has no/few tags, look for matching
+    // filenames in tags from other directories (same files opened from different path)
+    if (state.appMode === 'other' && state.entries.length > 0) {
+      const currentNames = new Set(state.entries.map(e => nodePath.basename(e.filePath || e.file)));
+      const existingKeys = new Set(Object.keys(state.entryTags));
+
+      // Only import if we have very few tags for this dir
+      if (existingKeys.size < state.entries.length / 2) {
+        // Build basename→tag map from all other txtdir entries
+        const otherTags = {};
+        for (const [dirKey, tags] of Object.entries(all)) {
+          if (!dirKey.startsWith('txtdir:') || dirKey === key) continue;
+          for (const [filePath, tagData] of Object.entries(tags)) {
+            const bn = nodePath.basename(filePath);
+            if (currentNames.has(bn) && !otherTags[bn]) otherTags[bn] = tagData;
+          }
+        }
+
+        // Import tags by matching basename to current entries
+        let imported = 0;
+        for (const entry of state.entries) {
+          const entryKey = getEntryTagKey(entry);
+          if (existingKeys.has(entryKey)) continue;
+          const bn = nodePath.basename(entry.filePath || entry.file);
+          if (otherTags[bn]) {
+            state.entryTags[entryKey] = otherTags[bn];
+            imported++;
+          }
+        }
+        if (imported > 0) saveEntryTags();
       }
     }
   } catch (_) {}
@@ -372,9 +405,9 @@ function undoLastChange() {
   if (records.length === 0) return false;
   const record = records[records.length - 1];
 
-  // Save redo info before applying
+  // Save redo info before applying (store entry ref, not index — index shifts on delete)
   _redoStack.push({
-    entryIndex: state.currentIndex,
+    entry,
     record: { ...record },
   });
 
@@ -406,12 +439,13 @@ function undoLastChange() {
 function redoLastChange() {
   if (_redoStack.length === 0) return false;
   const redo = _redoStack.pop();
-  if (redo.entryIndex !== state.currentIndex) {
+  const currentEntry = state.entries[state.currentIndex];
+  if (!currentEntry || redo.entry !== currentEntry) {
     // Redo is for a different entry — discard
     _redoStack.length = 0;
     return false;
   }
-  const entry = state.entries[state.currentIndex];
+  const entry = currentEntry;
   const record = redo.record;
 
   // Re-apply the change (newText is what was undone)
@@ -525,7 +559,7 @@ function renderMinimap() {
   const hasBookmarks = state.settings.show_bookmarks !== false && getBookmarkIndices().length > 0;
   canvas.style.display = hasBookmarks ? '' : 'none';
   if (!hasBookmarks) return;
-  const entries = state.entries;
+  const entries = (_currentFilter || _statusFilter !== 'all') ? _filteredEntries : state.entries;
   const n = entries.length;
   const h = canvas.parentElement.clientHeight;
   const w = 28;
@@ -560,8 +594,11 @@ function renderMinimap() {
   }
 
   // Current entry indicator
-  if (state.currentIndex >= 0 && state.currentIndex < n) {
-    const cy = Math.floor(state.currentIndex * h / n);
+  const curPos = entries === state.entries
+    ? state.currentIndex
+    : entries.findIndex(e => e.index === state.currentIndex);
+  if (curPos >= 0 && curPos < n) {
+    const cy = Math.floor(curPos * h / n);
     const ch = Math.max(3, Math.ceil(rowH));
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 1.5;

@@ -1,6 +1,6 @@
 'use strict';
 
-const { parentPort } = require('worker_threads');
+
 const nspell = require('nspell');
 
 // ── State ──────────────────────────────────────────────────
@@ -21,7 +21,7 @@ function rebuildGlossaryRegex() {
   if (glossaryKeys.length === 0) { glossaryRegex = null; return; }
   const sorted = [...glossaryKeys].sort((a, b) => b.length - a.length);
   const pattern = sorted.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  glossaryRegex = new RegExp('\\b(?:' + pattern + ')\\b', 'gi');
+  glossaryRegex = new RegExp('(?<![\\p{L}\\p{N}])(?:' + pattern + ')(?![\\p{L}\\p{N}])', 'giu');
 }
 
 // ── Spell error check ──────────────────────────────────────
@@ -72,14 +72,14 @@ function computeHighlight(text, settings) {
 }
 
 // ── Message handler ────────────────────────────────────────
-parentPort.on('message', (msg) => {
+process.on('message', (msg) => {
   switch (msg.type) {
     case 'init': {
       try {
         spellChecker = nspell(msg.affData, msg.dicData);
-        parentPort.postMessage({ type: 'ready' });
+        process.send({ type: 'ready' });
       } catch (e) {
-        parentPort.postMessage({ type: 'error', error: 'nspell init failed: ' + e.message });
+        process.send({ type: 'error', error: 'nspell init failed: ' + e.message });
       }
       break;
     }
@@ -92,7 +92,7 @@ parentPort.on('message', (msg) => {
     }
     case 'highlight': {
       const result = computeHighlight(msg.text, msg.settings);
-      parentPort.postMessage({
+      process.send({
         type: 'highlight',
         requestId: msg.requestId,
         elementId: msg.elementId,

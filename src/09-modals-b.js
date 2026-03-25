@@ -360,6 +360,9 @@ function buildHunks(edits, origLines, currLines, context) {
 function getEntryCurrentText(idx) {
   const entry = state.entries[idx];
   if (!entry) return '';
+  // Use schema-parsed view if a schema is active (same as editor shows)
+  const schema = getFileSchema(entry);
+  if (schema) return getTextLinesForEntry(entry).join('\n');
   if (state.appMode === 'jojo') return entry.text;
   if (state.appMode === 'other') return entry.text.join('\n');
   return entry.toFlat(state.useSeparator);

@@ -1,6 +1,6 @@
 'use strict';
 
-const { parentPort } = require('worker_threads');
+
 
 // ── Utility functions (duplicated from renderer.js) ────────
 const CYRILLIC_RE = /[\u0400-\u04FF]/;
@@ -144,16 +144,16 @@ function precomputeNav(entries, glossaryKeys) {
 }
 
 // ── Message handler ────────────────────────────────────────
-parentPort.on('message', (msg) => {
+process.on('message', (msg) => {
   switch (msg.type) {
     case 'calc-progress': {
       const result = calcProgress(msg.entries, msg.codeWords);
-      parentPort.postMessage({ type: 'calc-progress', requestId: msg.requestId, ...result });
+      process.send({ type: 'calc-progress', requestId: msg.requestId, ...result });
       break;
     }
     case 'calc-stats': {
       const result = calcExtendedStats(msg.entries);
-      parentPort.postMessage({ type: 'calc-stats', requestId: msg.requestId, ...result });
+      process.send({ type: 'calc-stats', requestId: msg.requestId, ...result });
       break;
     }
     case 'scan-freq': {
@@ -161,12 +161,12 @@ parentPort.on('message', (msg) => {
         msg.entries, msg.glossaryKeys,
         msg.minCount, msg.caseSensitive, msg.wholeLine
       );
-      parentPort.postMessage({ type: 'scan-freq', requestId: msg.requestId, words: result });
+      process.send({ type: 'scan-freq', requestId: msg.requestId, words: result });
       break;
     }
     case 'precompute-nav': {
       const results = precomputeNav(msg.entries, msg.glossaryKeys);
-      parentPort.postMessage({ type: 'precompute-nav', requestId: msg.requestId, results });
+      process.send({ type: 'precompute-nav', requestId: msg.requestId, results });
       break;
     }
   }

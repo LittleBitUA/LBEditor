@@ -63,10 +63,18 @@ function closeEntryTab(entryIdx) {
   _openTabs.splice(pos, 1);
   if (_previewTabIdx === entryIdx) _previewTabIdx = -1;
 
-  // If closing the active entry, switch to neighbour tab
-  if (state.currentIndex === entryIdx && _openTabs.length > 0) {
-    const newIdx = _openTabs[Math.min(pos, _openTabs.length - 1)];
-    onListItemClick(newIdx);
+  // If closing the active entry, switch to neighbour tab or go to welcome
+  if (state.currentIndex === entryIdx) {
+    if (_openTabs.length > 0) {
+      const newIdx = _openTabs[Math.min(pos, _openTabs.length - 1)];
+      onListItemClick(newIdx);
+    } else {
+      state.currentIndex = -1;
+      if (_monacoFlat) _monacoFlat.setValue('');
+      if (_monacoText) _monacoText.setValue('');
+      if (_monacoSp) _monacoSp.setValue('');
+      showWelcomeScreen();
+    }
   }
   renderTabBar();
 }

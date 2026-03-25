@@ -474,6 +474,7 @@ function applyGlossaryDecorations(editor, ranges) {
 }
 
 function _glossLookup(term) {
+  if (!term) return '';
   return state.glossary[term]
     || state.glossary[term.toLowerCase()]
     || state.glossary[Object.keys(state.glossary).find(k => k.toLowerCase() === term.toLowerCase())]

@@ -52,6 +52,8 @@ function rebuildFilteredEntries() {
   _filteredEntries = [];
   _filterSnippets.clear();
   _filteredIndexByEntry.clear();
+  // Clear multi-select to avoid actions on entries not visible in filtered list
+  clearMultiSelect();
 
   for (const entry of state.entries) {
     if (filt && !entryMatchesFilter(entry, filt)) continue;
@@ -247,29 +249,57 @@ function refreshList() {
 }
 
 async function onListItemClick(newIdx) {
-  if (newIdx === state.currentIndex) {
-    // Already selected — ensure tab exists and stats are current
-    if (!_openTabs.includes(newIdx)) openEntryTab(newIdx, false);
-    return;
-  }
+  if (newIdx === state.currentIndex) return;
 
   if (state.currentIndex >= 0 && editorDirty()) {
-    // If user edited the preview, auto-pin it before switching
-    if (_previewTabIdx === state.currentIndex) pinCurrentTab();
     await applyChanges();
   }
 
   state.currentIndex = newIdx;
+  openEntryTab(newIdx, false);
   loadEditor();
   saveSession();
-  openEntryTab(newIdx, false); // preview (not pinned)
+
+  // O(1) active class swap
+  if (_activeListEl) _activeListEl.classList.remove('active');
+
+  // Scroll file list so current entry stays visible
+  const filtIdx = _filteredIndexByEntry.get(newIdx);
+  if (filtIdx !== undefined) {
+    const itemH = _getItemHeight();
+    const container = dom.entryListContainer;
+    const targetTop = filtIdx * itemH;
+    if (container && (targetTop < container.scrollTop || targetTop + itemH > container.scrollTop + container.clientHeight)) {
+      container.scrollTop = Math.max(0, targetTop - container.clientHeight / 2 + itemH / 2);
+    }
+    // Force synchronous render so the target element exists in the DOM
+    _vForceRender = true;
+    virtualRender();
+    const target = dom.entryList.querySelector(`[data-index="${newIdx}"]`);
+    if (target) {
+      target.classList.add('active');
+      _activeListEl = target;
+    } else {
+      _activeListEl = null;
+    }
+  } else {
+    _activeListEl = null;
+  }
   updateSidePanelForEntry(newIdx);
+  // Update left panel header if side panel is open
+  const mainTitle = document.getElementById('editor-main-title');
+  const mainHeader = document.getElementById('editor-main-header');
+  if (mainTitle && mainHeader && _sidePanelIdx >= 0) {
+    const curEntry = state.entries[newIdx];
+    mainTitle.textContent = curEntry ? `[${newIdx + 1}] ${curEntry.file || ''}` : '';
+  }
 
   // If search filter is active, highlight the first match in the editor
   const filt = dom.searchInput.value.trim();
   if (filt) {
     jumpToTextInEditor(filt);
   }
+  renderTabBar();
 }
 
 async function onListItemDblClick(idx) {
@@ -303,9 +333,8 @@ function jumpToTextInEditor(query) {
 let _activeListEl = null;
 function selectEntryByIndex(idx, deferHeavy) {
   state.currentIndex = idx;
+  openEntryTab(idx, false);
   loadEditor(deferHeavy);
-  // Ensure a tab exists for the selected entry
-  if (!_openTabs.includes(idx)) openEntryTab(idx, false);
   // O(1) active class swap
   if (_activeListEl) _activeListEl.classList.remove('active');
 
@@ -498,6 +527,9 @@ function loadEditor(deferHeavy) {
   _find.matches = [];
   _find.currentIdx = -1;
   document.getElementById('find-results-panel').classList.add('hidden');
+  // Close compare modal if open
+  const cmpOverlay = document.getElementById('compare-overlay');
+  if (cmpOverlay && !cmpOverlay.classList.contains('hidden')) hideCompareModal();
   const frEl = document.getElementById('find-result');
   const frrEl = document.getElementById('find-replace-result');
   if (frEl) frEl.textContent = '';
@@ -709,7 +741,6 @@ function onEditorChanged(e) {
   }
   if (_find.currentIdx >= 0) { _find.currentIdx = -1; }
 
-  hideAddGlossPopup();
   markRecoveryDirty();
 
   if (_editorHeavyDebounce) clearTimeout(_editorHeavyDebounce);

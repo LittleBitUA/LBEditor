@@ -16,7 +16,7 @@ async function applyChanges() {
       return;
     }
 
-    const newText = Array.isArray(entry.text) ? entry.text : entry.text;
+    const newText = Array.isArray(entry.text) ? [...entry.text] : [entry.text];
     const newSp = entry.speakers || undefined;
     recordHistory(entry, oldText, newText, oldSp, newSp, 'edit');
     entry.dirty = true;
@@ -303,7 +303,7 @@ function _applyProgress(transE, totalE, transL, totalL, editedFiles, editedLines
   if (secTrans) secTrans.title = `Переклад: ${pct.toFixed(1)}%\nФайлів: ${transE} / ${totalE}\n${useWords ? 'Слів' : 'Рядків'}: ${tVal} / ${tTotal}\nЗалишилось: ${remainE} файлів, ${remain} ${unit}`;
 
   // Editing progress
-  const editPct = tTotal > 0 ? (editedLines / totalL * 100) : 0;
+  const editPct = totalL > 0 ? (editedLines / totalL * 100) : 0;
   dom.progEditBar.style.width = editPct.toFixed(1) + '%';
   dom.progEditPct.textContent = editPct.toFixed(1) + '%';
   dom.progEditFiles.textContent = `зредаговано ${editedFiles} із ${totalE}`;

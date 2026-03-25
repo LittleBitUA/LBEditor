@@ -1,12 +1,12 @@
 'use strict';
 
-const { parentPort } = require('worker_threads');
+
 const fs = require('fs');
 const nodePath = require('path');
 
 // ── File I/O operations (offloaded from main thread) ──────
 
-parentPort.on('message', (msg) => {
+process.on('message', (msg) => {
   switch (msg.type) {
 
     // ── Write JSON (fire-and-forget) ────────────────────────
@@ -15,11 +15,11 @@ parentPort.on('message', (msg) => {
         const data = typeof msg.data === 'string' ? msg.data : JSON.stringify(msg.data, null, 2);
         fs.writeFileSync(msg.path, data, 'utf-8');
         if (msg.requestId) {
-          parentPort.postMessage({ type: 'write-json', requestId: msg.requestId, ok: true });
+          process.send({ type: 'write-json', requestId: msg.requestId, ok: true });
         }
       } catch (e) {
         if (msg.requestId) {
-          parentPort.postMessage({ type: 'write-json', requestId: msg.requestId, ok: false, error: e.message });
+          process.send({ type: 'write-json', requestId: msg.requestId, ok: false, error: e.message });
         }
       }
       break;
@@ -30,11 +30,11 @@ parentPort.on('message', (msg) => {
       try {
         fs.writeFileSync(msg.path, msg.text, 'utf-8');
         if (msg.requestId) {
-          parentPort.postMessage({ type: 'write-text', requestId: msg.requestId, ok: true });
+          process.send({ type: 'write-text', requestId: msg.requestId, ok: true });
         }
       } catch (e) {
         if (msg.requestId) {
-          parentPort.postMessage({ type: 'write-text', requestId: msg.requestId, ok: false, error: e.message });
+          process.send({ type: 'write-text', requestId: msg.requestId, ok: false, error: e.message });
         }
       }
       break;
@@ -44,14 +44,14 @@ parentPort.on('message', (msg) => {
     case 'read-json': {
       try {
         if (!fs.existsSync(msg.path)) {
-          parentPort.postMessage({ type: 'read-json', requestId: msg.requestId, data: null, exists: false });
+          process.send({ type: 'read-json', requestId: msg.requestId, data: null, exists: false });
         } else {
           const raw = fs.readFileSync(msg.path, 'utf-8');
           const data = JSON.parse(raw);
-          parentPort.postMessage({ type: 'read-json', requestId: msg.requestId, data, exists: true });
+          process.send({ type: 'read-json', requestId: msg.requestId, data, exists: true });
         }
       } catch (e) {
-        parentPort.postMessage({ type: 'read-json', requestId: msg.requestId, data: null, exists: false, error: e.message });
+        process.send({ type: 'read-json', requestId: msg.requestId, data: null, exists: false, error: e.message });
       }
       break;
     }
@@ -63,7 +63,7 @@ parentPort.on('message', (msg) => {
         try { results[p] = fs.existsSync(p); }
         catch (_) { results[p] = false; }
       }
-      parentPort.postMessage({ type: 'exists-batch', requestId: msg.requestId, results });
+      process.send({ type: 'exists-batch', requestId: msg.requestId, results });
       break;
     }
 
@@ -77,11 +77,11 @@ parentPort.on('message', (msg) => {
         all[msg.key] = msg.value;
         fs.writeFileSync(msg.path, JSON.stringify(all, null, 2), 'utf-8');
         if (msg.requestId) {
-          parentPort.postMessage({ type: 'merge-write-json', requestId: msg.requestId, ok: true });
+          process.send({ type: 'merge-write-json', requestId: msg.requestId, ok: true });
         }
       } catch (e) {
         if (msg.requestId) {
-          parentPort.postMessage({ type: 'merge-write-json', requestId: msg.requestId, ok: false, error: e.message });
+          process.send({ type: 'merge-write-json', requestId: msg.requestId, ok: false, error: e.message });
         }
       }
       break;
@@ -92,9 +92,9 @@ parentPort.on('message', (msg) => {
       try {
         const blob = JSON.stringify(msg.data, null, 2);
         fs.writeFileSync(msg.path, blob + '\n', 'utf-8');
-        parentPort.postMessage({ type: 'serialize-write-json', requestId: msg.requestId, ok: true });
+        process.send({ type: 'serialize-write-json', requestId: msg.requestId, ok: true });
       } catch (e) {
-        parentPort.postMessage({ type: 'serialize-write-json', requestId: msg.requestId, ok: false, error: e.message });
+        process.send({ type: 'serialize-write-json', requestId: msg.requestId, ok: false, error: e.message });
       }
       break;
     }
@@ -111,7 +111,7 @@ parentPort.on('message', (msg) => {
           ok++;
         } catch (e) { errs.push(`${nodePath.basename(item.path)}: ${e.message}`); }
       }
-      parentPort.postMessage({ type: 'batch-write-text', requestId: msg.requestId, ok, total: msg.files.length, errs });
+      process.send({ type: 'batch-write-text', requestId: msg.requestId, ok, total: msg.files.length, errs });
       break;
     }
 
@@ -120,9 +120,9 @@ parentPort.on('message', (msg) => {
       try {
         const json = JSON.stringify(msg.snapshot);
         fs.writeFileSync(msg.path, json, 'utf-8');
-        parentPort.postMessage({ type: 'write-recovery', requestId: msg.requestId, ok: true });
+        process.send({ type: 'write-recovery', requestId: msg.requestId, ok: true });
       } catch (e) {
-        parentPort.postMessage({ type: 'write-recovery', requestId: msg.requestId, ok: false, error: e.message });
+        process.send({ type: 'write-recovery', requestId: msg.requestId, ok: false, error: e.message });
       }
       break;
     }

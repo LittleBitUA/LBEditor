@@ -82,11 +82,16 @@
   explorerSep.classList.toggle('hidden', !hasPath);
   explorerItem.classList.toggle('hidden', !hasPath);
 
-  // Position
-  const x = Math.min(e.clientX, window.innerWidth - 190);
-  const y = Math.min(e.clientY, window.innerHeight - 200);
+  // Position — measure actual menu height to prevent going off-screen
+  menu.style.left = '0px';
+  menu.style.top = '0px';
+  const menuRect = menu.getBoundingClientRect();
+  const menuW = menuRect.width || 190;
+  const menuH = menuRect.height || 200;
+  const x = Math.min(e.clientX, window.innerWidth - menuW - 4);
+  const y = Math.min(e.clientY, window.innerHeight - menuH - 4);
   menu.style.left = x + 'px';
-  menu.style.top = y + 'px';
+  menu.style.top = Math.max(0, y) + 'px';
 }
 
 function hideEntryContextMenu() {
@@ -122,11 +127,17 @@ function removeEntryFromList(idx) {
     state.entries[i].index = i;
   }
 
-  // Close tab if open
-  closeEntryTab(idx);
+  // Remove tab directly (don't use closeEntryTab — it may trigger
+  // onListItemClick → applyChanges which would corrupt the next entry
+  // since state.entries has already been spliced)
+  const _tabPos = _openTabs.indexOf(idx);
+  if (_tabPos >= 0) _openTabs.splice(_tabPos, 1);
+  if (_previewTabIdx === idx) _previewTabIdx = -1;
 
   // Fix open tab indices (shift down indices above removed)
-  _openTabs = _openTabs.map(t => t > idx ? t - 1 : t);
+  for (let i = 0; i < _openTabs.length; i++) {
+    if (_openTabs[i] > idx) _openTabs[i]--;
+  }
 
   // Fix compare selection
   if (_compareFirstIdx === idx) clearCompareSelection();
@@ -141,6 +152,7 @@ function removeEntryFromList(idx) {
       _monacoSp.setValue('');
       // Return to welcome screen when all entries removed
       showWelcomeScreen();
+      updateProgress();
       setStatus(`Видалено зі списку: ${name}`);
       return;
     } else {
@@ -1021,6 +1033,9 @@ function doReplaceOne() {
 }
 
 function doReplaceAllEntries() {
+  // Flush unsaved editor changes to entry.text before replacing
+  silentApply();
+
   const params = getFindParams('replace');
   addToFindHistory('find', params.query);
   addToFindHistory('replace', params.replaceWith);
@@ -1121,6 +1136,7 @@ function doReplaceAllEntries() {
   forceVirtualRender();
   updateProgress();
 
+  if (entriesAffected > 0) _programmaticEdit = true;
   const msg = `Замінено: ${totalReplacements} у ${entriesAffected} записах`;
   setFindResult(msg, false, true);
   setStatus(msg);
@@ -1513,14 +1529,30 @@ function showSidePanel(entryIdx, originalMode) {
     ? `Оригінал: [${entryIdx + 1}] ${entry.file || ''}`
     : `[${entryIdx + 1}] ${entry.file || ''}`;
 
+  // Show left panel header with current entry name when side panel is open
+  const mainHeader = document.getElementById('editor-main-header');
+  const mainTitle = document.getElementById('editor-main-title');
+  if (mainHeader && mainTitle) {
+    const curEntry = state.entries[state.currentIndex];
+    mainTitle.textContent = curEntry ? `[${state.currentIndex + 1}] ${curEntry.file || ''}` : '';
+    mainHeader.classList.remove('hidden');
+  }
+
   // Get entry text for display
   let text;
   if (isOrig) {
+    // Original mode: show raw original text
     text = (entry.originalText || entry.text).join('\n');
-  } else if (state.appMode === 'ishin' && state.splitMode) {
-    text = entry.text.join('\n') + '\n---\n' + entry.visibleSpeakers().join('\n');
   } else {
-    text = entry.toFlat(state.appMode === 'ishin' ? state.useSeparator : undefined);
+    // Schema mode: show parsed view if schema is active, otherwise raw
+    const schema = getFileSchema(entry);
+    if (schema) {
+      text = getTextLinesForEntry(entry).join('\n');
+    } else if (state.appMode === 'ishin' && state.splitMode) {
+      text = entry.text.join('\n') + '\n---\n' + entry.visibleSpeakers().join('\n');
+    } else {
+      text = entry.toFlat(state.appMode === 'ishin' ? state.useSeparator : undefined);
+    }
   }
 
   // Create or update Monaco editor
@@ -1550,6 +1582,12 @@ function showSidePanel(entryIdx, originalMode) {
         renderLineHighlight: 'none',
       }
     );
+    // Track focus so getActiveEditor() returns side panel when focused
+    _sideMonaco.onDidFocusEditorWidget(() => { _lastFocusedEditor = _sideMonaco; });
+    // Redirect Find/Replace to our dialogs
+    _sideMonaco.addCommand(_monaco.KeyMod.CtrlCmd | _monaco.KeyCode.KeyF, () => { showFindDialog('find'); });
+    _sideMonaco.addCommand(_monaco.KeyMod.CtrlCmd | _monaco.KeyCode.KeyH, () => { showFindDialog('replace'); });
+    _sideMonaco.addCommand(_monaco.KeyMod.CtrlCmd | _monaco.KeyCode.KeyL, () => { showFindDialog('goto'); });
   }
 
   _sideMonaco.setValue(text);
@@ -1575,6 +1613,11 @@ function hideSidePanel() {
   document.getElementById('side-panel-handle').classList.add('hidden');
   _sidePanelIdx = -1;
   _sideOriginalMode = false;
+  // Reset focus away from closed side panel
+  if (_lastFocusedEditor === _sideMonaco) _lastFocusedEditor = null;
+  // Hide left panel header
+  const mainHeader = document.getElementById('editor-main-header');
+  if (mainHeader) mainHeader.classList.add('hidden');
 
   const btn = document.getElementById('tb-side-panel');
   if (btn) btn.classList.remove('active');
@@ -1604,9 +1647,17 @@ function toggleOriginalSidePanel() {
   document.getElementById('tb-original').classList.toggle('active', _sideOriginalMode);
 }
 
-/** Called when user navigates to a new entry — update side panel if in original mode */
+/** Called when user navigates to a new entry — update side panel only if in "Original" mode.
+ *  When a specific file is pinned via context menu, it stays pinned. */
 function updateSidePanelForEntry(entryIdx) {
-  if (_sideOriginalMode && entryIdx >= 0) showSidePanel(entryIdx, true);
+  if (entryIdx < 0) return;
+  // Only auto-follow current entry in original mode; pinned files stay put
+  if (_sidePanelIdx >= 0 && _sideOriginalMode) showSidePanel(entryIdx, true);
+}
+
+/** Called after save — refresh side panel content for whatever entry it's showing */
+function refreshSidePanel() {
+  if (_sidePanelIdx >= 0) showSidePanel(_sidePanelIdx, _sideOriginalMode);
 }
 
 function setupSidePanelHandle() {

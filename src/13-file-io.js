@@ -1203,6 +1203,8 @@ async function saveFile() {
   if (state.appMode === 'jojo') { await saveJoJoJson(); return; }
   if (!state.filePath) { await saveFileAs(); return; }
   await writeJson(state.filePath);
+  // Refresh side panel if open (so it reflects saved content)
+  if (_sidePanelIdx >= 0) refreshSidePanel();
 }
 
 async function saveAll() {
@@ -1482,14 +1484,19 @@ async function saveTxtFiles(silent = false) {
     try {
       const content = entry.text.join('\n') + '\n';
       const enc = entry._encoding || _ENC_UTF8;
+      // Atomic write: temp file + rename to avoid corruption on crash/disk-full
+      const tmpPath = entry.filePath + '.tmp';
       if (enc === _ENC_UTF8) {
-        fs.writeFileSync(entry.filePath, content, 'utf-8');
+        fs.writeFileSync(tmpPath, content, 'utf-8');
       } else {
-        fs.writeFileSync(entry.filePath, _encodeString(content, enc));
+        fs.writeFileSync(tmpPath, _encodeString(content, enc));
       }
+      fs.renameSync(tmpPath, entry.filePath);
       entry.markSaved();
       ok++;
     } catch (e) {
+      // Clean up temp file if rename failed
+      try { fs.unlinkSync(entry.filePath + '.tmp'); } catch (_) {}
       errs.push(`${entry.file}: ${e.message}`);
     }
   }
@@ -1500,6 +1507,8 @@ async function saveTxtFiles(silent = false) {
   saveSession();
   deleteRecoveryFile();
   renderTabBar();
+  // Refresh side panel if open
+  if (_sidePanelIdx >= 0) refreshSidePanel();
 
   if (errs.length > 0 && !silent) {
     await showInfo('Помилки при збереженні', errs.join('\n'));
@@ -1537,7 +1546,7 @@ async function loadJoJoJson(filePath) {
   dom.flatContainer.style.display = 'flex';
   dom.splitContainer.style.display = 'none';
 
-  const fullText = data.map(item => String(item)).join('\n');
+  const fullText = data.map(item => String(item).replace(/\n/g, '\\n').replace(/\r/g, '\\r')).join('\n');
   const entry = new JoJoEntry(0, fullText);
   entry.file = nodePath.basename(filePath);
   state.entries = [entry];
@@ -1568,7 +1577,7 @@ async function saveJoJoJson(silent = false) {
 
   // Split single entry text back into array lines
   const text = state.entries.length > 0 ? state.entries[0].text : '';
-  const arr = text.split('\n');
+  const arr = text.split('\n').map(line => line.replace(/\\r/g, '\r').replace(/\\n/g, '\n'));
   const blob = JSON.stringify(arr, null, 2);
 
   try {

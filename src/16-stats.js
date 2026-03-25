@@ -173,6 +173,8 @@ function saveFileSchema(textPaths, parseAs) {
     state.settings.file_schemas[key] = schemaEntry;
   }
   saveSettings(state.settings);
+  // Invalidate progress cache on all entries — schema change affects word counting
+  for (const e of state.entries) e._progressCache = null;
   updateProgress();
   updateMeta();
   forceVirtualRender();
@@ -576,6 +578,19 @@ function _applySchemaIshin(entry, editedLines, schema) {
 }
 
 function _applySchemaOther(entry, editedLines, schema) {
+  const origText = Array.isArray(entry.text) ? entry.text.join('\n') : entry.text;
+  const fmt = _detectEntryFormat(entry);
+
+  // XML: modify DOM directly and serialize back to XML
+  if (fmt === 'xml') {
+    return _applySchemaXml(entry, editedLines, schema, origText);
+  }
+
+  // Key=Value: update values in original text
+  if (fmt === 'keyvalue') {
+    return _applySchemaKeyValue(entry, editedLines, schema, origText);
+  }
+
   const data = _tryParseEntryData(entry);
   if (!data) return false;
 
@@ -597,8 +612,12 @@ function _applySchemaOther(entry, editedLines, schema) {
     }
   }
 
+  // CSV: re-serialize as CSV
+  if (fmt === 'csv') {
+    return _applySchemaCsv(entry, editedLines, schema, origText, cloned, isArr);
+  }
+
   // Detect original indent for JSON re-serialization
-  const origText = Array.isArray(entry.text) ? entry.text.join('\n') : entry.text;
   const indentMatch = origText.match(/\n(\s+)/);
   let indent = 2;
   if (indentMatch) indent = indentMatch[1].includes('\t') ? '\t' : indentMatch[1].length;
@@ -610,6 +629,176 @@ function _applySchemaOther(entry, editedLines, schema) {
   } else {
     entry.text = serialized.split('\n');
   }
+  return true;
+}
+
+function _detectEntryFormat(entry) {
+  const parseAs = getFileParseAs(entry);
+  if (parseAs !== 'auto') return parseAs;
+  const raw = Array.isArray(entry.text) ? entry.text.join('\n') : (entry.text || '');
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('<')) {
+    try {
+      const doc = new DOMParser().parseFromString(trimmed, 'application/xml');
+      if (!doc.querySelector('parsererror')) return 'xml';
+    } catch (_) {}
+  }
+  try { const p = JSON.parse(trimmed); if (p && typeof p === 'object') return 'json'; } catch (_) {}
+  // Check CSV
+  if (entry.filePath && entry.filePath.toLowerCase().endsWith('.csv')) return 'csv';
+  // Check key=value
+  const lines = raw.split('\n');
+  let kvCount = 0;
+  for (const l of lines) { if (l.indexOf('=') > 0) kvCount++; }
+  if (kvCount >= 2 && kvCount / lines.filter(l => l.trim()).length > 0.5) return 'keyvalue';
+  return 'json';
+}
+
+function _applySchemaXml(entry, editedLines, schema, origText) {
+  // Parse to JS object to get old values via extractByPath
+  const data = _tryParseEntryXml(entry);
+  if (!data) return false;
+
+  // Collect old values (in document order)
+  const origVals = [];
+  for (const pathStr of schema.textPaths) {
+    const vals = extractByPath(data, pathStr);
+    for (const v of vals) origVals.push(v);
+  }
+
+  // Map edited lines to new values (preserving line counts per value)
+  const newVals = [];
+  let lineIdx = 0;
+  for (const ov of origVals) {
+    const lc = ov.split('\n').length;
+    newVals.push(editedLines.slice(lineIdx, lineIdx + lc).join('\n'));
+    lineIdx += lc;
+  }
+
+  // Replace values directly in the original XML text to preserve formatting.
+  // Handles both element text content (>value<) and attribute values (="value").
+  let result = origText;
+  let searchPos = 0;
+  for (let i = 0; i < origVals.length; i++) {
+    if (origVals[i] === newVals[i]) continue;
+    const oldEnc = _xmlEncodeText(origVals[i]);
+    const newEnc = _xmlEncodeText(newVals[i]);
+    // Also encode for attribute context (& " < > but keep single quotes)
+    const oldAttr = _xmlEncodeAttr(origVals[i]);
+    const newAttr = _xmlEncodeAttr(newVals[i]);
+
+    // Try 1: element text content (between > and <)
+    let found = false;
+    let pos = searchPos;
+    while (pos < result.length) {
+      pos = result.indexOf(oldEnc, pos);
+      if (pos < 0) break;
+      const lastGt = result.lastIndexOf('>', pos);
+      const lastLt = result.lastIndexOf('<', pos);
+      if (lastGt >= 0 && lastGt > lastLt) {
+        result = result.substring(0, pos) + newEnc + result.substring(pos + oldEnc.length);
+        searchPos = pos + newEnc.length;
+        found = true;
+        break;
+      }
+      pos += oldEnc.length;
+    }
+
+    // Try 2: attribute value (="oldValue" or ='oldValue')
+    if (!found) {
+      const patterns = ['="' + oldAttr + '"', "='" + oldAttr + "'"];
+      const replacements = ['="' + newAttr + '"', "='" + newAttr + "'"];
+      for (let pi = 0; pi < patterns.length; pi++) {
+        const apos = result.indexOf(patterns[pi], searchPos);
+        if (apos >= 0) {
+          result = result.substring(0, apos) + replacements[pi] + result.substring(apos + patterns[pi].length);
+          searchPos = apos + replacements[pi].length;
+          found = true;
+          break;
+        }
+      }
+    }
+  }
+
+  entry.text = result.split('\n');
+  return true;
+}
+
+function _xmlEncodeText(text) {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function _xmlEncodeAttr(text) {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function _applySchemaKeyValue(entry, editedLines, schema, origText) {
+  const data = _tryParseEntryKeyValue(entry);
+  if (!data) return false;
+
+  // Collect original values
+  const origVals = [];
+  for (const pathStr of schema.textPaths) {
+    const vals = extractByPath(data, pathStr);
+    for (const v of vals) origVals.push({ path: pathStr, value: v });
+  }
+
+  // Map edited lines to new values
+  const newVals = [];
+  let lineIdx = 0;
+  for (const ov of origVals) {
+    const lc = ov.value.split('\n').length;
+    newVals.push({ path: ov.path, value: editedLines.slice(lineIdx, lineIdx + lc).join('\n') });
+    lineIdx += lc;
+  }
+
+  // Replace values in original text
+  const lines = origText.split('\n');
+  for (const nv of newVals) {
+    // For key=value, path is just the key name
+    const key = nv.path;
+    for (let i = 0; i < lines.length; i++) {
+      const eqIdx = lines[i].indexOf('=');
+      if (eqIdx > 0 && lines[i].substring(0, eqIdx).trim() === key) {
+        lines[i] = lines[i].substring(0, eqIdx + 1) + nv.value;
+        break;
+      }
+    }
+  }
+
+  entry.text = lines;
+  return true;
+}
+
+function _applySchemaCsv(entry, editedLines, schema, origText, cloned, isArr) {
+  // For CSV, rebuild from the modified object array
+  const items = isArr ? cloned : [cloned];
+  if (items.length === 0) return false;
+
+  const raw = origText;
+  const rawLines = raw.split('\n').filter(l => l.trim());
+  const delim = _detectCsvDelimiter(rawLines.slice(0, 5));
+  const hasHeaders = _detectCsvHeaders(rawLines[0], delim);
+
+  const result = [];
+  if (hasHeaders) {
+    result.push(rawLines[0]); // preserve original header line
+  }
+
+  for (const item of items) {
+    const keys = hasHeaders ? _splitCsvRow(rawLines[0], delim) : Object.keys(item);
+    const vals = keys.map(k => {
+      const v = item[k] || '';
+      // Quote if contains delimiter, quote, or newline
+      if (v.includes(delim) || v.includes('"') || v.includes('\n')) {
+        return '"' + v.replace(/"/g, '""') + '"';
+      }
+      return v;
+    });
+    result.push(vals.join(delim));
+  }
+
+  entry.text = result;
   return true;
 }
 
@@ -808,12 +997,18 @@ function setupSchemaModal() {
     const parseAs = document.getElementById('schema-parse-type').value;
     saveFileSchema(paths, parseAs);
     hideSchemaModal();
+    // Reload editor to reflect new schema immediately
+    loadEditor();
+    updateSchemaViewButton();
     setStatus(`Схему збережено: ${paths.length > 0 ? paths.join(', ') : 'стандартна'}${parseAs !== 'auto' ? ' (' + parseAs.toUpperCase() + ')' : ''}`);
   });
 
   document.getElementById('schema-reset-btn').addEventListener('click', () => {
     saveFileSchema([], 'auto');
     hideSchemaModal();
+    // Reload editor to reflect schema reset immediately
+    loadEditor();
+    updateSchemaViewButton();
     setStatus('Схему скинуто до стандартної');
   });
 
@@ -1027,6 +1222,7 @@ function _setupCustomSchemaUI() {
     if (!key) return;
     state.settings.file_schemas[key] = { textPaths: [], customSchemaIdx: idx };
     saveSettings(state.settings);
+    for (const e of state.entries) e._progressCache = null;
     updateProgress();
     updateMeta();
     forceVirtualRender();

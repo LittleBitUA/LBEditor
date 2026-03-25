@@ -5,14 +5,22 @@ const nodePath = require('path');
 const { ipcRenderer, clipboard, shell, webUtils } = require('electron');
 const nspell = require('nspell');
 const XLSX = require('xlsx');
-const { Worker } = require('worker_threads');
+const { fork } = require('child_process');
 const { initMonaco } = require('./monaco-loader');
+
+/** Wrapper around child_process.fork() that mimics worker_threads.Worker API */
+function forkWorker(scriptPath) {
+  const child = fork(scriptPath, [], { stdio: 'ignore' });
+  child.postMessage = (msg) => child.send(msg);
+  return child;
+}
 
 // ── Monaco Editor state ──────────────────────────────────────
 let _monaco = null;       // monaco namespace
 let _monacoFlat = null;   // monaco.editor.IStandaloneCodeEditor — flat/other/jojo
 let _monacoText = null;   // split mode — text editor
 let _monacoSp = null;     // split mode — speakers editor
+let _lastFocusedEditor = null; // tracks which editor panel was focused last
 let _glossDecorationIds = [];
 let _spellDecorationIds = [];
 let _findDecorationIds = [];
@@ -137,6 +145,7 @@ async function initMonacoEditors() {
       updateCursorPosition();
       scheduleDecorationUpdate();
     });
+    ed.onDidFocusEditorWidget(() => { _lastFocusedEditor = ed; });
     if (typeof setupEditorGlossaryHover === 'function') setupEditorGlossaryHover(ed);
   }
 
@@ -144,8 +153,15 @@ async function initMonacoEditors() {
 }
 
 function getActiveEditor() {
+  // If side panel editor was last focused, return it for read operations (find, etc.)
+  if (_lastFocusedEditor === _sideMonaco && _sidePanelIdx >= 0) return _sideMonaco;
   if (_schemaViewCurrentlyUsed) return _monacoFlat;
   if (state.appMode === 'other' || state.appMode === 'jojo') return _monacoFlat;
+  // In split mode, return whichever editor was last focused
+  if (state.splitMode && _lastFocusedEditor &&
+      (_lastFocusedEditor === _monacoFlat || _lastFocusedEditor === _monacoText || _lastFocusedEditor === _monacoSp)) {
+    return _lastFocusedEditor;
+  }
   if (state.splitMode) return _monacoText;
   return _monacoFlat;
 }
@@ -202,7 +218,14 @@ function updateModifiedLineDecorations() {
 const CYRILLIC_RE = /[\u0400-\u04FF]/;
 
 // Get writable data dir and read-only resources dir from main process
-const { dataDir: DATA_DIR, resourcesDir: RESOURCES_DIR } = ipcRenderer.sendSync('app:get-paths');
+let DATA_DIR, RESOURCES_DIR;
+try {
+  ({ dataDir: DATA_DIR, resourcesDir: RESOURCES_DIR } = ipcRenderer.sendSync('app:get-paths'));
+} catch (e) {
+  console.error('Failed to get paths from main process:', e);
+  DATA_DIR = '.';
+  RESOURCES_DIR = '.';
+}
 
 const SESSIONS_FILE = nodePath.join(DATA_DIR, 'editor_sessions.json');
 const SETTINGS_FILE = nodePath.join(DATA_DIR, 'editor_settings.json');

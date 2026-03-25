@@ -43,12 +43,13 @@ function filterCmdResults(query) {
   _cmdFilteredItems = [];
 
   if (query.startsWith('#')) {
-    // Go to entry by number
+    // Go to entry by number (user types 1-based, entry.index is 0-based)
     const num = parseInt(query.slice(1), 10);
-    if (!isNaN(num)) {
-      const entry = state.entries.find(e => e.index === num);
+    if (!isNaN(num) && num >= 1) {
+      const idx = num - 1;
+      const entry = state.entries[idx];
       if (entry) {
-        _cmdFilteredItems = [{ label: 'Перейти до [' + num + '] ' + entry.file, action: () => selectEntryByIndex(num) }];
+        _cmdFilteredItems = [{ label: 'Перейти до [' + num + '] ' + entry.file, action: () => selectEntryByIndex(idx) }];
       }
     }
   } else if (query.startsWith('@')) {
@@ -419,7 +420,8 @@ async function _buildRecentFilesListAsync(container) {
 function removeFromRecent(key) {
   const sessions = loadSessions();
   delete sessions[key];
-  saveSessions(sessions);
+  // Write synchronously so the next loadSessions() reads updated data
+  try { fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2), 'utf-8'); } catch (_) {}
 }
 
 function openRecentFile(filePath, mode) {

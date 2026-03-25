@@ -115,10 +115,10 @@ function buildMenu() {
     {
       label: 'Редагування',
       submenu: [
-        { label: 'Вирізати', click: () => { if (mainWindow) mainWindow.webContents.cut(); } },
-        { label: 'Копіювати', click: () => { if (mainWindow) mainWindow.webContents.copy(); } },
-        { label: 'Вставити', click: () => { if (mainWindow) mainWindow.webContents.paste(); } },
-        { label: 'Виділити все', click: () => { if (mainWindow) mainWindow.webContents.selectAll(); } },
+        { label: 'Вирізати', role: 'cut' },
+        { label: 'Копіювати', role: 'copy' },
+        { label: 'Вставити', role: 'paste' },
+        { label: 'Виділити все', role: 'selectAll' },
         { type: 'separator' },
         { label: 'Diff', accelerator: 'CmdOrCtrl+D', registerAccelerator: false, click: () => send('menu:action', 'diff') },
         { type: 'separator' },

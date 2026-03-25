@@ -273,7 +273,7 @@ function openThemeEditor(slug) {
   } else {
     nameInput.value = '';
     baseSelect.value = state.settings.theme?.startsWith('custom:')
-      ? (state.settings.custom_themes[state.settings.theme]?.base || 'dark')
+      ? (state.settings.custom_themes?.[state.settings.theme]?.base || 'dark')
       : (state.settings.theme || 'dark');
     vars = readThemeVars(baseSelect.value);
     delBtn.classList.add('hidden');

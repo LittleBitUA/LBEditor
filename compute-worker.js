@@ -1,6 +1,6 @@
 'use strict';
 
-const { parentPort } = require('worker_threads');
+
 const fs = require('fs');
 const nodePath = require('path');
 
@@ -343,13 +343,13 @@ function findDuplicates(targetIndex, targetOrigText, targetOrigSpeakers, entries
 
 // ── Message handler ───────────────────────────────────────
 
-parentPort.on('message', (msg) => {
+process.on('message', (msg) => {
   switch (msg.type) {
 
     // ── Diff (compare modal) ──────────────────────────────
     case 'diff': {
       const rows = buildSideBySideDiff(msg.linesA, msg.linesB);
-      parentPort.postMessage({ type: 'diff', requestId: msg.requestId, rows });
+      process.send({ type: 'diff', requestId: msg.requestId, rows });
       break;
     }
 
@@ -363,12 +363,12 @@ parentPort.on('message', (msg) => {
         const delim = msg.delimiter || detectCsvDelimiter(normalized);
         const rows = parseCsvFull(normalized, delim);
         const lines = rowsToLines(rows, delim);
-        parentPort.postMessage({
+        process.send({
           type: 'parse-csv', requestId: msg.requestId,
           lines, delimiter: delim, encoding: enc.encoding, ok: true
         });
       } catch (e) {
-        parentPort.postMessage({
+        process.send({
           type: 'parse-csv', requestId: msg.requestId,
           ok: false, error: e.message
         });
@@ -383,11 +383,11 @@ parentPort.on('message', (msg) => {
         const newLines = readTxtLines(msg.newPath);
         const uaLines = readTxtLines(msg.uaPath);
         const result = migrateTexts(oldLines, newLines, uaLines);
-        parentPort.postMessage({
+        process.send({
           type: 'migrate-file', requestId: msg.requestId, ...result, ok: true
         });
       } catch (e) {
-        parentPort.postMessage({
+        process.send({
           type: 'migrate-file', requestId: msg.requestId, ok: false, error: e.message
         });
       }
@@ -398,11 +398,11 @@ parentPort.on('message', (msg) => {
     case 'migrate-dir': {
       try {
         const result = runMigrationDir(msg.oldDir, msg.newDir, msg.uaDir, msg.newFiles);
-        parentPort.postMessage({
+        process.send({
           type: 'migrate-dir', requestId: msg.requestId, ...result, ok: true
         });
       } catch (e) {
-        parentPort.postMessage({
+        process.send({
           type: 'migrate-dir', requestId: msg.requestId, ok: false, error: e.message
         });
       }
@@ -412,7 +412,7 @@ parentPort.on('message', (msg) => {
     // ── Duplicate detection ───────────────────────────────
     case 'find-duplicates': {
       const dupes = findDuplicates(msg.targetIndex, msg.targetOrigText, msg.targetOrigSpeakers, msg.entries);
-      parentPort.postMessage({ type: 'find-duplicates', requestId: msg.requestId, dupes });
+      process.send({ type: 'find-duplicates', requestId: msg.requestId, dupes });
       break;
     }
   }

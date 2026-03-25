@@ -17,7 +17,7 @@
 // ── Highlight Worker ───────────────────────────────────────
 function initHighlightWorker() {
   try {
-    _highlightWorker = new Worker(getWorkerPath('highlight-worker.js'));
+    _highlightWorker = forkWorker(getWorkerPath('highlight-worker.js'));
     _highlightWorker.on('message', (msg) => {
       if (msg.type === 'ready') {
         _highlightWorkerReady = true;
@@ -77,7 +77,7 @@ async function initSpellChecker() {
 // ── Analysis Worker ────────────────────────────────────────
 function initAnalysisWorker() {
   try {
-    _analysisWorker = new Worker(getWorkerPath('analysis-worker.js'));
+    _analysisWorker = forkWorker(getWorkerPath('analysis-worker.js'));
     _analysisWorker.on('message', (msg) => {
       const pending = _analysisPending.get(msg.requestId);
       if (pending) {
@@ -145,7 +145,7 @@ function invalidateNavHints() {
 // ── Compute Worker (diff, CSV parsing, migration, duplicates) ──
 function initComputeWorker() {
   try {
-    _computeWorker = new Worker(getWorkerPath('compute-worker.js'));
+    _computeWorker = forkWorker(getWorkerPath('compute-worker.js'));
     _computeWorker.on('message', (msg) => {
       const pending = _computePending.get(msg.requestId);
       if (pending) {
@@ -177,7 +177,7 @@ function sendToComputeWorker(msg) {
 // ── IO Worker ──────────────────────────────────────────────
 function initIOWorker() {
   try {
-    _ioWorker = new Worker(getWorkerPath('io-worker.js'));
+    _ioWorker = forkWorker(getWorkerPath('io-worker.js'));
     _ioWorker.on('message', (msg) => {
       const pending = _ioPending.get(msg.requestId);
       if (pending) {
@@ -223,11 +223,11 @@ function ioMergeWriteJSON(filePath, key, value) {
 
 /** Async read JSON with Promise */
 function ioReadJSON(filePath) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     if (_ioWorker) {
       _ioRequestId++;
       const reqId = _ioRequestId;
-      _ioPending.set(reqId, { resolve });
+      _ioPending.set(reqId, { resolve, reject });
       _ioWorker.postMessage({ type: 'read-json', path: filePath, requestId: reqId });
     } else {
       try {
@@ -241,11 +241,11 @@ function ioReadJSON(filePath) {
 
 /** Async batch-exists with Promise */
 function ioExistsBatch(paths) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     if (_ioWorker) {
       _ioRequestId++;
       const reqId = _ioRequestId;
-      _ioPending.set(reqId, { resolve });
+      _ioPending.set(reqId, { resolve, reject });
       _ioWorker.postMessage({ type: 'exists-batch', paths, requestId: reqId });
     } else {
       const results = {};
@@ -265,26 +265,32 @@ function ioSerializeWriteJSON(filePath, data) {
       const reqId = _ioRequestId;
       _ioPending.set(reqId, {
         resolve: (r) => r.ok ? resolve() : reject(new Error(r.error || 'write failed')),
+        reject,
       });
       _ioWorker.postMessage({ type: 'serialize-write-json', path: filePath, data, requestId: reqId });
     } else {
-      // Fallback: sync on main thread
+      // Fallback: sync on main thread (atomic write via temp + rename)
       try {
         const blob = JSON.stringify(data, null, 2);
-        fs.writeFileSync(filePath, blob + '\n', 'utf-8');
+        const tmpPath = filePath + '.tmp';
+        fs.writeFileSync(tmpPath, blob + '\n', 'utf-8');
+        fs.renameSync(tmpPath, filePath);
         resolve();
-      } catch (e) { reject(e); }
+      } catch (e) {
+        try { fs.unlinkSync(filePath + '.tmp'); } catch (_) {}
+        reject(e);
+      }
     }
   });
 }
 
 /** Async batch write text files (offloads loop of fs.writeFileSync to worker) */
 function ioBatchWriteText(files) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     if (_ioWorker) {
       _ioRequestId++;
       const reqId = _ioRequestId;
-      _ioPending.set(reqId, { resolve });
+      _ioPending.set(reqId, { resolve, reject });
       _ioWorker.postMessage({ type: 'batch-write-text', files, requestId: reqId });
     } else {
       let ok = 0;
@@ -313,24 +319,24 @@ function ioWriteRecovery(filePath, snapshot) {
 
 function terminateWorkers() {
   if (_highlightWorker) {
-    try { _highlightWorker.terminate(); } catch (_e) { /* ignore */ }
+    try { _highlightWorker.kill(); } catch (_e) { /* ignore */ }
     _highlightWorker = null;
     _highlightWorkerReady = false;
   }
   if (_analysisWorker) {
-    try { _analysisWorker.terminate(); } catch (_e) { /* ignore */ }
+    try { _analysisWorker.kill(); } catch (_e) { /* ignore */ }
     for (const [, p] of _analysisPending) p.reject(new Error('terminated'));
     _analysisPending.clear();
     _analysisWorker = null;
   }
   if (_ioWorker) {
-    try { _ioWorker.terminate(); } catch (_e) { /* ignore */ }
+    try { _ioWorker.kill(); } catch (_e) { /* ignore */ }
     for (const [, p] of _ioPending) p.reject(new Error('terminated'));
     _ioPending.clear();
     _ioWorker = null;
   }
   if (_computeWorker) {
-    try { _computeWorker.terminate(); } catch (_e) { /* ignore */ }
+    try { _computeWorker.kill(); } catch (_e) { /* ignore */ }
     for (const [, p] of _computePending) p.reject(new Error('terminated'));
     _computePending.clear();
     _computeWorker = null;
