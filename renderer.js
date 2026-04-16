@@ -4544,7 +4544,14 @@ function getMultiSelectedIndices() {
 function createEntryElement(entry, filtIdx) {
   const el = document.createElement('div');
   el.className = 'entry-item';
-  if (entry.index === state.currentIndex) el.classList.add('active');
+  if (entry.index === state.currentIndex) {
+    // When searching with expanded results, distinguish the clicked row from sibling rows of the same file
+    if (_currentFilter && _currentFiltIdx >= 0 && filtIdx !== undefined) {
+      el.classList.add(filtIdx === _currentFiltIdx ? 'active' : 'active-file');
+    } else {
+      el.classList.add('active');
+    }
+  }
   if (_multiSelected.has(entry.index)) el.classList.add('multi-selected');
   if (entry.dirty) el.classList.add('dirty');
   const tagData = getEntryTagData(entry);
@@ -4703,7 +4710,11 @@ function refreshList() {
 
 async function onListItemClick(newIdx, matchOffset) {
   if (newIdx === state.currentIndex) {
-    // Same entry — still scroll to search match if applicable
+    // Same entry — re-render list to update active vs active-file, then jump to match
+    if (_currentFilter) {
+      _vForceRender = true;
+      virtualRender();
+    }
     const filt = dom.searchInput.value.trim();
     if (filt) jumpToTextInEditor(filt, matchOffset);
     return;
@@ -4725,27 +4736,25 @@ async function onListItemClick(newIdx, matchOffset) {
   saveSession();
 
   // O(1) active class swap
-  if (_activeListEl) _activeListEl.classList.remove('active');
+  if (_activeListEl) {
+    _activeListEl.classList.remove('active');
+    _activeListEl.classList.remove('active-file');
+  }
 
   // Scroll file list so current entry stays visible
-  const filtIdx = _filteredIndexByEntry.get(newIdx);
-  if (filtIdx !== undefined) {
+  const scrollToFiltIdx = (_currentFiltIdx >= 0) ? _currentFiltIdx : _filteredIndexByEntry.get(newIdx);
+  if (scrollToFiltIdx !== undefined) {
     const itemH = _getItemHeight();
     const container = dom.entryListContainer;
-    const targetTop = filtIdx * itemH;
+    const targetTop = scrollToFiltIdx * itemH;
     if (container && (targetTop < container.scrollTop || targetTop + itemH > container.scrollTop + container.clientHeight)) {
       container.scrollTop = Math.max(0, targetTop - container.clientHeight / 2 + itemH / 2);
     }
     // Force synchronous render so the target element exists in the DOM
     _vForceRender = true;
     virtualRender();
-    const target = dom.entryList.querySelector(`[data-index="${newIdx}"]`);
-    if (target) {
-      target.classList.add('active');
-      _activeListEl = target;
-    } else {
-      _activeListEl = null;
-    }
+    // virtualRender already sets active/active-file via createEntryElement
+    _activeListEl = dom.entryList.querySelector('.entry-item.active');
   } else {
     _activeListEl = null;
   }
@@ -4907,7 +4916,10 @@ function selectEntryByIndex(idx, deferHeavy) {
   openEntryTab(idx, false);
   loadEditor(deferHeavy);
   // O(1) active class swap
-  if (_activeListEl) _activeListEl.classList.remove('active');
+  if (_activeListEl) {
+    _activeListEl.classList.remove('active');
+    _activeListEl.classList.remove('active-file');
+  }
 
   const filtIdx = _filteredIndexByEntry.get(idx);
   if (filtIdx !== undefined) {
@@ -4921,13 +4933,7 @@ function selectEntryByIndex(idx, deferHeavy) {
     // Force synchronous render to get the element
     _vForceRender = true;
     virtualRender();
-    const target = dom.entryList.querySelector(`[data-index="${idx}"]`);
-    if (target) {
-      target.classList.add('active');
-      _activeListEl = target;
-    } else {
-      _activeListEl = null;
-    }
+    _activeListEl = dom.entryList.querySelector('.entry-item.active');
   } else {
     _activeListEl = null;
   }
