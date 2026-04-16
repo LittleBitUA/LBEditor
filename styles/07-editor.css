@@ -196,6 +196,14 @@ textarea.editor-dirty {
   font-family: 'Consolas', monospace;
 }
 
+.status-encoding {
+  color: var(--text-muted);
+  margin-left: 12px;
+  white-space: nowrap;
+  font-size: 10px;
+  font-family: 'Consolas', monospace;
+}
+
 #status-hint {
   color: var(--text-muted);
   margin-left: 12px;

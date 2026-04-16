@@ -46,7 +46,7 @@ function computeHighlight(text, settings) {
     glossaryRegex.lastIndex = 0;
     let gm;
     while ((gm = glossaryRegex.exec(text)) !== null) {
-      glossRanges.push({ start: gm.index, end: gm.index + gm[0].length });
+      glossRanges.push({ start: gm.index, end: gm.index + gm[0].length, text: gm[0] });
     }
   }
 

@@ -589,6 +589,38 @@ body {
   background: var(--bg-glass-hover);
 }
 
+/* ─── Search match navigator ─── */
+.search-match-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 2px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.search-match-nav.hidden { display: none; }
+
+.search-match-label {
+  min-width: 36px;
+  text-align: center;
+}
+
+.search-match-btn {
+  width: 18px; height: 18px;
+  border: none; background: transparent;
+  color: var(--text-muted);
+  font-size: 9px;
+  cursor: pointer;
+  border-radius: 3px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0;
+}
+.search-match-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-glass-hover);
+}
+
 /* ─── Entry List ─── */
 
 #entry-list-container {
@@ -1316,6 +1348,10 @@ body {
 .schema-custom-item {
   display: flex; align-items: center; gap: 6px;
   padding: 4px 0; font-size: 12px; border-bottom: 1px solid var(--border);
+  cursor: pointer; border-radius: 3px;
+}
+.schema-custom-item:hover {
+  background: var(--bg-glass-hover);
 }
 .schema-custom-item:last-child { border-bottom: none; }
 .schema-custom-item-name { flex: 1; font-weight: 500; color: var(--text); }
@@ -2330,6 +2366,14 @@ textarea.editor-dirty {
 }
 
 .status-cursor {
+  color: var(--text-muted);
+  margin-left: 12px;
+  white-space: nowrap;
+  font-size: 10px;
+  font-family: 'Consolas', monospace;
+}
+
+.status-encoding {
   color: var(--text-muted);
   margin-left: 12px;
   white-space: nowrap;

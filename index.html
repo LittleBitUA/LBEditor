@@ -70,6 +70,11 @@
         <div class="search-box">
           <span class="search-icon">&#x2315;</span>
           <input type="text" id="search-input" placeholder="Фільтр записів...">
+          <span id="search-match-nav" class="search-match-nav hidden">
+            <span class="search-match-label">0 / 0</span>
+            <button class="search-match-btn" id="search-match-prev" title="Попередній (Shift+Enter)">&#x25B2;</button>
+            <button class="search-match-btn" id="search-match-next" title="Наступний (Enter)">&#x25BC;</button>
+          </span>
           <button class="search-clear" id="search-clear">&times;</button>
         </div>
 
@@ -265,6 +270,7 @@
     <div id="status-bar" class="hidden">
       <span id="status-text">Готово. Ctrl+O відкрити · F1 клавіші</span>
       <span id="status-cursor" class="status-cursor"></span>
+      <span id="status-encoding" class="status-encoding"></span>
       <span id="status-hint">F1 &mdash; клавіші</span>
     </div>
   </div>

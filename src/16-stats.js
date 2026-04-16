@@ -112,6 +112,11 @@ function _computeStructureSignature(obj, depth) {
 }
 
 function _findSchemaByStructure(entry) {
+  // If this file was explicitly cleared, don't auto-match
+  if (entry && entry.filePath) {
+    const own = state.settings.file_schemas[entry.filePath];
+    if (own && own.noSchema) return null;
+  }
   const parsed = _tryParseEntryData(entry);
   if (!parsed || typeof parsed !== 'object') return null;
   const sample = Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'object'
@@ -120,7 +125,9 @@ function _findSchemaByStructure(entry) {
   const sig = _computeStructureSignature(sample, 0);
   if (!sig) return null;
   for (const [, schema] of Object.entries(state.settings.file_schemas)) {
-    if (schema && schema.structureSig === sig && Array.isArray(schema.textPaths) && schema.textPaths.length > 0) {
+    if (schema && schema.noSchema) continue;
+    if (schema && schema.structureSig === sig &&
+        ((Array.isArray(schema.textPaths) && schema.textPaths.length > 0) || schema.customSchemaIdx != null)) {
       return schema;
     }
   }
@@ -157,27 +164,43 @@ function _getSchemaKey() {
 }
 
 function saveFileSchema(textPaths, parseAs) {
-  const key = _getSchemaKey();
-  if (!key) return;
+  const keys = _getSchemaTargetKeys();
+  if (keys.length === 0) return;
   const isEmpty = (!textPaths || textPaths.length === 0) && (!parseAs || parseAs === 'auto');
-  if (isEmpty) {
-    delete state.settings.file_schemas[key];
-  } else {
-    const schemaEntry = state.settings.file_schemas[key] || {};
-    schemaEntry.textPaths = textPaths || [];
-    if (parseAs && parseAs !== 'auto') schemaEntry.parseAs = parseAs;
-    else delete schemaEntry.parseAs;
-    // Compute and store structure signature for auto-matching
-    const sample = _getSchemaSampleObject();
-    if (sample) schemaEntry.structureSig = _computeStructureSignature(sample, 0);
-    state.settings.file_schemas[key] = schemaEntry;
+  const sample = _getSchemaSampleObject();
+  const sig = sample ? _computeStructureSignature(sample, 0) : null;
+  for (const key of keys) {
+    if (isEmpty) {
+      state.settings.file_schemas[key] = { textPaths: [], noSchema: true };
+    } else {
+      const schemaEntry = state.settings.file_schemas[key] || {};
+      delete schemaEntry.noSchema;
+      schemaEntry.textPaths = textPaths || [];
+      if (parseAs && parseAs !== 'auto') schemaEntry.parseAs = parseAs;
+      else delete schemaEntry.parseAs;
+      if (sig) schemaEntry.structureSig = sig;
+      state.settings.file_schemas[key] = schemaEntry;
+    }
   }
   saveSettings(state.settings);
-  // Invalidate progress cache on all entries — schema change affects word counting
   for (const e of state.entries) e._progressCache = null;
   updateProgress();
   updateMeta();
   forceVirtualRender();
+}
+
+function _getSchemaTargetKeys() {
+  // If multi-selected, apply to all selected entries
+  if (state.appMode === 'other' && _multiSelected.size > 1) {
+    const keys = [];
+    for (const idx of _multiSelected) {
+      const entry = state.entries[idx];
+      if (entry && entry.filePath) keys.push(entry.filePath);
+    }
+    return keys.length > 0 ? keys : [_getSchemaKey()].filter(Boolean);
+  }
+  const key = _getSchemaKey();
+  return key ? [key] : [];
 }
 
 function getFileParseAs(entry) {
@@ -288,9 +311,41 @@ function _tryParseEntryXml(entry) {
 
 function _tryParseEntryKeyValue(entry) {
   const raw = Array.isArray(entry.text) ? entry.text.join('\n') : (entry.text || '');
+  const lines = raw.split('\n');
+
+  // Detect INI-style sections: [SectionName]
+  const sectionRe = /^\s*\[([^\]]+)\]\s*$/;
+  let hasSections = false;
+  for (const line of lines) {
+    if (sectionRe.test(line)) { hasSections = true; break; }
+  }
+
+  if (hasSections) {
+    // Parse as array of section objects (for repeating blocks like .int files)
+    const sections = [];
+    let current = null;
+    for (const line of lines) {
+      const sm = sectionRe.exec(line);
+      if (sm) {
+        current = { _section: sm[1] };
+        sections.push(current);
+        continue;
+      }
+      if (!current) continue;
+      const eqIdx = line.indexOf('=');
+      if (eqIdx > 0) {
+        const key = line.substring(0, eqIdx).trim();
+        const val = line.substring(eqIdx + 1);
+        if (key) current[key] = val;
+      }
+    }
+    return sections.length > 0 ? sections : null;
+  }
+
+  // Flat key=value (no sections)
   const obj = {};
   let hasKV = false;
-  for (const line of raw.split('\n')) {
+  for (const line of lines) {
     const eqIdx = line.indexOf('=');
     if (eqIdx > 0) {
       const key = line.substring(0, eqIdx).trim();
@@ -418,6 +473,37 @@ function _getRawTextLines(entry) {
   return Array.isArray(entry.text) ? entry.text : (typeof entry.text === 'string' ? entry.text.split('\n') : []);
 }
 
+function _applySchemaRegex(entry, editedLines, regexStr, group) {
+  const raw = _getRawTextLines(entry);
+  try {
+    const re = new RegExp(regexStr);
+    let editIdx = 0;
+    const result = [];
+    for (const line of raw) {
+      const m = line.match(re);
+      if (m && m[group] !== undefined && editIdx < editedLines.length) {
+        // Replace the captured group in the original line with the edited value
+        const captured = m[group];
+        const groupStart = m[0].indexOf(captured);
+        if (groupStart >= 0) {
+          const absStart = m.index + groupStart;
+          const absEnd = absStart + captured.length;
+          result.push(line.substring(0, absStart) + editedLines[editIdx] + line.substring(absEnd));
+        } else {
+          result.push(line);
+        }
+        editIdx++;
+      } else {
+        result.push(line);
+      }
+    }
+    entry.text = result;
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 function _extractByRegex(entry, regexStr, group) {
   const raw = _getRawTextLines(entry);
   try {
@@ -426,9 +512,8 @@ function _extractByRegex(entry, regexStr, group) {
     for (const line of raw) {
       const m = line.match(re);
       if (m && m[group] !== undefined) lines.push(m[group]);
-      else lines.push(line);
     }
-    return lines;
+    return lines.length > 0 ? lines : raw;
   } catch (_) {
     return raw;
   }
@@ -535,7 +620,11 @@ function _getSchemaOrigValues(entry) {
 function applySchemaLinesToEntry(entry, editedLines) {
   const schema = getFileSchema(entry);
   if (!schema || !schema.textPaths || schema.textPaths.length === 0) return false;
-  if (schema.customSchemaIdx != null) return false;
+  if (schema.customSchemaIdx != null) {
+    const cs = (state.settings.custom_schemas || [])[schema.customSchemaIdx];
+    if (!cs || !cs.regex) return false;
+    return _applySchemaRegex(entry, editedLines, cs.regex, cs.group || 1);
+  }
 
   if (state.appMode === 'ishin') {
     return _applySchemaIshin(entry, editedLines, schema);
@@ -736,11 +825,16 @@ function _applySchemaKeyValue(entry, editedLines, schema, origText) {
   const data = _tryParseEntryKeyValue(entry);
   if (!data) return false;
 
-  // Collect original values
+  const isArr = Array.isArray(data);
+  const items = isArr ? data : [data];
+
+  // Collect original values across all items
   const origVals = [];
-  for (const pathStr of schema.textPaths) {
-    const vals = extractByPath(data, pathStr);
-    for (const v of vals) origVals.push({ path: pathStr, value: v });
+  for (const item of items) {
+    for (const pathStr of schema.textPaths) {
+      const vals = extractByPath(item, pathStr);
+      for (const v of vals) origVals.push({ path: pathStr, value: v });
+    }
   }
 
   // Map edited lines to new values
@@ -752,15 +846,17 @@ function _applySchemaKeyValue(entry, editedLines, schema, origText) {
     lineIdx += lc;
   }
 
-  // Replace values in original text
+  // Replace values in original text, consuming matches in order
   const lines = origText.split('\n');
+  const consumed = new Set();
   for (const nv of newVals) {
-    // For key=value, path is just the key name
     const key = nv.path;
     for (let i = 0; i < lines.length; i++) {
+      if (consumed.has(i)) continue;
       const eqIdx = lines[i].indexOf('=');
       if (eqIdx > 0 && lines[i].substring(0, eqIdx).trim() === key) {
         lines[i] = lines[i].substring(0, eqIdx + 1) + nv.value;
+        consumed.add(i);
         break;
       }
     }
@@ -827,12 +923,24 @@ function showSchemaModal() {
     : state.filePath ? nodePath.basename(state.filePath)
     : state.txtDirPath ? nodePath.basename(state.txtDirPath)
     : '—';
-  infoEl.textContent = `${fileName} \u2022 ${state.entries.length} записів`;
+  const bulkCount = (state.appMode === 'other' && _multiSelected.size > 1) ? _multiSelected.size : 0;
+  infoEl.textContent = bulkCount > 0
+    ? `${fileName} + ще ${bulkCount - 1} файлів (${bulkCount} виділено)`
+    : `${fileName} \u2022 ${state.entries.length} записів`;
 
   // Current schema — default to 'text' only for ishin
   const currentSchema = getFileSchema(currentEntry);
   const defaultPaths = state.appMode === 'ishin' ? ['text'] : [];
   const selectedPaths = new Set(currentSchema ? currentSchema.textPaths : defaultPaths);
+
+  // Key=Value / CSV: auto-select all string fields (except _section) when no schema saved yet
+  const parseAs = parseTypeEl ? parseTypeEl.value : 'auto';
+  if ((parseAs === 'keyvalue' || parseAs === 'csv') && selectedPaths.size === 0 && sample) {
+    for (const k of Object.keys(sample)) {
+      if (k === '_section') continue;
+      if (typeof sample[k] === 'string') selectedPaths.add(k);
+    }
+  }
 
   treeEl.innerHTML = '';
   const searchEl = document.getElementById('schema-search');
@@ -845,6 +953,11 @@ function showSchemaModal() {
 
   // Render custom regex schemas list
   _renderCustomSchemaList();
+  // Pre-select currently applied custom schema
+  const csSelect = document.getElementById('schema-custom-select');
+  if (csSelect && currentSchema && currentSchema.customSchemaIdx != null) {
+    csSelect.value = String(currentSchema.customSchemaIdx);
+  }
   document.getElementById('schema-custom-editor').classList.add('hidden');
 
   overlay.classList.remove('hidden');
@@ -997,10 +1110,13 @@ function setupSchemaModal() {
     const parseAs = document.getElementById('schema-parse-type').value;
     saveFileSchema(paths, parseAs);
     hideSchemaModal();
-    // Reload editor to reflect new schema immediately
+    // Enable schema view if paths selected, reload editor
+    if (paths.length > 0) _schemaViewActive = true;
     loadEditor();
     updateSchemaViewButton();
-    setStatus(`Схему збережено: ${paths.length > 0 ? paths.join(', ') : 'стандартна'}${parseAs !== 'auto' ? ' (' + parseAs.toUpperCase() + ')' : ''}`);
+    const schemaKeys = _getSchemaTargetKeys();
+    const bulkMsg = schemaKeys.length > 1 ? ` (${schemaKeys.length} файлів)` : '';
+    setStatus(`Схему збережено: ${paths.length > 0 ? paths.join(', ') : 'стандартна'}${parseAs !== 'auto' ? ' (' + parseAs.toUpperCase() + ')' : ''}${bulkMsg}`);
   });
 
   document.getElementById('schema-reset-btn').addEventListener('click', () => {
@@ -1033,12 +1149,40 @@ function setupSchemaModal() {
       ? state.entries[state.currentIndex] : null;
     const currentSchema = getFileSchema(currentEntry);
     const defaultPaths = state.appMode === 'ishin' ? ['text'] : [];
-    const selectedPaths = new Set(currentSchema ? currentSchema.textPaths : defaultPaths);
+    let selectedPaths = new Set(currentSchema ? currentSchema.textPaths : defaultPaths);
+
+    // Key=Value / CSV: auto-select all string fields (except _section) when no schema saved yet
+    if ((parseAs === 'keyvalue' || parseAs === 'csv') && selectedPaths.size === 0) {
+      for (const k of Object.keys(sample)) {
+        if (k === '_section') continue;
+        if (typeof sample[k] === 'string') selectedPaths.add(k);
+      }
+    }
+
     treeEl.innerHTML = '';
     renderSchemaNode(treeEl, sample, '', selectedPaths, 0);
   });
 
   document.getElementById('schema-btn').addEventListener('click', showSchemaModal);
+
+  // Shift+click range selection for schema checkboxes
+  let _schemaLastCheck = null;
+  document.getElementById('schema-tree').addEventListener('click', (e) => {
+    const check = e.target.closest('.schema-check');
+    if (!check) return;
+    if (e.shiftKey && _schemaLastCheck && _schemaLastCheck !== check) {
+      const all = Array.from(document.querySelectorAll('#schema-tree .schema-check'));
+      const from = all.indexOf(_schemaLastCheck);
+      const to = all.indexOf(check);
+      if (from >= 0 && to >= 0) {
+        const lo = Math.min(from, to);
+        const hi = Math.max(from, to);
+        const checked = check.checked;
+        for (let i = lo; i <= hi; i++) all[i].checked = checked;
+      }
+    }
+    _schemaLastCheck = check;
+  });
 
   // Search/filter in schema tree
   document.getElementById('schema-search').addEventListener('input', (e) => {
@@ -1140,7 +1284,15 @@ function _updateRegexPreview(regexInput, groupInput) {
     ? state.entries[state.currentIndex] : state.entries[0];
   if (!entry) { previewEl.classList.add('hidden'); return; }
 
-  const lines = _getRawTextLines(entry).slice(0, 10);
+  const allLines = _getRawTextLines(entry);
+  // Show first 10 lines that actually match the regex
+  const matchedLines = [];
+  for (const line of allLines) {
+    if (matchedLines.length >= 10) break;
+    if (line.match(re)) matchedLines.push(line);
+  }
+  // If no matches at all, show first 10 lines as context
+  const lines = matchedLines.length > 0 ? matchedLines : allLines.slice(0, 10);
   previewEl.innerHTML = '';
   for (const line of lines) {
     const div = document.createElement('div');
@@ -1178,6 +1330,7 @@ function _setupCustomSchemaUI() {
   const nameInput = document.getElementById('schema-custom-name');
   const regexInput = document.getElementById('schema-custom-regex');
   const groupInput = document.getElementById('schema-custom-group');
+  let _editingIdx = -1; // -1 = adding new, >=0 = editing existing
 
   let _previewTimer = null;
   function schedulePreview() {
@@ -1188,6 +1341,7 @@ function _setupCustomSchemaUI() {
   groupInput.addEventListener('input', schedulePreview);
 
   addBtn.addEventListener('click', () => {
+    _editingIdx = -1;
     nameInput.value = '';
     regexInput.value = '';
     groupInput.value = '1';
@@ -1196,7 +1350,26 @@ function _setupCustomSchemaUI() {
     nameInput.focus();
   });
 
+  // Edit existing schema — click on name or regex
+  document.getElementById('schema-custom-list').addEventListener('click', (e) => {
+    const item = e.target.closest('.schema-custom-item');
+    if (!item || e.target.closest('.schema-custom-item-del')) return;
+    const items = Array.from(document.getElementById('schema-custom-list').children);
+    const idx = items.indexOf(item);
+    if (idx < 0) return;
+    const cs = (state.settings.custom_schemas || [])[idx];
+    if (!cs) return;
+    _editingIdx = idx;
+    nameInput.value = cs.name || '';
+    regexInput.value = cs.regex || '';
+    groupInput.value = cs.group || 1;
+    editor.classList.remove('hidden');
+    schedulePreview();
+    nameInput.focus();
+  });
+
   document.getElementById('schema-custom-cancel-btn').addEventListener('click', () => {
+    _editingIdx = -1;
     editor.classList.add('hidden');
     document.getElementById('schema-custom-preview').classList.add('hidden');
   });
@@ -1208,7 +1381,12 @@ function _setupCustomSchemaUI() {
     if (!name || !regex) { showInfo('Помилка', 'Введіть назву та регулярний вираз.'); return; }
     try { new RegExp(regex); } catch (_) { showInfo('Помилка', 'Некоректний регулярний вираз.'); return; }
     if (!state.settings.custom_schemas) state.settings.custom_schemas = [];
-    state.settings.custom_schemas.push({ name, regex, group });
+    if (_editingIdx >= 0 && _editingIdx < state.settings.custom_schemas.length) {
+      state.settings.custom_schemas[_editingIdx] = { name, regex, group };
+    } else {
+      state.settings.custom_schemas.push({ name, regex, group });
+    }
+    _editingIdx = -1;
     saveSettings(state.settings);
     editor.classList.add('hidden');
     _renderCustomSchemaList();
@@ -1216,19 +1394,29 @@ function _setupCustomSchemaUI() {
   });
 
   document.getElementById('schema-custom-apply-btn').addEventListener('click', () => {
-    const idx = parseInt(document.getElementById('schema-custom-select').value, 10);
-    if (isNaN(idx) || idx < 0) return;
-    const key = _getSchemaKey();
-    if (!key) return;
-    state.settings.file_schemas[key] = { textPaths: [], customSchemaIdx: idx };
+    const csIdx = parseInt(document.getElementById('schema-custom-select').value, 10);
+    if (isNaN(csIdx) || csIdx < 0) return;
+    const keys = _getSchemaTargetKeys();
+    if (keys.length === 0) return;
+    const sample = _getSchemaSampleObject();
+    const sig = sample ? _computeStructureSignature(sample, 0) : null;
+    for (const key of keys) {
+      const schemaEntry = { textPaths: [], customSchemaIdx: csIdx };
+      if (sig) schemaEntry.structureSig = sig;
+      state.settings.file_schemas[key] = schemaEntry;
+    }
     saveSettings(state.settings);
     for (const e of state.entries) e._progressCache = null;
     updateProgress();
     updateMeta();
     forceVirtualRender();
     hideSchemaModal();
-    const cs = state.settings.custom_schemas[idx];
-    setStatus(`Застосовано regex-схему «${cs ? cs.name : idx}»`);
+    _schemaViewActive = true;
+    loadEditor();
+    updateSchemaViewButton();
+    const cs = state.settings.custom_schemas[csIdx];
+    const countMsg = keys.length > 1 ? ` (${keys.length} файлів)` : '';
+    setStatus(`Застосовано regex-схему «${cs ? cs.name : csIdx}»${countMsg}`);
   });
 }
 

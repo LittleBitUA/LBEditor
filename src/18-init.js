@@ -199,7 +199,7 @@ function setupKeyboard() {
       if (!text) return;
       const editor = getActiveEditor();
       if (editor && editor.hasTextFocus()) {
-        editor.trigger('keyboard', 'type', { text });
+        pasteIntoMonaco(editor, text);
       } else {
         const el = document.activeElement;
         if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
@@ -212,7 +212,11 @@ function setupKeyboard() {
       return;
     }
 
-    // Ctrl+Z — programmatic undo, or history undo when editor is clean (e.g. after save)
+    // Ctrl+Z — two-tier undo:
+    //   1) If editor is dirty → let Monaco handle undo (individual edits, executeEdits, etc.)
+    //   2) If editor is clean → use custom entry-level undo (restores previous entry.text state)
+    //   Exception: _programmaticEdit means the editor was changed via setValue (not executeEdits),
+    //   so Monaco can't undo it — use custom undo immediately.
     if (code === 'KeyZ' && !e.shiftKey && !e.altKey) {
       if (_programmaticEdit) {
         e.preventDefault(); e.stopPropagation();
@@ -220,7 +224,11 @@ function setupKeyboard() {
         undoLastChange();
         return;
       }
-      if (!editorDirty() && state.currentIndex >= 0) {
+      if (editorDirty()) {
+        // Editor has unsaved changes — let Monaco handle undo
+        return;
+      }
+      if (state.currentIndex >= 0) {
         const entry = state.entries[state.currentIndex];
         if (entry && getEntryHistory(entry).length > 0) {
           e.preventDefault(); e.stopPropagation();
@@ -384,7 +392,7 @@ function setupKeyboard() {
     if (editor) {
       e.preventDefault();
       editor.focus();
-      editor.trigger('keyboard', 'type', { text });
+      pasteIntoMonaco(editor, text);
     }
   });
 
@@ -393,11 +401,11 @@ function setupKeyboard() {
   // a few times with short delays to catch the update reliably.
   let _clipSnapshotBeforeBlur = '';
   let _blurTimestamp = 0;
-  window.addEventListener('blur', () => {
+  ipcRenderer.on('win:blur', () => {
     _clipSnapshotBeforeBlur = clipboard.readText() || '';
     _blurTimestamp = Date.now();
   });
-  window.addEventListener('focus', () => {
+  ipcRenderer.on('win:focus', () => {
     const elapsed = Date.now() - _blurTimestamp;
     if (!_blurTimestamp || elapsed > 5000) return;
     const snap = _clipSnapshotBeforeBlur;
@@ -406,11 +414,11 @@ function setupKeyboard() {
       const now = clipboard.readText() || '';
       if (now && now !== snap) {
         pasteTextIntoActive(now);
-      } else if (++attempts < 6) {
-        setTimeout(poll, 80);
+      } else if (++attempts < 10) {
+        setTimeout(poll, 100);
       }
     };
-    setTimeout(poll, 50);
+    setTimeout(poll, 80);
   });
 
   function pasteTextIntoActive(text) {
@@ -424,9 +432,20 @@ function setupKeyboard() {
       const editor = getActiveEditor();
       if (editor) {
         editor.focus();
-        editor.trigger('keyboard', 'type', { text });
+        pasteIntoMonaco(editor, text);
       }
     }
+  }
+
+  function pasteIntoMonaco(editor, text) {
+    const sel = editor.getSelection();
+    editor.pushUndoStop();
+    editor.executeEdits('paste', [{
+      range: sel,
+      text: text,
+      forceMoveMarkers: true,
+    }]);
+    editor.pushUndoStop();
   }
 }
 
@@ -516,13 +535,25 @@ function setupEventListeners() {
   let _searchDebounce = null;
   dom.searchInput.addEventListener('input', () => {
     if (_searchDebounce) clearTimeout(_searchDebounce);
-    _searchDebounce = setTimeout(() => refreshList(), 250);
+    _searchDebounce = setTimeout(() => {
+      refreshList();
+      if (!dom.searchInput.value.trim()) clearSearchHighlight();
+    }, 250);
+  });
+  dom.searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && _searchHL.matches.length > 0) {
+      e.preventDefault();
+      if (e.shiftKey) searchHighlightPrev(); else searchHighlightNext();
+    }
   });
   dom.searchClear.addEventListener('click', () => {
     dom.searchInput.value = '';
+    clearSearchHighlight();
     refreshList();
     dom.searchInput.focus();
   });
+  document.getElementById('search-match-next').addEventListener('click', () => searchHighlightNext());
+  document.getElementById('search-match-prev').addEventListener('click', () => searchHighlightPrev());
 
   // Status filter buttons
   for (const btn of document.querySelectorAll('.sf-btn')) {
@@ -603,7 +634,10 @@ function setupEventListeners() {
     el.classList.add('active');
     _activeListEl = el;
     dom.entryListContainer.focus();
-    _listClickTimer = setTimeout(() => onListItemClick(idx), 220);
+    const fi = el.dataset.filtIdx != null ? parseInt(el.dataset.filtIdx) : -1;
+    _currentFiltIdx = fi;
+    const mOffset = fi >= 0 && _filterMatchMeta[fi] ? _filterMatchMeta[fi].offset : undefined;
+    _listClickTimer = setTimeout(() => onListItemClick(idx, mOffset), 220);
   });
   dom.entryList.addEventListener('dblclick', (e) => {
     const el = e.target.closest('.entry-item');

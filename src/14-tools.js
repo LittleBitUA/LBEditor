@@ -568,12 +568,41 @@ function getActiveTextarea() {
 
 function updateCursorPosition() {
   if (!dom.statusCursor) return;
-  if (!_monacoReady || state.currentIndex < 0) { dom.statusCursor.textContent = ''; return; }
+  if (!_monacoReady || state.currentIndex < 0) {
+    dom.statusCursor.textContent = '';
+    const encEl = document.getElementById('status-encoding');
+    if (encEl) encEl.textContent = '';
+    return;
+  }
   const editor = getActiveEditor();
   const pos = editor.getPosition();
   if (!pos) { dom.statusCursor.textContent = ''; return; }
   const totalLines = editor.getModel().getLineCount();
   dom.statusCursor.textContent = `Рядок ${pos.lineNumber} / ${totalLines}, Стовп ${pos.column}`;
+
+  // Show file encoding
+  const encEl = document.getElementById('status-encoding');
+  if (encEl) {
+    const entry = state.entries[state.currentIndex];
+    if (entry && entry._encoding) {
+      encEl.textContent = _formatEncodingLabel(entry._encoding);
+    } else if (state.appMode === 'ishin' || state.appMode === 'jojo') {
+      encEl.textContent = 'UTF-8';
+    } else {
+      encEl.textContent = '';
+    }
+  }
+}
+
+function _formatEncodingLabel(enc) {
+  switch (enc) {
+    case 'utf-8':       return 'UTF-8';
+    case 'utf-8-bom':   return 'UTF-8 з BOM';
+    case 'utf-16le':    return 'UTF-16 LE';
+    case 'utf-16be':    return 'UTF-16 BE';
+    case 'latin1':      return 'Windows-1252';
+    default:            return enc || '';
+  }
 }
 
 // scheduleGutterUpdate is now a no-op (Monaco handles line numbers)

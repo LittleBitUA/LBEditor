@@ -425,6 +425,10 @@
 .schema-custom-item {
   display: flex; align-items: center; gap: 6px;
   padding: 4px 0; font-size: 12px; border-bottom: 1px solid var(--border);
+  cursor: pointer; border-radius: 3px;
+}
+.schema-custom-item:hover {
+  background: var(--bg-glass-hover);
 }
 .schema-custom-item:last-child { border-bottom: none; }
 .schema-custom-item-name { flex: 1; font-weight: 500; color: var(--text); }

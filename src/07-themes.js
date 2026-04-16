@@ -138,6 +138,7 @@ function applyTheme(theme) {
     document.documentElement.setAttribute('data-theme', t);
     ipcRenderer.send('window:set-bg', THEME_BG[t] || '#1b1b1b');
   }
+  updateMonacoTheme(t);
 }
 
 // ─── Custom Theme Editor ───

@@ -1033,9 +1033,6 @@ function doReplaceOne() {
 }
 
 function doReplaceAllEntries() {
-  // Flush unsaved editor changes to entry.text before replacing
-  silentApply();
-
   const params = getFindParams('replace');
   addToFindHistory('find', params.query);
   addToFindHistory('replace', params.replaceWith);
@@ -1043,6 +1040,48 @@ function doReplaceAllEntries() {
   _findHistory.replacePos = -1;
   const entries = params.scope === 'all' ? state.entries : (state.currentIndex >= 0 ? [state.entries[state.currentIndex]] : []);
   let totalReplacements = 0, entriesAffected = 0;
+  let currentEntryHandledViaEditor = false;
+
+  // ── Helper: apply replacements directly in the editor (preserves unsaved changes + undo) ──
+  function _replaceInCurrentEditor(regexOrMap, replaceWith, isNamesOnly) {
+    const editor = getActiveEditor();
+    if (!editor) return 0;
+    const model = editor.getModel();
+    const text = editor.getValue();
+    let resultText = text;
+    let count = 0;
+
+    if (isNamesOnly) {
+      // namesOnly: apply glossary replacements (regexOrMap is a Map<string, {regex, trans}>)
+      for (const [, { regex, trans }] of regexOrMap) {
+        regex.lastIndex = 0;
+        const m = resultText.match(regex);
+        if (m) { count += m.length; regex.lastIndex = 0; resultText = resultText.replace(regex, trans); }
+      }
+    } else {
+      // Normal regex replace
+      regexOrMap.lastIndex = 0;
+      let match;
+      while ((match = regexOrMap.exec(text)) !== null) {
+        count++;
+        if (match[0].length === 0) { regexOrMap.lastIndex++; }
+      }
+      if (count > 0) {
+        regexOrMap.lastIndex = 0;
+        resultText = text.replace(regexOrMap, replaceWith);
+      }
+    }
+
+    if (count > 0 && resultText !== text) {
+      const fullRange = model.getFullModelRange();
+      editor.executeEdits('find-replace-all', [{ range: fullRange, text: resultText }]);
+      currentEntryHandledViaEditor = true;
+    }
+    return count;
+  }
+
+  // Flush unsaved editor changes for non-current entries
+  silentApply();
 
   if (params.namesOnly) {
     const sortedKeys = Object.keys(state.glossary).sort((a, b) => b.length - a.length);
@@ -1050,16 +1089,22 @@ function doReplaceAllEntries() {
     const regexMap = new Map();
     for (const orig of sortedKeys) {
       const escaped = orig.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      regexMap.set(orig, new RegExp('\\b' + escaped + '\\b', 'gi'));
+      regexMap.set(orig, { regex: new RegExp('\\b' + escaped + '\\b', 'gi'), trans: state.glossary[orig] });
     }
+
     for (const entry of entries) {
+      // Current entry: replace directly in editor
+      if (entry.index === state.currentIndex) {
+        const count = _replaceInCurrentEditor(regexMap, null, true);
+        if (count > 0) { totalReplacements += count; entriesAffected++; }
+        continue;
+      }
+
       let changed = false;
       let newText = state.appMode === 'jojo' ? entry.text.split('\n') : [...entry.text];
       let newVisSp = entry.visibleSpeakers ? entry.visibleSpeakers() : [];
 
-      for (const orig of sortedKeys) {
-        const trans = state.glossary[orig];
-        const regex = regexMap.get(orig);
+      for (const [, { regex, trans }] of regexMap) {
         for (let i = 0; i < newText.length; i++) {
           regex.lastIndex = 0;
           const m = newText[i].match(regex);
@@ -1102,6 +1147,13 @@ function doReplaceAllEntries() {
     }
 
     for (const entry of entries) {
+      // Current entry: replace directly in editor
+      if (entry.index === state.currentIndex) {
+        const count = _replaceInCurrentEditor(regex, params.replaceWith, false);
+        if (count > 0) { totalReplacements += count; entriesAffected++; }
+        continue;
+      }
+
       let changed = false;
       let newText = state.appMode === 'jojo' ? entry.text.split('\n') : [...entry.text];
       let newVisSp = entry.visibleSpeakers ? entry.visibleSpeakers() : [];
@@ -1132,11 +1184,14 @@ function doReplaceAllEntries() {
     }
   }
 
-  if (state.currentIndex >= 0) loadEditor();
+  // Reload editor only if current entry was changed via entry.text (not via editor.executeEdits)
+  if (state.currentIndex >= 0 && !currentEntryHandledViaEditor) loadEditor();
   forceVirtualRender();
   updateProgress();
 
-  if (entriesAffected > 0) _programmaticEdit = true;
+  // Only flag programmatic edit if the current editor was NOT modified via executeEdits
+  // (when handled via editor, Monaco's own undo can revert it)
+  if (entriesAffected > 0 && !currentEntryHandledViaEditor) _programmaticEdit = true;
   const msg = `Замінено: ${totalReplacements} у ${entriesAffected} записах`;
   setFindResult(msg, false, true);
   setStatus(msg);

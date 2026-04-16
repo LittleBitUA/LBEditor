@@ -61,6 +61,8 @@ function getWorkerPath(filename) {
 //  Monaco Editor — init & helpers
 // ═══════════════════════════════════════════════════════════
 
+const LIGHT_THEMES = new Set(['light', 'notepadpp', 'alucard', 'nier', 'nier-replicant']);
+
 function registerLBTheme(monaco) {
   monaco.editor.defineTheme('lb-theme', {
     base: 'vs-dark',
@@ -76,6 +78,28 @@ function registerLBTheme(monaco) {
       'editorGutter.background': '#00000000',
     }
   });
+  monaco.editor.defineTheme('lb-theme-light', {
+    base: 'vs',
+    inherit: true,
+    rules: [],
+    colors: {
+      'editor.background': '#00000000',
+      'editor.foreground': '#1e1e1e',
+      'editor.lineHighlightBackground': '#00000008',
+      'editorLineNumber.foreground': '#6e7781',
+      'editorCursor.foreground': '#1e1e1e',
+      'editor.selectionBackground': '#3366cc44',
+      'editorGutter.background': '#00000000',
+    }
+  });
+}
+
+function updateMonacoTheme(themeId) {
+  if (!_monaco) return;
+  const isLight = LIGHT_THEMES.has(themeId) ||
+    (themeId && themeId.startsWith('custom:') && state.settings.custom_themes?.[themeId] &&
+     LIGHT_THEMES.has(state.settings.custom_themes[themeId].base));
+  _monaco.editor.setTheme(isLight ? 'lb-theme-light' : 'lb-theme');
 }
 
 async function initMonacoEditors() {
@@ -138,10 +162,17 @@ async function initMonacoEditors() {
 
   // Event listeners
   for (const ed of [_monacoFlat, _monacoText, _monacoSp]) {
+    let _prevUndoLine = -1;
     ed.onDidChangeModelContent(() => {
       if (!_suppressMonacoChange) onEditorChanged({ target: ed, isTrusted: true });
     });
-    ed.onDidChangeCursorPosition(() => {
+    ed.onDidChangeCursorPosition((e) => {
+      // Push undo stop when cursor moves to a different line — groups edits per line
+      const line = e.position.lineNumber;
+      if (_prevUndoLine >= 0 && line !== _prevUndoLine) {
+        ed.pushUndoStop();
+      }
+      _prevUndoLine = line;
       updateCursorPosition();
       scheduleDecorationUpdate();
     });
@@ -260,7 +291,7 @@ const DEFAULT_SETTINGS = {
   progress_games_path: '',
   progress_game_id: '',
   progress_code_words: '',
-  other_extensions: '.txt .json .csv .xlsx .xls .ods .tsv',
+  other_extensions: '.txt .int .json .csv .xlsx .xls .ods .tsv',
   csv_formats: {}, // { filePath_or_ext: { delimiter, quoting, hasHeaders, encoding } }
   power_warning_enabled: true,
   power_schedule: null, // { 0: Array(48), ..., 6: Array(48) } — per day, half-hour slots
@@ -2484,6 +2515,7 @@ function applyTheme(theme) {
     document.documentElement.setAttribute('data-theme', t);
     ipcRenderer.send('window:set-bg', THEME_BG[t] || '#1b1b1b');
   }
+  updateMonacoTheme(t);
 }
 
 // ─── Custom Theme Editor ───
@@ -4364,6 +4396,38 @@ function getEntryMatchSnippet(entry, filt) {
   return line;
 }
 
+// Return ALL matching lines (one per unique line) for expanded search results
+function getEntryAllMatchLines(entry, filt) {
+  const textStr = Array.isArray(entry.text) ? entry.text.join('\n') : entry.text;
+  const lower = textStr.toLowerCase();
+  const results = [];
+  const seenLineStarts = new Set();
+  let searchFrom = 0;
+  while (searchFrom < lower.length) {
+    const pos = lower.indexOf(filt, searchFrom);
+    if (pos < 0) break;
+    const lineStart = textStr.lastIndexOf('\n', pos) + 1;
+    if (!seenLineStarts.has(lineStart)) {
+      seenLineStarts.add(lineStart);
+      let lineEnd = textStr.indexOf('\n', pos);
+      if (lineEnd < 0) lineEnd = textStr.length;
+      const line = textStr.substring(lineStart, lineEnd).trim();
+      let snippet;
+      if (line.length > 80) {
+        const mPos = pos - lineStart;
+        const start = Math.max(0, mPos - 30);
+        const end = Math.min(line.length, mPos + filt.length + 30);
+        snippet = (start > 0 ? '\u2026' : '') + line.substring(start, end) + (end < line.length ? '\u2026' : '');
+      } else {
+        snippet = line;
+      }
+      results.push({ offset: pos, snippet });
+    }
+    searchFrom = pos + 1;
+  }
+  return results;
+}
+
 // ── Virtual scroll state ──────────────────────────────────
 const ITEM_HEIGHT_NORMAL = 22;
 const ITEM_HEIGHT_SNIPPET = 40;
@@ -4374,6 +4438,8 @@ let _filteredIndexByEntry = new Map(); // entry.index → position in _filteredE
 let _currentFilter = '';
 let _statusFilter = 'all'; // 'all' | 'untranslated' | 'translated' | 'edited'
 let _filterSnippets = new Map();
+let _filterMatchMeta = []; // parallel to _filteredEntries: {offset, snippet} or null
+let _currentFiltIdx = -1;  // tracks which row in _filteredEntries the user is on (for arrow nav with expanded results)
 let _vStartIdx = -1;
 let _vEndIdx = -1;
 let _vForceRender = false;
@@ -4407,21 +4473,47 @@ function rebuildFilteredEntries() {
   _currentFilter = filt;
   _filteredEntries = [];
   _filterSnippets.clear();
+  _filterMatchMeta = [];
+  _currentFiltIdx = -1;
   _filteredIndexByEntry.clear();
   // Clear multi-select to avoid actions on entries not visible in filtered list
   clearMultiSelect();
 
   for (const entry of state.entries) {
-    if (filt && !entryMatchesFilter(entry, filt)) continue;
     if (!_entryMatchesStatusFilter(entry)) continue;
-    _filteredIndexByEntry.set(entry.index, _filteredEntries.length);
-    _filteredEntries.push(entry);
-    if (filt && !entry.file.toLowerCase().includes(filt)) {
-      _filterSnippets.set(entry.index, getEntryMatchSnippet(entry, filt));
+
+    if (filt) {
+      if (!entryMatchesFilter(entry, filt)) continue;
+      const contentMatches = getEntryAllMatchLines(entry, filt);
+
+      if (!_filteredIndexByEntry.has(entry.index)) {
+        _filteredIndexByEntry.set(entry.index, _filteredEntries.length);
+      }
+
+      if (contentMatches.length === 0) {
+        // File name / speaker match only — one row, no snippet
+        _filteredEntries.push(entry);
+        _filterMatchMeta.push(null);
+      } else {
+        // Content matches — one row per matching line
+        for (const m of contentMatches) {
+          _filteredEntries.push(entry);
+          _filterMatchMeta.push(m); // {offset, snippet}
+        }
+      }
+    } else {
+      _filteredIndexByEntry.set(entry.index, _filteredEntries.length);
+      _filteredEntries.push(entry);
+      _filterMatchMeta.push(null);
     }
   }
 
-  dom.countLabel.textContent = `Записів: ${_filteredEntries.length} / ${state.entries.length}`;
+  if (filt) {
+    const uniqueEntries = _filteredIndexByEntry.size;
+    dom.countLabel.textContent = `Збігів: ${_filteredEntries.length} у ${uniqueEntries} зап. / ${state.entries.length}`;
+  } else {
+    dom.countLabel.textContent = `Записів: ${_filteredEntries.length} / ${state.entries.length}`;
+  }
   _vStartIdx = -1;
   _vEndIdx = -1;
   _vForceRender = true;
@@ -4449,7 +4541,7 @@ function getMultiSelectedIndices() {
 }
 
 // ── Create a single entry DOM element ─────────────────────
-function createEntryElement(entry) {
+function createEntryElement(entry, filtIdx) {
   const el = document.createElement('div');
   el.className = 'entry-item';
   if (entry.index === state.currentIndex) el.classList.add('active');
@@ -4462,12 +4554,14 @@ function createEntryElement(entry) {
   if (entry.external) el.classList.add('entry-external');
   if (state.settings.show_bookmarks !== false && isEntryBookmarked(entry)) el.classList.add('entry-bookmark');
   el.dataset.index = entry.index;
+  if (filtIdx !== undefined) el.dataset.filtIdx = filtIdx;
 
   const prefix = entry.dirty ? '\u25cf ' : '\u00a0\u00a0';
   const noteText = tagData.note || '';
   const filt = _currentFilter;
 
-  if (filt && _filterSnippets.has(entry.index)) {
+  const meta = (filtIdx !== undefined) ? _filterMatchMeta[filtIdx] : null;
+  if (filt && meta && meta.snippet) {
     // Content match — show file name + snippet
     const nameSpan = document.createElement('div');
     nameSpan.className = 'entry-item-name';
@@ -4480,23 +4574,21 @@ function createEntryElement(entry) {
     }
     el.appendChild(nameSpan);
 
-    const snippet = _filterSnippets.get(entry.index);
-    if (snippet) {
-      const snippetEl = document.createElement('div');
-      snippetEl.className = 'entry-item-snippet';
-      const sLower = snippet.toLowerCase();
-      const mIdx = sLower.indexOf(filt);
-      if (mIdx >= 0) {
-        snippetEl.appendChild(document.createTextNode(snippet.substring(0, mIdx)));
-        const mark = document.createElement('mark');
-        mark.textContent = snippet.substring(mIdx, mIdx + filt.length);
-        snippetEl.appendChild(mark);
-        snippetEl.appendChild(document.createTextNode(snippet.substring(mIdx + filt.length)));
-      } else {
-        snippetEl.textContent = snippet;
-      }
-      el.appendChild(snippetEl);
+    const snippet = meta.snippet;
+    const snippetEl = document.createElement('div');
+    snippetEl.className = 'entry-item-snippet';
+    const sLower = snippet.toLowerCase();
+    const mIdx = sLower.indexOf(filt);
+    if (mIdx >= 0) {
+      snippetEl.appendChild(document.createTextNode(snippet.substring(0, mIdx)));
+      const mark = document.createElement('mark');
+      mark.textContent = snippet.substring(mIdx, mIdx + filt.length);
+      snippetEl.appendChild(mark);
+      snippetEl.appendChild(document.createTextNode(snippet.substring(mIdx + filt.length)));
+    } else {
+      snippetEl.textContent = snippet;
     }
+    el.appendChild(snippetEl);
   } else {
     const textNode = document.createTextNode(`${prefix}[${entry.index + 1}] ${entry.file}`);
     el.appendChild(textNode);
@@ -4546,7 +4638,7 @@ function virtualRender() {
   // Build DOM fragment for visible items
   const frag = document.createDocumentFragment();
   for (let i = startIdx; i <= endIdx && i < totalCount; i++) {
-    frag.appendChild(createEntryElement(_filteredEntries[i]));
+    frag.appendChild(createEntryElement(_filteredEntries[i], i));
   }
 
   dom.entryList.innerHTML = '';
@@ -4563,28 +4655,33 @@ function updateVisibleEntry(entryIndex) {
   // Check if within rendered range
   if (filtIdx < _vStartIdx || filtIdx > _vEndIdx) return;
 
-  const el = dom.entryList.querySelector(`[data-index="${entryIndex}"]`);
-  if (!el) return;
+  // Update ALL visible rows for this entry (may have multiple when searching)
+  const els = dom.entryList.querySelectorAll(`[data-index="${entryIndex}"]`);
+  if (els.length === 0) return;
 
   const entry = state.entries.find(e => e.index === entryIndex);
   if (!entry) return;
 
-  // Update classes
-  el.classList.toggle('dirty', !!entry.dirty);
   const tagData = getEntryTagData(entry);
-  el.classList.toggle('tag-translated', tagData.tag === 'translated');
-  el.classList.toggle('tag-edited', tagData.tag === 'edited');
-  el.classList.toggle('entry-bookmark', state.settings.show_bookmarks !== false && isEntryBookmarked(entry));
-  el.classList.toggle('compare-marked', entry.index === _compareFirstIdx);
-
-  // Update dirty prefix
   const prefix = entry.dirty ? '\u25cf ' : '\u00a0\u00a0';
   const noteText = tagData.note || '';
-  // For simple entries (no snippet), just update text content
-  if (!_currentFilter || !_filterSnippets.has(entry.index)) {
-    const firstChild = el.firstChild;
-    if (firstChild && firstChild.nodeType === Node.TEXT_NODE) {
-      firstChild.textContent = `${prefix}[${entry.index + 1}] ${entry.file}`;
+
+  for (const el of els) {
+    // Update classes
+    el.classList.toggle('dirty', !!entry.dirty);
+    el.classList.toggle('tag-translated', tagData.tag === 'translated');
+    el.classList.toggle('tag-edited', tagData.tag === 'edited');
+    el.classList.toggle('entry-bookmark', state.settings.show_bookmarks !== false && isEntryBookmarked(entry));
+    el.classList.toggle('compare-marked', entry.index === _compareFirstIdx);
+
+    // For simple entries (no snippet), just update text content
+    const fi = el.dataset.filtIdx != null ? parseInt(el.dataset.filtIdx) : -1;
+    const hasMeta = fi >= 0 && _filterMatchMeta[fi] && _filterMatchMeta[fi].snippet;
+    if (!_currentFilter || !hasMeta) {
+      const firstChild = el.firstChild;
+      if (firstChild && firstChild.nodeType === Node.TEXT_NODE) {
+        firstChild.textContent = `${prefix}[${entry.index + 1}] ${entry.file}`;
+      }
     }
   }
 
@@ -4604,8 +4701,19 @@ function refreshList() {
   rebuildFilteredEntries();
 }
 
-async function onListItemClick(newIdx) {
-  if (newIdx === state.currentIndex) return;
+async function onListItemClick(newIdx, matchOffset) {
+  if (newIdx === state.currentIndex) {
+    // Same entry — still scroll to search match if applicable
+    const filt = dom.searchInput.value.trim();
+    if (filt) jumpToTextInEditor(filt, matchOffset);
+    return;
+  }
+
+  // Save current editor view state (scroll, cursor) before switching
+  if (state.currentIndex >= 0 && _monacoReady) {
+    const ed = getActiveEditor();
+    if (ed) _editorViewStates.set(state.currentIndex, ed.saveViewState());
+  }
 
   if (state.currentIndex >= 0 && editorDirty()) {
     await applyChanges();
@@ -4650,10 +4758,10 @@ async function onListItemClick(newIdx) {
     mainTitle.textContent = curEntry ? `[${newIdx + 1}] ${curEntry.file || ''}` : '';
   }
 
-  // If search filter is active, highlight the first match in the editor
+  // If search filter is active, highlight the match in the editor
   const filt = dom.searchInput.value.trim();
   if (filt) {
-    jumpToTextInEditor(filt);
+    jumpToTextInEditor(filt, matchOffset);
   }
   renderTabBar();
 }
@@ -4661,6 +4769,11 @@ async function onListItemClick(newIdx) {
 async function onListItemDblClick(idx) {
   // Double-click = open and pin as permanent tab
   if (idx !== state.currentIndex) {
+    // Save current editor view state before switching
+    if (state.currentIndex >= 0 && _monacoReady) {
+      const ed = getActiveEditor();
+      if (ed) _editorViewStates.set(state.currentIndex, ed.saveViewState());
+    }
     if (state.currentIndex >= 0 && editorDirty()) {
       if (_previewTabIdx === state.currentIndex) pinCurrentTab();
       await applyChanges();
@@ -4672,18 +4785,120 @@ async function onListItemDblClick(idx) {
   openEntryTab(idx, true);
 }
 
-function jumpToTextInEditor(query) {
+// ── Search highlight state (sidebar search → editor) ─────
+const _searchHL = {
+  matches: [],       // [{index, length}, ...]
+  currentIdx: -1,
+  decorationIds: [],
+  query: ''
+};
+
+function jumpToTextInEditor(query, targetOffset) {
   const editor = getActiveEditor();
   if (!editor) return;
-  const text = editor.getValue().toLowerCase();
-  const pos = text.indexOf(query.toLowerCase());
-  if (pos < 0) return;
+
+  // Find all matches
+  _searchHL.matches = [];
+  _searchHL.currentIdx = -1;
+  _searchHL.query = query;
+
+  const text = editor.getValue();
+  const lowerText = text.toLowerCase();
+  const lowerQuery = query.toLowerCase();
+  let searchFrom = 0;
+  while (searchFrom < lowerText.length) {
+    const pos = lowerText.indexOf(lowerQuery, searchFrom);
+    if (pos < 0) break;
+    _searchHL.matches.push({ index: pos, length: query.length });
+    searchFrom = pos + 1;
+  }
+
+  if (_searchHL.matches.length === 0) {
+    clearSearchHighlight();
+    return;
+  }
+
+  // Jump to the match closest to targetOffset (from sidebar click)
+  if (targetOffset !== undefined && _searchHL.matches.length > 1) {
+    let bestIdx = 0;
+    let bestDist = Math.abs(_searchHL.matches[0].index - targetOffset);
+    for (let i = 1; i < _searchHL.matches.length; i++) {
+      const dist = Math.abs(_searchHL.matches[i].index - targetOffset);
+      if (dist < bestDist) { bestIdx = i; bestDist = dist; }
+    }
+    _searchHL.currentIdx = bestIdx;
+  } else {
+    _searchHL.currentIdx = 0;
+  }
+
+  _applySearchHLDecorations(editor);
+  _scrollToSearchHLMatch(editor);
+  _updateSearchHLNav();
+}
+
+function _applySearchHLDecorations(editor) {
   const model = editor.getModel();
-  const startPos = model.getPositionAt(pos);
-  const endPos = model.getPositionAt(pos + query.length);
-  editor.setSelection(new _monaco.Range(startPos.lineNumber, startPos.column, endPos.lineNumber, endPos.column));
-  editor.revealRangeInCenter(new _monaco.Range(startPos.lineNumber, startPos.column, endPos.lineNumber, endPos.column));
-  editor.focus();
+  const decs = _searchHL.matches.map((m, i) => ({
+    range: offsetToRange(model, m.index, m.index + m.length),
+    options: {
+      className: i === _searchHL.currentIdx ? 'find-match-current' : 'find-match',
+    }
+  }));
+  _searchHL.decorationIds = editor.deltaDecorations(_searchHL.decorationIds, decs);
+}
+
+function _scrollToSearchHLMatch(editor) {
+  const m = _searchHL.matches[_searchHL.currentIdx];
+  if (!m) return;
+  const model = editor.getModel();
+  const range = offsetToRange(model, m.index, m.index + m.length);
+  editor.setSelection(range);
+  editor.revealRangeInCenter(range);
+}
+
+function searchHighlightNext() {
+  if (_searchHL.matches.length === 0) return;
+  _searchHL.currentIdx = (_searchHL.currentIdx + 1) % _searchHL.matches.length;
+  const editor = getActiveEditor();
+  if (!editor) return;
+  _applySearchHLDecorations(editor);
+  _scrollToSearchHLMatch(editor);
+  _updateSearchHLNav();
+}
+
+function searchHighlightPrev() {
+  if (_searchHL.matches.length === 0) return;
+  _searchHL.currentIdx = (_searchHL.currentIdx - 1 + _searchHL.matches.length) % _searchHL.matches.length;
+  const editor = getActiveEditor();
+  if (!editor) return;
+  _applySearchHLDecorations(editor);
+  _scrollToSearchHLMatch(editor);
+  _updateSearchHLNav();
+}
+
+function clearSearchHighlight() {
+  _searchHL.matches = [];
+  _searchHL.currentIdx = -1;
+  _searchHL.query = '';
+  const editor = getActiveEditor();
+  if (editor) {
+    _searchHL.decorationIds = editor.deltaDecorations(_searchHL.decorationIds, []);
+  }
+  _updateSearchHLNav();
+}
+
+function _updateSearchHLNav() {
+  const nav = document.getElementById('search-match-nav');
+  if (!nav) return;
+  if (_searchHL.matches.length === 0) {
+    nav.classList.add('hidden');
+    return;
+  }
+  nav.classList.remove('hidden');
+  const label = nav.querySelector('.search-match-label');
+  if (label) {
+    label.textContent = `${_searchHL.currentIdx + 1} / ${_searchHL.matches.length}`;
+  }
 }
 
 let _activeListEl = null;
@@ -4828,13 +5043,18 @@ function applyGlossaryToEntry(entry, orig, trans) {
 let _originalEditorLines = [];
 let _schemaViewActive = true;      // default: show schema text when schema exists
 let _schemaViewOrigText = '';      // original schema text for dirty check
+const _editorViewStates = new Map(); // entry.index → Monaco viewState (scroll, cursor, selections)
 // _schemaViewCurrentlyUsed is declared in 01-head.js (needed by getActiveEditor)
 
 function _isSchemaViewApplicable(entry) {
   if (!entry) return false;
   const schema = getFileSchema(entry);
   if (!schema) return false;
-  if (schema.customSchemaIdx != null) return false; // regex schemas → use table view
+  // Custom regex schema — applicable if regex is defined
+  if (schema.customSchemaIdx != null) {
+    const cs = (state.settings.custom_schemas || [])[schema.customSchemaIdx];
+    return !!(cs && cs.regex);
+  }
   // Check that schema actually filters something (has textPaths)
   if (!schema.textPaths || schema.textPaths.length === 0) return false;
   return true;
@@ -4917,7 +5137,7 @@ function loadEditor(deferHeavy) {
   if (_ssViewActive && typeof hideSpreadsheetView === 'function') hideSpreadsheetView();
 
   // Determine if schema view should be used for this entry
-  _schemaViewCurrentlyUsed = _schemaViewActive && _isSchemaViewApplicable(entry) && !_tableViewActive;
+  _schemaViewCurrentlyUsed = _schemaViewActive && _isSchemaViewApplicable(entry) && !_tableViewActive && !entry._schemaExcluded;
 
   // Set editor content (suppress change events during programmatic setValue)
   _suppressMonacoChange = true;
@@ -4952,6 +5172,14 @@ function loadEditor(deferHeavy) {
   _originalEditorLines = getActiveEditor().getValue().split('\n');
 
   state.loadingEditor = false;
+
+  // Restore saved view state (scroll, cursor, selections) for this entry
+  const savedVS = _editorViewStates.get(entry.index);
+  if (savedVS) {
+    const ed = getActiveEditor();
+    if (ed) ed.restoreViewState(savedVS);
+  }
+
   updateMeta();
   updateEditorDirtyVisual();
   updateSchemaViewButton();
@@ -5243,33 +5471,38 @@ async function applyChanges() {
     const oldText = Array.isArray(entry.text) ? [...entry.text] : entry.text;
     const oldSp = entry.speakers ? [...entry.speakers] : undefined;
 
-    const ok = applySchemaLinesToEntry(entry, editedLines);
+    let ok = applySchemaLinesToEntry(entry, editedLines);
     if (!ok) {
-      setStatus('Не вдалося зберегти зміни через схему. Перемкніться в повний режим.');
+      // Schema apply failed — exclude this entry from schema view so user isn't stuck
+      entry._schemaExcluded = true;
+      _schemaViewCurrentlyUsed = false;
+      _schemaViewOrigText = '';
+      loadEditor(); // re-evaluates _schemaViewCurrentlyUsed (will be false due to exclusion)
+      setStatus('⚠ Помилка схеми — перемкнуто в повний режим. Повторіть зміни.');
+      return;
+    } else {
+      const newText = Array.isArray(entry.text) ? [...entry.text] : [entry.text];
+      const newSp = entry.speakers || undefined;
+      recordHistory(entry, oldText, newText, oldSp, newSp, 'edit');
+      entry.dirty = true;
+      entry._invalidateCaches();
+      _navHintsCache.delete(entry.index);
+
+      // Update schema orig text so editorDirty() knows the new baseline
+      _schemaViewOrigText = getTextLinesForEntry(entry).join('\n');
+      _suppressMonacoChange = true;
+      _monacoFlat.setValue(_schemaViewOrigText);
+      _suppressMonacoChange = false;
+      _originalEditorLines = _schemaViewOrigText.split('\n');
+
+      updateVisibleEntry(entry.index);
+      updateMeta();
+      updateEditorDirtyVisual();
+      updateProgress();
+      markRecoveryDirty();
+      setStatus(`Застосовано (схема): [${entry.index + 1}] ${entry.file}`);
       return;
     }
-
-    const newText = Array.isArray(entry.text) ? [...entry.text] : [entry.text];
-    const newSp = entry.speakers || undefined;
-    recordHistory(entry, oldText, newText, oldSp, newSp, 'edit');
-    entry.dirty = true;
-    entry._invalidateCaches();
-    _navHintsCache.delete(entry.index);
-
-    // Update schema orig text so editorDirty() knows the new baseline
-    _schemaViewOrigText = getTextLinesForEntry(entry).join('\n');
-    _suppressMonacoChange = true;
-    _monacoFlat.setValue(_schemaViewOrigText);
-    _suppressMonacoChange = false;
-    _originalEditorLines = _schemaViewOrigText.split('\n');
-
-    updateVisibleEntry(entry.index);
-    updateMeta();
-    updateEditorDirtyVisual();
-    updateProgress();
-    markRecoveryDirty();
-    setStatus(`Застосовано (схема): [${entry.index + 1}] ${entry.file}`);
-    return;
   }
 
   if (state.appMode === 'jojo') {
@@ -5403,6 +5636,9 @@ function silentApply() {
     if (applySchemaLinesToEntry(entry, editedLines)) {
       entry._invalidateCaches();
       _schemaViewOrigText = getTextLinesForEntry(entry).join('\n');
+    } else {
+      // Schema apply failed silently — just skip, don't change global state
+      // The editor still has the user's edits, they just aren't synced to entry.text
     }
     updateVisibleEntry(entry.index);
     updateMeta();
@@ -5446,15 +5682,21 @@ function silentApply() {
 // ═══════════════════════════════════════════════════════════
 
 function goPrev() {
-  const filtIdx = _filteredIndexByEntry.get(state.currentIndex);
+  let filtIdx = (_currentFiltIdx >= 0) ? _currentFiltIdx : _filteredIndexByEntry.get(state.currentIndex);
   if (filtIdx === undefined || filtIdx <= 0) return;
-  onListItemClick(_filteredEntries[filtIdx - 1].index);
+  const prevIdx = filtIdx - 1;
+  _currentFiltIdx = prevIdx;
+  const mOffset = _filterMatchMeta[prevIdx] ? _filterMatchMeta[prevIdx].offset : undefined;
+  onListItemClick(_filteredEntries[prevIdx].index, mOffset);
 }
 
 function goNext() {
-  const filtIdx = _filteredIndexByEntry.get(state.currentIndex);
+  let filtIdx = (_currentFiltIdx >= 0) ? _currentFiltIdx : _filteredIndexByEntry.get(state.currentIndex);
   if (filtIdx === undefined || filtIdx >= _filteredEntries.length - 1) return;
-  onListItemClick(_filteredEntries[filtIdx + 1].index);
+  const nextIdx = filtIdx + 1;
+  _currentFiltIdx = nextIdx;
+  const mOffset = _filterMatchMeta[nextIdx] ? _filterMatchMeta[nextIdx].offset : undefined;
+  onListItemClick(_filteredEntries[nextIdx].index, mOffset);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -5479,22 +5721,23 @@ function getEntryProgress(entry) {
 }
 
 function _calcEditingStats() {
-  let editedFiles = 0, editedLines = 0;
+  let editedFiles = 0, editedLines = 0, editedWords = 0;
   for (const entry of state.entries) {
     const tagData = getEntryTagData(entry);
     if (tagData.tag === 'edited') {
       editedFiles++;
       const p = getEntryProgress(entry);
       editedLines += p.totalL;
+      editedWords += p.totalW;
     }
   }
-  return { editedFiles, editedLines };
+  return { editedFiles, editedLines, editedWords };
 }
 
 function calcProgressSync() {
   let transE = 0, totalE = state.entries.length, transL = 0, totalL = 0;
   let transW = 0, totalW = 0;
-  let editedFiles = 0, editedLines = 0;
+  let editedFiles = 0, editedLines = 0, editedWords = 0;
   for (const entry of state.entries) {
     const p = getEntryProgress(entry);
     const tagData = getEntryTagData(entry);
@@ -5507,12 +5750,13 @@ function calcProgressSync() {
     if (tagData.tag === 'edited') {
       editedFiles++;
       editedLines += p.totalL;
+      editedWords += p.totalW;
     }
   }
-  return { transE, totalE, transL, totalL, transW, totalW, editedFiles, editedLines };
+  return { transE, totalE, transL, totalL, transW, totalW, editedFiles, editedLines, editedWords };
 }
 
-function _applyProgress(transE, totalE, transL, totalL, editedFiles, editedLines, transW, totalW) {
+function _applyProgress(transE, totalE, transL, totalL, editedFiles, editedLines, transW, totalW, editedWords) {
   const useWords = state.settings.progress_unit === 'words';
   const tVal = useWords ? transW : transL;
   const tTotal = useWords ? totalW : totalL;
@@ -5536,11 +5780,13 @@ function _applyProgress(transE, totalE, transL, totalL, editedFiles, editedLines
   if (secTrans) secTrans.title = `Переклад: ${pct.toFixed(1)}%\nФайлів: ${transE} / ${totalE}\n${useWords ? 'Слів' : 'Рядків'}: ${tVal} / ${tTotal}\nЗалишилось: ${remainE} файлів, ${remain} ${unit}`;
 
   // Editing progress
-  const editPct = totalL > 0 ? (editedLines / totalL * 100) : 0;
+  const editVal = useWords ? (editedWords || 0) : editedLines;
+  const editTotal = useWords ? totalW : totalL;
+  const editPct = editTotal > 0 ? (editVal / editTotal * 100) : 0;
   dom.progEditBar.style.width = editPct.toFixed(1) + '%';
   dom.progEditPct.textContent = editPct.toFixed(1) + '%';
   dom.progEditFiles.textContent = `зредаговано ${editedFiles} із ${totalE}`;
-  dom.progEditLines.textContent = `${editedLines}/${totalL} ${unit}`;
+  dom.progEditLines.textContent = `${editVal}/${editTotal} ${unit}`;
 
   // Set color tier on edit track
   const editTrack = dom.progEditBar.parentElement;
@@ -5548,9 +5794,9 @@ function _applyProgress(transE, totalE, transL, totalL, editedFiles, editedLines
 
   // Tooltip
   const remainEditF = totalE - editedFiles;
-  const remainEditL = totalL - editedLines;
+  const remainEditVal = editTotal - editVal;
   const secEdit = document.getElementById('progress-section-edit');
-  if (secEdit) secEdit.title = `Редагування: ${editPct.toFixed(1)}%\nФайлів: ${editedFiles} / ${totalE}\nРядків: ${editedLines} / ${totalL}\nЗалишилось: ${remainEditF} файлів, ${remainEditL} ${unit}`;
+  if (secEdit) secEdit.title = `Редагування: ${editPct.toFixed(1)}%\nФайлів: ${editedFiles} / ${totalE}\n${useWords ? 'Слів' : 'Рядків'}: ${editVal} / ${editTotal}\nЗалишилось: ${remainEditF} файлів, ${remainEditVal} ${unit}`;
 }
 
 let _progressDebounce = null;
@@ -5579,15 +5825,15 @@ function updateProgress() {
           // Worker doesn't know about tags — calc editing stats from sync
           // Worker doesn't know about tags/words — calc from sync
           const s = calcProgressSync();
-          _applyProgress(s.transE, s.totalE, s.transL, s.totalL, s.editedFiles, s.editedLines, s.transW, s.totalW);
+          _applyProgress(s.transE, s.totalE, s.transL, s.totalL, s.editedFiles, s.editedLines, s.transW, s.totalW, s.editedWords);
         })
         .catch(() => {
           const r = calcProgressSync();
-          _applyProgress(r.transE, r.totalE, r.transL, r.totalL, r.editedFiles, r.editedLines, r.transW, r.totalW);
+          _applyProgress(r.transE, r.totalE, r.transL, r.totalL, r.editedFiles, r.editedLines, r.transW, r.totalW, r.editedWords);
         });
     } else {
       const r = calcProgressSync();
-      _applyProgress(r.transE, r.totalE, r.transL, r.totalL, r.editedFiles, r.editedLines, r.transW, r.totalW);
+      _applyProgress(r.transE, r.totalE, r.transL, r.totalL, r.editedFiles, r.editedLines, r.transW, r.totalW, r.editedWords);
     }
   }, 50);
 }
@@ -6811,7 +7057,21 @@ async function saveFile() {
   if (state.currentIndex >= 0 && editorDirty()) {
     await applyChanges();
   }
-  if (state.appMode === 'other') { await saveTxtFiles(); return; }
+  if (state.appMode === 'other') {
+    const entry = state.entries[state.currentIndex];
+    if (entry && entry.dirty) {
+      await saveTxtSingleEntry(entry);
+      forceVirtualRender();
+      updateMeta();
+      updateProgress();
+      saveSession();
+      deleteRecoveryFile();
+      renderTabBar();
+      if (_sidePanelIdx >= 0) refreshSidePanel();
+      setStatus(`Збережено: ${entry.file}  (${timeStr()})`);
+    }
+    return;
+  }
   if (state.appMode === 'jojo') { await saveJoJoJson(); return; }
   if (!state.filePath) { await saveFileAs(); return; }
   await writeJson(state.filePath);
@@ -6821,7 +7081,15 @@ async function saveFile() {
 
 async function saveAll() {
   if (!state.entries.length) return;
-  await saveFile();
+  // Auto-apply current editor changes before saving
+  if (state.currentIndex >= 0 && editorDirty()) {
+    await applyChanges();
+  }
+  if (state.appMode === 'other') { await saveTxtFiles(); return; }
+  if (state.appMode === 'jojo') { await saveJoJoJson(); return; }
+  if (!state.filePath) { await saveFileAs(); return; }
+  await writeJson(state.filePath);
+  if (_sidePanelIdx >= 0) refreshSidePanel();
 }
 
 async function saveFileAs() {
@@ -6834,18 +7102,19 @@ async function saveFileAs() {
       await applyChanges();
     }
     if (state.appMode === 'other') {
-      // Let user choose a new folder and save copies there
-      const folder = await ipcRenderer.invoke('dialog:open-folder');
-      if (!folder) return;
-      const files = state.entries.map(entry => ({
-        path: nodePath.join(folder, entry.file || `entry_${entry.index}.txt`),
-        text: entry.text.join('\n') + '\n',
-      }));
-      const result = await ioBatchWriteText(files);
-      let msg = `Збережено ${result.ok} / ${result.total} файлів у:\n${folder}`;
-      if (result.errs && result.errs.length) msg += '\n\nПомилки:\n' + result.errs.slice(0, 20).join('\n');
-      await showInfo('Зберегти як', msg);
-      setStatus(`Збережено як: ${ok} файлів → ${folder}`);
+      // Save current file to a new location
+      const entry = state.entries[state.currentIndex];
+      if (!entry) return;
+      const filePath = await ipcRenderer.invoke('dialog:save-file', entry.filePath || entry.file);
+      if (!filePath) return;
+      const content = entry.text.join('\n') + '\n';
+      const enc = entry._encoding || _ENC_UTF8;
+      if (enc === _ENC_UTF8) {
+        await fs.promises.writeFile(filePath, content, 'utf-8');
+      } else {
+        await fs.promises.writeFile(filePath, _encodeString(content, enc));
+      }
+      setStatus(`Збережено як: ${filePath}  (${timeStr()})`);
       return;
     }
     if (state.appMode === 'jojo') {
@@ -6907,7 +7176,7 @@ async function openTxtDirectory() {
 }
 
 function getOtherExtensions() {
-  const raw = (state.settings && state.settings.other_extensions) || '.txt';
+  const raw = (state.settings && state.settings.other_extensions) || '.txt .int';
   return raw.split(/[\s,;]+/).map(e => e.trim().toLowerCase()).filter(Boolean).map(e => e.startsWith('.') ? e : '.' + e);
 }
 
@@ -7049,65 +7318,57 @@ async function loadTxtDirectory(dirPath) {
   );
 }
 
+async function saveTxtSingleEntry(entry) {
+  if (entry._isSpreadsheet && entry._xlsxSourcePath) {
+    let wb;
+    try { wb = XLSX.readFile(entry._xlsxSourcePath, { type: 'file' }); }
+    catch (_) { wb = XLSX.utils.book_new(); }
+    const delim = entry._xlsxDelim || ',';
+
+    if (entry._xlsxSheets && entry._xlsxCurrentSheet) {
+      entry._xlsxSheets[entry._xlsxCurrentSheet] = [...entry.text];
+    }
+
+    if (entry._xlsxSheets) {
+      for (const sn of (entry._xlsxSheetNames || [])) {
+        const sheetLines = entry._xlsxSheets[sn];
+        if (!sheetLines) continue;
+        wb.Sheets[sn] = _textToSheet(sheetLines.join('\n'), delim);
+        if (!wb.SheetNames.includes(sn)) wb.SheetNames.push(sn);
+      }
+    } else {
+      const sn = entry._xlsxCurrentSheet || (entry._xlsxSheetNames && entry._xlsxSheetNames[0]) || 'Sheet1';
+      wb.Sheets[sn] = _textToSheet(entry.text.join('\n'), delim);
+      if (!wb.SheetNames.includes(sn)) wb.SheetNames.push(sn);
+    }
+
+    XLSX.writeFile(wb, entry._xlsxSourcePath);
+    entry.markSaved();
+    return;
+  }
+
+  const content = entry.text.join('\n') + '\n';
+  const enc = entry._encoding || _ENC_UTF8;
+  const tmpPath = entry.filePath + '.tmp';
+  if (enc === _ENC_UTF8) {
+    fs.writeFileSync(tmpPath, content, 'utf-8');
+  } else {
+    fs.writeFileSync(tmpPath, _encodeString(content, enc));
+  }
+  fs.renameSync(tmpPath, entry.filePath);
+  entry.markSaved();
+}
+
 async function saveTxtFiles(silent = false) {
   let ok = 0;
   const errs = [];
 
   for (const entry of state.entries) {
     if (!entry.dirty) continue;
-
-    if (entry._isSpreadsheet && entry._xlsxSourcePath) {
-      // Save spreadsheet: reconstruct workbook with all sheets
-      try {
-        let wb;
-        try { wb = XLSX.readFile(entry._xlsxSourcePath, { type: 'file' }); }
-        catch (_) { wb = XLSX.utils.book_new(); }
-        const delim = entry._xlsxDelim || ',';
-
-        // Sync current sheet's text into the sheets map
-        if (entry._xlsxSheets && entry._xlsxCurrentSheet) {
-          entry._xlsxSheets[entry._xlsxCurrentSheet] = [...entry.text];
-        }
-
-        if (entry._xlsxSheets) {
-          // Multi-sheet: write all sheets
-          for (const sn of (entry._xlsxSheetNames || [])) {
-            const sheetLines = entry._xlsxSheets[sn];
-            if (!sheetLines) continue;
-            wb.Sheets[sn] = _textToSheet(sheetLines.join('\n'), delim);
-            if (!wb.SheetNames.includes(sn)) wb.SheetNames.push(sn);
-          }
-        } else {
-          // Single-sheet
-          const sn = entry._xlsxCurrentSheet || (entry._xlsxSheetNames && entry._xlsxSheetNames[0]) || 'Sheet1';
-          wb.Sheets[sn] = _textToSheet(entry.text.join('\n'), delim);
-          if (!wb.SheetNames.includes(sn)) wb.SheetNames.push(sn);
-        }
-
-        XLSX.writeFile(wb, entry._xlsxSourcePath);
-        entry.markSaved();
-        ok++;
-      } catch (e) {
-        errs.push(`${entry.file}: ${e.message}`);
-      }
-      continue;
-    }
-
     try {
-      const content = entry.text.join('\n') + '\n';
-      const enc = entry._encoding || _ENC_UTF8;
-      // Atomic write: temp file + rename to avoid corruption on crash/disk-full
-      const tmpPath = entry.filePath + '.tmp';
-      if (enc === _ENC_UTF8) {
-        fs.writeFileSync(tmpPath, content, 'utf-8');
-      } else {
-        fs.writeFileSync(tmpPath, _encodeString(content, enc));
-      }
-      fs.renameSync(tmpPath, entry.filePath);
-      entry.markSaved();
+      await saveTxtSingleEntry(entry);
       ok++;
     } catch (e) {
-      // Clean up temp file if rename failed
       try { fs.unlinkSync(entry.filePath + '.tmp'); } catch (_) {}
       errs.push(`${entry.file}: ${e.message}`);
     }
@@ -8137,12 +8398,41 @@ function getActiveTextarea() {
 
 function updateCursorPosition() {
   if (!dom.statusCursor) return;
-  if (!_monacoReady || state.currentIndex < 0) { dom.statusCursor.textContent = ''; return; }
+  if (!_monacoReady || state.currentIndex < 0) {
+    dom.statusCursor.textContent = '';
+    const encEl = document.getElementById('status-encoding');
+    if (encEl) encEl.textContent = '';
+    return;
+  }
   const editor = getActiveEditor();
   const pos = editor.getPosition();
   if (!pos) { dom.statusCursor.textContent = ''; return; }
   const totalLines = editor.getModel().getLineCount();
   dom.statusCursor.textContent = `Рядок ${pos.lineNumber} / ${totalLines}, Стовп ${pos.column}`;
+
+  // Show file encoding
+  const encEl = document.getElementById('status-encoding');
+  if (encEl) {
+    const entry = state.entries[state.currentIndex];
+    if (entry && entry._encoding) {
+      encEl.textContent = _formatEncodingLabel(entry._encoding);
+    } else if (state.appMode === 'ishin' || state.appMode === 'jojo') {
+      encEl.textContent = 'UTF-8';
+    } else {
+      encEl.textContent = '';
+    }
+  }
+}
+
+function _formatEncodingLabel(enc) {
+  switch (enc) {
+    case 'utf-8':       return 'UTF-8';
+    case 'utf-8-bom':   return 'UTF-8 з BOM';
+    case 'utf-16le':    return 'UTF-16 LE';
+    case 'utf-16be':    return 'UTF-16 BE';
+    case 'latin1':      return 'Windows-1252';
+    default:            return enc || '';
+  }
 }
 
 // scheduleGutterUpdate is now a no-op (Monaco handles line numbers)
@@ -9228,9 +9518,6 @@ function doReplaceOne() {
 }
 
 function doReplaceAllEntries() {
-  // Flush unsaved editor changes to entry.text before replacing
-  silentApply();
-
   const params = getFindParams('replace');
   addToFindHistory('find', params.query);
   addToFindHistory('replace', params.replaceWith);
@@ -9238,6 +9525,48 @@ function doReplaceAllEntries() {
   _findHistory.replacePos = -1;
   const entries = params.scope === 'all' ? state.entries : (state.currentIndex >= 0 ? [state.entries[state.currentIndex]] : []);
   let totalReplacements = 0, entriesAffected = 0;
+  let currentEntryHandledViaEditor = false;
+
+  // ── Helper: apply replacements directly in the editor (preserves unsaved changes + undo) ──
+  function _replaceInCurrentEditor(regexOrMap, replaceWith, isNamesOnly) {
+    const editor = getActiveEditor();
+    if (!editor) return 0;
+    const model = editor.getModel();
+    const text = editor.getValue();
+    let resultText = text;
+    let count = 0;
+
+    if (isNamesOnly) {
+      // namesOnly: apply glossary replacements (regexOrMap is a Map<string, {regex, trans}>)
+      for (const [, { regex, trans }] of regexOrMap) {
+        regex.lastIndex = 0;
+        const m = resultText.match(regex);
+        if (m) { count += m.length; regex.lastIndex = 0; resultText = resultText.replace(regex, trans); }
+      }
+    } else {
+      // Normal regex replace
+      regexOrMap.lastIndex = 0;
+      let match;
+      while ((match = regexOrMap.exec(text)) !== null) {
+        count++;
+        if (match[0].length === 0) { regexOrMap.lastIndex++; }
+      }
+      if (count > 0) {
+        regexOrMap.lastIndex = 0;
+        resultText = text.replace(regexOrMap, replaceWith);
+      }
+    }
+
+    if (count > 0 && resultText !== text) {
+      const fullRange = model.getFullModelRange();
+      editor.executeEdits('find-replace-all', [{ range: fullRange, text: resultText }]);
+      currentEntryHandledViaEditor = true;
+    }
+    return count;
+  }
+
+  // Flush unsaved editor changes for non-current entries
+  silentApply();
 
   if (params.namesOnly) {
     const sortedKeys = Object.keys(state.glossary).sort((a, b) => b.length - a.length);
@@ -9245,16 +9574,22 @@ function doReplaceAllEntries() {
     const regexMap = new Map();
     for (const orig of sortedKeys) {
       const escaped = orig.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      regexMap.set(orig, new RegExp('\\b' + escaped + '\\b', 'gi'));
+      regexMap.set(orig, { regex: new RegExp('\\b' + escaped + '\\b', 'gi'), trans: state.glossary[orig] });
     }
+
     for (const entry of entries) {
+      // Current entry: replace directly in editor
+      if (entry.index === state.currentIndex) {
+        const count = _replaceInCurrentEditor(regexMap, null, true);
+        if (count > 0) { totalReplacements += count; entriesAffected++; }
+        continue;
+      }
+
       let changed = false;
       let newText = state.appMode === 'jojo' ? entry.text.split('\n') : [...entry.text];
       let newVisSp = entry.visibleSpeakers ? entry.visibleSpeakers() : [];
 
-      for (const orig of sortedKeys) {
-        const trans = state.glossary[orig];
-        const regex = regexMap.get(orig);
+      for (const [, { regex, trans }] of regexMap) {
         for (let i = 0; i < newText.length; i++) {
           regex.lastIndex = 0;
           const m = newText[i].match(regex);
@@ -9297,6 +9632,13 @@ function doReplaceAllEntries() {
     }
 
     for (const entry of entries) {
+      // Current entry: replace directly in editor
+      if (entry.index === state.currentIndex) {
+        const count = _replaceInCurrentEditor(regex, params.replaceWith, false);
+        if (count > 0) { totalReplacements += count; entriesAffected++; }
+        continue;
+      }
+
       let changed = false;
       let newText = state.appMode === 'jojo' ? entry.text.split('\n') : [...entry.text];
       let newVisSp = entry.visibleSpeakers ? entry.visibleSpeakers() : [];
@@ -9327,11 +9669,14 @@ function doReplaceAllEntries() {
     }
   }
 
-  if (state.currentIndex >= 0) loadEditor();
+  // Reload editor only if current entry was changed via entry.text (not via editor.executeEdits)
+  if (state.currentIndex >= 0 && !currentEntryHandledViaEditor) loadEditor();
   forceVirtualRender();
   updateProgress();
 
-  if (entriesAffected > 0) _programmaticEdit = true;
+  // Only flag programmatic edit if the current editor was NOT modified via executeEdits
+  // (when handled via editor, Monaco's own undo can revert it)
+  if (entriesAffected > 0 && !currentEntryHandledViaEditor) _programmaticEdit = true;
   const msg = `Замінено: ${totalReplacements} у ${entriesAffected} записах`;
   setFindResult(msg, false, true);
   setStatus(msg);
@@ -10176,6 +10521,11 @@ function _computeStructureSignature(obj, depth) {
 }
 
 function _findSchemaByStructure(entry) {
+  // If this file was explicitly cleared, don't auto-match
+  if (entry && entry.filePath) {
+    const own = state.settings.file_schemas[entry.filePath];
+    if (own && own.noSchema) return null;
+  }
   const parsed = _tryParseEntryData(entry);
   if (!parsed || typeof parsed !== 'object') return null;
   const sample = Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'object'
@@ -10184,7 +10534,9 @@ function _findSchemaByStructure(entry) {
   const sig = _computeStructureSignature(sample, 0);
   if (!sig) return null;
   for (const [, schema] of Object.entries(state.settings.file_schemas)) {
-    if (schema && schema.structureSig === sig && Array.isArray(schema.textPaths) && schema.textPaths.length > 0) {
+    if (schema && schema.noSchema) continue;
+    if (schema && schema.structureSig === sig &&
+        ((Array.isArray(schema.textPaths) && schema.textPaths.length > 0) || schema.customSchemaIdx != null)) {
       return schema;
     }
   }
@@ -10221,27 +10573,43 @@ function _getSchemaKey() {
 }
 
 function saveFileSchema(textPaths, parseAs) {
-  const key = _getSchemaKey();
-  if (!key) return;
+  const keys = _getSchemaTargetKeys();
+  if (keys.length === 0) return;
   const isEmpty = (!textPaths || textPaths.length === 0) && (!parseAs || parseAs === 'auto');
-  if (isEmpty) {
-    delete state.settings.file_schemas[key];
-  } else {
-    const schemaEntry = state.settings.file_schemas[key] || {};
-    schemaEntry.textPaths = textPaths || [];
-    if (parseAs && parseAs !== 'auto') schemaEntry.parseAs = parseAs;
-    else delete schemaEntry.parseAs;
-    // Compute and store structure signature for auto-matching
-    const sample = _getSchemaSampleObject();
-    if (sample) schemaEntry.structureSig = _computeStructureSignature(sample, 0);
-    state.settings.file_schemas[key] = schemaEntry;
+  const sample = _getSchemaSampleObject();
+  const sig = sample ? _computeStructureSignature(sample, 0) : null;
+  for (const key of keys) {
+    if (isEmpty) {
+      state.settings.file_schemas[key] = { textPaths: [], noSchema: true };
+    } else {
+      const schemaEntry = state.settings.file_schemas[key] || {};
+      delete schemaEntry.noSchema;
+      schemaEntry.textPaths = textPaths || [];
+      if (parseAs && parseAs !== 'auto') schemaEntry.parseAs = parseAs;
+      else delete schemaEntry.parseAs;
+      if (sig) schemaEntry.structureSig = sig;
+      state.settings.file_schemas[key] = schemaEntry;
+    }
   }
   saveSettings(state.settings);
-  // Invalidate progress cache on all entries — schema change affects word counting
   for (const e of state.entries) e._progressCache = null;
   updateProgress();
   updateMeta();
   forceVirtualRender();
+}
+
+function _getSchemaTargetKeys() {
+  // If multi-selected, apply to all selected entries
+  if (state.appMode === 'other' && _multiSelected.size > 1) {
+    const keys = [];
+    for (const idx of _multiSelected) {
+      const entry = state.entries[idx];
+      if (entry && entry.filePath) keys.push(entry.filePath);
+    }
+    return keys.length > 0 ? keys : [_getSchemaKey()].filter(Boolean);
+  }
+  const key = _getSchemaKey();
+  return key ? [key] : [];
 }
 
 function getFileParseAs(entry) {
@@ -10352,9 +10720,41 @@ function _tryParseEntryXml(entry) {
 
 function _tryParseEntryKeyValue(entry) {
   const raw = Array.isArray(entry.text) ? entry.text.join('\n') : (entry.text || '');
+  const lines = raw.split('\n');
+
+  // Detect INI-style sections: [SectionName]
+  const sectionRe = /^\s*\[([^\]]+)\]\s*$/;
+  let hasSections = false;
+  for (const line of lines) {
+    if (sectionRe.test(line)) { hasSections = true; break; }
+  }
+
+  if (hasSections) {
+    // Parse as array of section objects (for repeating blocks like .int files)
+    const sections = [];
+    let current = null;
+    for (const line of lines) {
+      const sm = sectionRe.exec(line);
+      if (sm) {
+        current = { _section: sm[1] };
+        sections.push(current);
+        continue;
+      }
+      if (!current) continue;
+      const eqIdx = line.indexOf('=');
+      if (eqIdx > 0) {
+        const key = line.substring(0, eqIdx).trim();
+        const val = line.substring(eqIdx + 1);
+        if (key) current[key] = val;
+      }
+    }
+    return sections.length > 0 ? sections : null;
+  }
+
+  // Flat key=value (no sections)
   const obj = {};
   let hasKV = false;
-  for (const line of raw.split('\n')) {
+  for (const line of lines) {
     const eqIdx = line.indexOf('=');
     if (eqIdx > 0) {
       const key = line.substring(0, eqIdx).trim();
@@ -10482,6 +10882,37 @@ function _getRawTextLines(entry) {
   return Array.isArray(entry.text) ? entry.text : (typeof entry.text === 'string' ? entry.text.split('\n') : []);
 }
 
+function _applySchemaRegex(entry, editedLines, regexStr, group) {
+  const raw = _getRawTextLines(entry);
+  try {
+    const re = new RegExp(regexStr);
+    let editIdx = 0;
+    const result = [];
+    for (const line of raw) {
+      const m = line.match(re);
+      if (m && m[group] !== undefined && editIdx < editedLines.length) {
+        // Replace the captured group in the original line with the edited value
+        const captured = m[group];
+        const groupStart = m[0].indexOf(captured);
+        if (groupStart >= 0) {
+          const absStart = m.index + groupStart;
+          const absEnd = absStart + captured.length;
+          result.push(line.substring(0, absStart) + editedLines[editIdx] + line.substring(absEnd));
+        } else {
+          result.push(line);
+        }
+        editIdx++;
+      } else {
+        result.push(line);
+      }
+    }
+    entry.text = result;
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 function _extractByRegex(entry, regexStr, group) {
   const raw = _getRawTextLines(entry);
   try {
@@ -10490,9 +10921,8 @@ function _extractByRegex(entry, regexStr, group) {
     for (const line of raw) {
       const m = line.match(re);
       if (m && m[group] !== undefined) lines.push(m[group]);
-      else lines.push(line);
     }
-    return lines;
+    return lines.length > 0 ? lines : raw;
   } catch (_) {
     return raw;
   }
@@ -10599,7 +11029,11 @@ function _getSchemaOrigValues(entry) {
 function applySchemaLinesToEntry(entry, editedLines) {
   const schema = getFileSchema(entry);
   if (!schema || !schema.textPaths || schema.textPaths.length === 0) return false;
-  if (schema.customSchemaIdx != null) return false;
+  if (schema.customSchemaIdx != null) {
+    const cs = (state.settings.custom_schemas || [])[schema.customSchemaIdx];
+    if (!cs || !cs.regex) return false;
+    return _applySchemaRegex(entry, editedLines, cs.regex, cs.group || 1);
+  }
 
   if (state.appMode === 'ishin') {
     return _applySchemaIshin(entry, editedLines, schema);
@@ -10800,11 +11234,16 @@ function _applySchemaKeyValue(entry, editedLines, schema, origText) {
   const data = _tryParseEntryKeyValue(entry);
   if (!data) return false;
 
-  // Collect original values
+  const isArr = Array.isArray(data);
+  const items = isArr ? data : [data];
+
+  // Collect original values across all items
   const origVals = [];
-  for (const pathStr of schema.textPaths) {
-    const vals = extractByPath(data, pathStr);
-    for (const v of vals) origVals.push({ path: pathStr, value: v });
+  for (const item of items) {
+    for (const pathStr of schema.textPaths) {
+      const vals = extractByPath(item, pathStr);
+      for (const v of vals) origVals.push({ path: pathStr, value: v });
+    }
   }
 
   // Map edited lines to new values
@@ -10816,15 +11255,17 @@ function _applySchemaKeyValue(entry, editedLines, schema, origText) {
     lineIdx += lc;
   }
 
-  // Replace values in original text
+  // Replace values in original text, consuming matches in order
   const lines = origText.split('\n');
+  const consumed = new Set();
   for (const nv of newVals) {
-    // For key=value, path is just the key name
     const key = nv.path;
     for (let i = 0; i < lines.length; i++) {
+      if (consumed.has(i)) continue;
       const eqIdx = lines[i].indexOf('=');
       if (eqIdx > 0 && lines[i].substring(0, eqIdx).trim() === key) {
         lines[i] = lines[i].substring(0, eqIdx + 1) + nv.value;
+        consumed.add(i);
         break;
       }
     }
@@ -10891,12 +11332,24 @@ function showSchemaModal() {
     : state.filePath ? nodePath.basename(state.filePath)
     : state.txtDirPath ? nodePath.basename(state.txtDirPath)
     : '—';
-  infoEl.textContent = `${fileName} \u2022 ${state.entries.length} записів`;
+  const bulkCount = (state.appMode === 'other' && _multiSelected.size > 1) ? _multiSelected.size : 0;
+  infoEl.textContent = bulkCount > 0
+    ? `${fileName} + ще ${bulkCount - 1} файлів (${bulkCount} виділено)`
+    : `${fileName} \u2022 ${state.entries.length} записів`;
 
   // Current schema — default to 'text' only for ishin
   const currentSchema = getFileSchema(currentEntry);
   const defaultPaths = state.appMode === 'ishin' ? ['text'] : [];
   const selectedPaths = new Set(currentSchema ? currentSchema.textPaths : defaultPaths);
+
+  // Key=Value / CSV: auto-select all string fields (except _section) when no schema saved yet
+  const parseAs = parseTypeEl ? parseTypeEl.value : 'auto';
+  if ((parseAs === 'keyvalue' || parseAs === 'csv') && selectedPaths.size === 0 && sample) {
+    for (const k of Object.keys(sample)) {
+      if (k === '_section') continue;
+      if (typeof sample[k] === 'string') selectedPaths.add(k);
+    }
+  }
 
   treeEl.innerHTML = '';
   const searchEl = document.getElementById('schema-search');
@@ -10909,6 +11362,11 @@ function showSchemaModal() {
 
   // Render custom regex schemas list
   _renderCustomSchemaList();
+  // Pre-select currently applied custom schema
+  const csSelect = document.getElementById('schema-custom-select');
+  if (csSelect && currentSchema && currentSchema.customSchemaIdx != null) {
+    csSelect.value = String(currentSchema.customSchemaIdx);
+  }
   document.getElementById('schema-custom-editor').classList.add('hidden');
 
   overlay.classList.remove('hidden');
@@ -11061,10 +11519,13 @@ function setupSchemaModal() {
     const parseAs = document.getElementById('schema-parse-type').value;
     saveFileSchema(paths, parseAs);
     hideSchemaModal();
-    // Reload editor to reflect new schema immediately
+    // Enable schema view if paths selected, reload editor
+    if (paths.length > 0) _schemaViewActive = true;
     loadEditor();
     updateSchemaViewButton();
-    setStatus(`Схему збережено: ${paths.length > 0 ? paths.join(', ') : 'стандартна'}${parseAs !== 'auto' ? ' (' + parseAs.toUpperCase() + ')' : ''}`);
+    const schemaKeys = _getSchemaTargetKeys();
+    const bulkMsg = schemaKeys.length > 1 ? ` (${schemaKeys.length} файлів)` : '';
+    setStatus(`Схему збережено: ${paths.length > 0 ? paths.join(', ') : 'стандартна'}${parseAs !== 'auto' ? ' (' + parseAs.toUpperCase() + ')' : ''}${bulkMsg}`);
   });
 
   document.getElementById('schema-reset-btn').addEventListener('click', () => {
@@ -11097,12 +11558,40 @@ function setupSchemaModal() {
       ? state.entries[state.currentIndex] : null;
     const currentSchema = getFileSchema(currentEntry);
     const defaultPaths = state.appMode === 'ishin' ? ['text'] : [];
-    const selectedPaths = new Set(currentSchema ? currentSchema.textPaths : defaultPaths);
+    let selectedPaths = new Set(currentSchema ? currentSchema.textPaths : defaultPaths);
+
+    // Key=Value / CSV: auto-select all string fields (except _section) when no schema saved yet
+    if ((parseAs === 'keyvalue' || parseAs === 'csv') && selectedPaths.size === 0) {
+      for (const k of Object.keys(sample)) {
+        if (k === '_section') continue;
+        if (typeof sample[k] === 'string') selectedPaths.add(k);
+      }
+    }
+
     treeEl.innerHTML = '';
     renderSchemaNode(treeEl, sample, '', selectedPaths, 0);
   });
 
   document.getElementById('schema-btn').addEventListener('click', showSchemaModal);
+
+  // Shift+click range selection for schema checkboxes
+  let _schemaLastCheck = null;
+  document.getElementById('schema-tree').addEventListener('click', (e) => {
+    const check = e.target.closest('.schema-check');
+    if (!check) return;
+    if (e.shiftKey && _schemaLastCheck && _schemaLastCheck !== check) {
+      const all = Array.from(document.querySelectorAll('#schema-tree .schema-check'));
+      const from = all.indexOf(_schemaLastCheck);
+      const to = all.indexOf(check);
+      if (from >= 0 && to >= 0) {
+        const lo = Math.min(from, to);
+        const hi = Math.max(from, to);
+        const checked = check.checked;
+        for (let i = lo; i <= hi; i++) all[i].checked = checked;
+      }
+    }
+    _schemaLastCheck = check;
+  });
 
   // Search/filter in schema tree
   document.getElementById('schema-search').addEventListener('input', (e) => {
@@ -11204,7 +11693,15 @@ function _updateRegexPreview(regexInput, groupInput) {
     ? state.entries[state.currentIndex] : state.entries[0];
   if (!entry) { previewEl.classList.add('hidden'); return; }
 
-  const lines = _getRawTextLines(entry).slice(0, 10);
+  const allLines = _getRawTextLines(entry);
+  // Show first 10 lines that actually match the regex
+  const matchedLines = [];
+  for (const line of allLines) {
+    if (matchedLines.length >= 10) break;
+    if (line.match(re)) matchedLines.push(line);
+  }
+  // If no matches at all, show first 10 lines as context
+  const lines = matchedLines.length > 0 ? matchedLines : allLines.slice(0, 10);
   previewEl.innerHTML = '';
   for (const line of lines) {
     const div = document.createElement('div');
@@ -11242,6 +11739,7 @@ function _setupCustomSchemaUI() {
   const nameInput = document.getElementById('schema-custom-name');
   const regexInput = document.getElementById('schema-custom-regex');
   const groupInput = document.getElementById('schema-custom-group');
+  let _editingIdx = -1; // -1 = adding new, >=0 = editing existing
 
   let _previewTimer = null;
   function schedulePreview() {
@@ -11252,6 +11750,7 @@ function _setupCustomSchemaUI() {
   groupInput.addEventListener('input', schedulePreview);
 
   addBtn.addEventListener('click', () => {
+    _editingIdx = -1;
     nameInput.value = '';
     regexInput.value = '';
     groupInput.value = '1';
@@ -11260,7 +11759,26 @@ function _setupCustomSchemaUI() {
     nameInput.focus();
   });
 
+  // Edit existing schema — click on name or regex
+  document.getElementById('schema-custom-list').addEventListener('click', (e) => {
+    const item = e.target.closest('.schema-custom-item');
+    if (!item || e.target.closest('.schema-custom-item-del')) return;
+    const items = Array.from(document.getElementById('schema-custom-list').children);
+    const idx = items.indexOf(item);
+    if (idx < 0) return;
+    const cs = (state.settings.custom_schemas || [])[idx];
+    if (!cs) return;
+    _editingIdx = idx;
+    nameInput.value = cs.name || '';
+    regexInput.value = cs.regex || '';
+    groupInput.value = cs.group || 1;
+    editor.classList.remove('hidden');
+    schedulePreview();
+    nameInput.focus();
+  });
+
   document.getElementById('schema-custom-cancel-btn').addEventListener('click', () => {
+    _editingIdx = -1;
     editor.classList.add('hidden');
     document.getElementById('schema-custom-preview').classList.add('hidden');
   });
@@ -11272,7 +11790,12 @@ function _setupCustomSchemaUI() {
     if (!name || !regex) { showInfo('Помилка', 'Введіть назву та регулярний вираз.'); return; }
     try { new RegExp(regex); } catch (_) { showInfo('Помилка', 'Некоректний регулярний вираз.'); return; }
     if (!state.settings.custom_schemas) state.settings.custom_schemas = [];
-    state.settings.custom_schemas.push({ name, regex, group });
+    if (_editingIdx >= 0 && _editingIdx < state.settings.custom_schemas.length) {
+      state.settings.custom_schemas[_editingIdx] = { name, regex, group };
+    } else {
+      state.settings.custom_schemas.push({ name, regex, group });
+    }
+    _editingIdx = -1;
     saveSettings(state.settings);
     editor.classList.add('hidden');
     _renderCustomSchemaList();
@@ -11280,19 +11803,29 @@ function _setupCustomSchemaUI() {
   });
 
   document.getElementById('schema-custom-apply-btn').addEventListener('click', () => {
-    const idx = parseInt(document.getElementById('schema-custom-select').value, 10);
-    if (isNaN(idx) || idx < 0) return;
-    const key = _getSchemaKey();
-    if (!key) return;
-    state.settings.file_schemas[key] = { textPaths: [], customSchemaIdx: idx };
+    const csIdx = parseInt(document.getElementById('schema-custom-select').value, 10);
+    if (isNaN(csIdx) || csIdx < 0) return;
+    const keys = _getSchemaTargetKeys();
+    if (keys.length === 0) return;
+    const sample = _getSchemaSampleObject();
+    const sig = sample ? _computeStructureSignature(sample, 0) : null;
+    for (const key of keys) {
+      const schemaEntry = { textPaths: [], customSchemaIdx: csIdx };
+      if (sig) schemaEntry.structureSig = sig;
+      state.settings.file_schemas[key] = schemaEntry;
+    }
     saveSettings(state.settings);
     for (const e of state.entries) e._progressCache = null;
     updateProgress();
     updateMeta();
     forceVirtualRender();
     hideSchemaModal();
-    const cs = state.settings.custom_schemas[idx];
-    setStatus(`Застосовано regex-схему «${cs ? cs.name : idx}»`);
+    _schemaViewActive = true;
+    loadEditor();
+    updateSchemaViewButton();
+    const cs = state.settings.custom_schemas[csIdx];
+    const countMsg = keys.length > 1 ? ` (${keys.length} файлів)` : '';
+    setStatus(`Застосовано regex-схему «${cs ? cs.name : csIdx}»${countMsg}`);
   });
 }
 
@@ -12275,7 +12808,7 @@ function setupKeyboard() {
       if (!text) return;
       const editor = getActiveEditor();
       if (editor && editor.hasTextFocus()) {
-        editor.trigger('keyboard', 'type', { text });
+        pasteIntoMonaco(editor, text);
       } else {
         const el = document.activeElement;
         if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
@@ -12288,7 +12821,11 @@ function setupKeyboard() {
       return;
     }
 
-    // Ctrl+Z — programmatic undo, or history undo when editor is clean (e.g. after save)
+    // Ctrl+Z — two-tier undo:
+    //   1) If editor is dirty → let Monaco handle undo (individual edits, executeEdits, etc.)
+    //   2) If editor is clean → use custom entry-level undo (restores previous entry.text state)
+    //   Exception: _programmaticEdit means the editor was changed via setValue (not executeEdits),
+    //   so Monaco can't undo it — use custom undo immediately.
     if (code === 'KeyZ' && !e.shiftKey && !e.altKey) {
       if (_programmaticEdit) {
         e.preventDefault(); e.stopPropagation();
@@ -12296,7 +12833,11 @@ function setupKeyboard() {
         undoLastChange();
         return;
       }
-      if (!editorDirty() && state.currentIndex >= 0) {
+      if (editorDirty()) {
+        // Editor has unsaved changes — let Monaco handle undo
+        return;
+      }
+      if (state.currentIndex >= 0) {
         const entry = state.entries[state.currentIndex];
         if (entry && getEntryHistory(entry).length > 0) {
           e.preventDefault(); e.stopPropagation();
@@ -12460,7 +13001,7 @@ function setupKeyboard() {
     if (editor) {
       e.preventDefault();
       editor.focus();
-      editor.trigger('keyboard', 'type', { text });
+      pasteIntoMonaco(editor, text);
     }
   });
 
@@ -12469,11 +13010,11 @@ function setupKeyboard() {
   // a few times with short delays to catch the update reliably.
   let _clipSnapshotBeforeBlur = '';
   let _blurTimestamp = 0;
-  window.addEventListener('blur', () => {
+  ipcRenderer.on('win:blur', () => {
     _clipSnapshotBeforeBlur = clipboard.readText() || '';
     _blurTimestamp = Date.now();
   });
-  window.addEventListener('focus', () => {
+  ipcRenderer.on('win:focus', () => {
     const elapsed = Date.now() - _blurTimestamp;
     if (!_blurTimestamp || elapsed > 5000) return;
     const snap = _clipSnapshotBeforeBlur;
@@ -12482,11 +13023,11 @@ function setupKeyboard() {
       const now = clipboard.readText() || '';
       if (now && now !== snap) {
         pasteTextIntoActive(now);
-      } else if (++attempts < 6) {
-        setTimeout(poll, 80);
+      } else if (++attempts < 10) {
+        setTimeout(poll, 100);
       }
     };
-    setTimeout(poll, 50);
+    setTimeout(poll, 80);
   });
 
   function pasteTextIntoActive(text) {
@@ -12500,9 +13041,20 @@ function setupKeyboard() {
       const editor = getActiveEditor();
       if (editor) {
         editor.focus();
-        editor.trigger('keyboard', 'type', { text });
+        pasteIntoMonaco(editor, text);
       }
     }
+  }
+
+  function pasteIntoMonaco(editor, text) {
+    const sel = editor.getSelection();
+    editor.pushUndoStop();
+    editor.executeEdits('paste', [{
+      range: sel,
+      text: text,
+      forceMoveMarkers: true,
+    }]);
+    editor.pushUndoStop();
   }
 }
 
@@ -12592,13 +13144,25 @@ function setupEventListeners() {
   let _searchDebounce = null;
   dom.searchInput.addEventListener('input', () => {
     if (_searchDebounce) clearTimeout(_searchDebounce);
-    _searchDebounce = setTimeout(() => refreshList(), 250);
+    _searchDebounce = setTimeout(() => {
+      refreshList();
+      if (!dom.searchInput.value.trim()) clearSearchHighlight();
+    }, 250);
+  });
+  dom.searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && _searchHL.matches.length > 0) {
+      e.preventDefault();
+      if (e.shiftKey) searchHighlightPrev(); else searchHighlightNext();
+    }
   });
   dom.searchClear.addEventListener('click', () => {
     dom.searchInput.value = '';
+    clearSearchHighlight();
     refreshList();
     dom.searchInput.focus();
   });
+  document.getElementById('search-match-next').addEventListener('click', () => searchHighlightNext());
+  document.getElementById('search-match-prev').addEventListener('click', () => searchHighlightPrev());
 
   // Status filter buttons
   for (const btn of document.querySelectorAll('.sf-btn')) {
@@ -12679,7 +13243,10 @@ function setupEventListeners() {
     el.classList.add('active');
     _activeListEl = el;
     dom.entryListContainer.focus();
-    _listClickTimer = setTimeout(() => onListItemClick(idx), 220);
+    const fi = el.dataset.filtIdx != null ? parseInt(el.dataset.filtIdx) : -1;
+    _currentFiltIdx = fi;
+    const mOffset = fi >= 0 && _filterMatchMeta[fi] ? _filterMatchMeta[fi].offset : undefined;
+    _listClickTimer = setTimeout(() => onListItemClick(idx, mOffset), 220);
   });
   dom.entryList.addEventListener('dblclick', (e) => {
     const el = e.target.closest('.entry-item');

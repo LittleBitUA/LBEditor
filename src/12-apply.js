@@ -10,33 +10,38 @@ async function applyChanges() {
     const oldText = Array.isArray(entry.text) ? [...entry.text] : entry.text;
     const oldSp = entry.speakers ? [...entry.speakers] : undefined;
 
-    const ok = applySchemaLinesToEntry(entry, editedLines);
+    let ok = applySchemaLinesToEntry(entry, editedLines);
     if (!ok) {
-      setStatus('Не вдалося зберегти зміни через схему. Перемкніться в повний режим.');
+      // Schema apply failed — exclude this entry from schema view so user isn't stuck
+      entry._schemaExcluded = true;
+      _schemaViewCurrentlyUsed = false;
+      _schemaViewOrigText = '';
+      loadEditor(); // re-evaluates _schemaViewCurrentlyUsed (will be false due to exclusion)
+      setStatus('⚠ Помилка схеми — перемкнуто в повний режим. Повторіть зміни.');
+      return;
+    } else {
+      const newText = Array.isArray(entry.text) ? [...entry.text] : [entry.text];
+      const newSp = entry.speakers || undefined;
+      recordHistory(entry, oldText, newText, oldSp, newSp, 'edit');
+      entry.dirty = true;
+      entry._invalidateCaches();
+      _navHintsCache.delete(entry.index);
+
+      // Update schema orig text so editorDirty() knows the new baseline
+      _schemaViewOrigText = getTextLinesForEntry(entry).join('\n');
+      _suppressMonacoChange = true;
+      _monacoFlat.setValue(_schemaViewOrigText);
+      _suppressMonacoChange = false;
+      _originalEditorLines = _schemaViewOrigText.split('\n');
+
+      updateVisibleEntry(entry.index);
+      updateMeta();
+      updateEditorDirtyVisual();
+      updateProgress();
+      markRecoveryDirty();
+      setStatus(`Застосовано (схема): [${entry.index + 1}] ${entry.file}`);
       return;
     }
-
-    const newText = Array.isArray(entry.text) ? [...entry.text] : [entry.text];
-    const newSp = entry.speakers || undefined;
-    recordHistory(entry, oldText, newText, oldSp, newSp, 'edit');
-    entry.dirty = true;
-    entry._invalidateCaches();
-    _navHintsCache.delete(entry.index);
-
-    // Update schema orig text so editorDirty() knows the new baseline
-    _schemaViewOrigText = getTextLinesForEntry(entry).join('\n');
-    _suppressMonacoChange = true;
-    _monacoFlat.setValue(_schemaViewOrigText);
-    _suppressMonacoChange = false;
-    _originalEditorLines = _schemaViewOrigText.split('\n');
-
-    updateVisibleEntry(entry.index);
-    updateMeta();
-    updateEditorDirtyVisual();
-    updateProgress();
-    markRecoveryDirty();
-    setStatus(`Застосовано (схема): [${entry.index + 1}] ${entry.file}`);
-    return;
   }
 
   if (state.appMode === 'jojo') {
@@ -170,6 +175,9 @@ function silentApply() {
     if (applySchemaLinesToEntry(entry, editedLines)) {
       entry._invalidateCaches();
       _schemaViewOrigText = getTextLinesForEntry(entry).join('\n');
+    } else {
+      // Schema apply failed silently — just skip, don't change global state
+      // The editor still has the user's edits, they just aren't synced to entry.text
     }
     updateVisibleEntry(entry.index);
     updateMeta();
@@ -213,15 +221,21 @@ function silentApply() {
 // ═══════════════════════════════════════════════════════════
 
 function goPrev() {
-  const filtIdx = _filteredIndexByEntry.get(state.currentIndex);
+  let filtIdx = (_currentFiltIdx >= 0) ? _currentFiltIdx : _filteredIndexByEntry.get(state.currentIndex);
   if (filtIdx === undefined || filtIdx <= 0) return;
-  onListItemClick(_filteredEntries[filtIdx - 1].index);
+  const prevIdx = filtIdx - 1;
+  _currentFiltIdx = prevIdx;
+  const mOffset = _filterMatchMeta[prevIdx] ? _filterMatchMeta[prevIdx].offset : undefined;
+  onListItemClick(_filteredEntries[prevIdx].index, mOffset);
 }
 
 function goNext() {
-  const filtIdx = _filteredIndexByEntry.get(state.currentIndex);
+  let filtIdx = (_currentFiltIdx >= 0) ? _currentFiltIdx : _filteredIndexByEntry.get(state.currentIndex);
   if (filtIdx === undefined || filtIdx >= _filteredEntries.length - 1) return;
-  onListItemClick(_filteredEntries[filtIdx + 1].index);
+  const nextIdx = filtIdx + 1;
+  _currentFiltIdx = nextIdx;
+  const mOffset = _filterMatchMeta[nextIdx] ? _filterMatchMeta[nextIdx].offset : undefined;
+  onListItemClick(_filteredEntries[nextIdx].index, mOffset);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -246,22 +260,23 @@ function getEntryProgress(entry) {
 }
 
 function _calcEditingStats() {
-  let editedFiles = 0, editedLines = 0;
+  let editedFiles = 0, editedLines = 0, editedWords = 0;
   for (const entry of state.entries) {
     const tagData = getEntryTagData(entry);
     if (tagData.tag === 'edited') {
       editedFiles++;
       const p = getEntryProgress(entry);
       editedLines += p.totalL;
+      editedWords += p.totalW;
     }
   }
-  return { editedFiles, editedLines };
+  return { editedFiles, editedLines, editedWords };
 }
 
 function calcProgressSync() {
   let transE = 0, totalE = state.entries.length, transL = 0, totalL = 0;
   let transW = 0, totalW = 0;
-  let editedFiles = 0, editedLines = 0;
+  let editedFiles = 0, editedLines = 0, editedWords = 0;
   for (const entry of state.entries) {
     const p = getEntryProgress(entry);
     const tagData = getEntryTagData(entry);
@@ -274,12 +289,13 @@ function calcProgressSync() {
     if (tagData.tag === 'edited') {
       editedFiles++;
       editedLines += p.totalL;
+      editedWords += p.totalW;
     }
   }
-  return { transE, totalE, transL, totalL, transW, totalW, editedFiles, editedLines };
+  return { transE, totalE, transL, totalL, transW, totalW, editedFiles, editedLines, editedWords };
 }
 
-function _applyProgress(transE, totalE, transL, totalL, editedFiles, editedLines, transW, totalW) {
+function _applyProgress(transE, totalE, transL, totalL, editedFiles, editedLines, transW, totalW, editedWords) {
   const useWords = state.settings.progress_unit === 'words';
   const tVal = useWords ? transW : transL;
   const tTotal = useWords ? totalW : totalL;
@@ -303,11 +319,13 @@ function _applyProgress(transE, totalE, transL, totalL, editedFiles, editedLines
   if (secTrans) secTrans.title = `Переклад: ${pct.toFixed(1)}%\nФайлів: ${transE} / ${totalE}\n${useWords ? 'Слів' : 'Рядків'}: ${tVal} / ${tTotal}\nЗалишилось: ${remainE} файлів, ${remain} ${unit}`;
 
   // Editing progress
-  const editPct = totalL > 0 ? (editedLines / totalL * 100) : 0;
+  const editVal = useWords ? (editedWords || 0) : editedLines;
+  const editTotal = useWords ? totalW : totalL;
+  const editPct = editTotal > 0 ? (editVal / editTotal * 100) : 0;
   dom.progEditBar.style.width = editPct.toFixed(1) + '%';
   dom.progEditPct.textContent = editPct.toFixed(1) + '%';
   dom.progEditFiles.textContent = `зредаговано ${editedFiles} із ${totalE}`;
-  dom.progEditLines.textContent = `${editedLines}/${totalL} ${unit}`;
+  dom.progEditLines.textContent = `${editVal}/${editTotal} ${unit}`;
 
   // Set color tier on edit track
   const editTrack = dom.progEditBar.parentElement;
@@ -315,9 +333,9 @@ function _applyProgress(transE, totalE, transL, totalL, editedFiles, editedLines
 
   // Tooltip
   const remainEditF = totalE - editedFiles;
-  const remainEditL = totalL - editedLines;
+  const remainEditVal = editTotal - editVal;
   const secEdit = document.getElementById('progress-section-edit');
-  if (secEdit) secEdit.title = `Редагування: ${editPct.toFixed(1)}%\nФайлів: ${editedFiles} / ${totalE}\nРядків: ${editedLines} / ${totalL}\nЗалишилось: ${remainEditF} файлів, ${remainEditL} ${unit}`;
+  if (secEdit) secEdit.title = `Редагування: ${editPct.toFixed(1)}%\nФайлів: ${editedFiles} / ${totalE}\n${useWords ? 'Слів' : 'Рядків'}: ${editVal} / ${editTotal}\nЗалишилось: ${remainEditF} файлів, ${remainEditVal} ${unit}`;
 }
 
 let _progressDebounce = null;
@@ -346,15 +364,15 @@ function updateProgress() {
           // Worker doesn't know about tags — calc editing stats from sync
           // Worker doesn't know about tags/words — calc from sync
           const s = calcProgressSync();
-          _applyProgress(s.transE, s.totalE, s.transL, s.totalL, s.editedFiles, s.editedLines, s.transW, s.totalW);
+          _applyProgress(s.transE, s.totalE, s.transL, s.totalL, s.editedFiles, s.editedLines, s.transW, s.totalW, s.editedWords);
         })
         .catch(() => {
           const r = calcProgressSync();
-          _applyProgress(r.transE, r.totalE, r.transL, r.totalL, r.editedFiles, r.editedLines, r.transW, r.totalW);
+          _applyProgress(r.transE, r.totalE, r.transL, r.totalL, r.editedFiles, r.editedLines, r.transW, r.totalW, r.editedWords);
         });
     } else {
       const r = calcProgressSync();
-      _applyProgress(r.transE, r.totalE, r.transL, r.totalL, r.editedFiles, r.editedLines, r.transW, r.totalW);
+      _applyProgress(r.transE, r.totalE, r.transL, r.totalL, r.editedFiles, r.editedLines, r.transW, r.totalW, r.editedWords);
     }
   }, 50);
 }

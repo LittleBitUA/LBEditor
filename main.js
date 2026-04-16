@@ -76,6 +76,10 @@ function createWindow() {
     });
   }
 
+  // Win+V clipboard history: notify renderer of native focus changes
+  mainWindow.on('blur', () => mainWindow.webContents.send('win:blur'));
+  mainWindow.on('focus', () => mainWindow.webContents.send('win:focus'));
+
   mainWindow.on('close', (e) => {
     if (!allowQuit) {
       e.preventDefault();
@@ -206,7 +210,7 @@ function setupIpcHandlers() {
       title: 'Відкрити файл',
       filters: [
         { name: 'JSON', extensions: ['json'] },
-        { name: 'Text / CSV', extensions: ['txt', 'csv', 'tsv'] },
+        { name: 'Text / CSV', extensions: ['txt', 'int', 'csv', 'tsv'] },
         { name: 'Excel', extensions: ['xlsx', 'xls', 'ods'] },
         { name: 'All', extensions: ['*'] },
       ],

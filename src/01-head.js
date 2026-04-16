@@ -61,6 +61,8 @@ function getWorkerPath(filename) {
 //  Monaco Editor — init & helpers
 // ═══════════════════════════════════════════════════════════
 
+const LIGHT_THEMES = new Set(['light', 'notepadpp', 'alucard', 'nier', 'nier-replicant']);
+
 function registerLBTheme(monaco) {
   monaco.editor.defineTheme('lb-theme', {
     base: 'vs-dark',
@@ -76,6 +78,28 @@ function registerLBTheme(monaco) {
       'editorGutter.background': '#00000000',
     }
   });
+  monaco.editor.defineTheme('lb-theme-light', {
+    base: 'vs',
+    inherit: true,
+    rules: [],
+    colors: {
+      'editor.background': '#00000000',
+      'editor.foreground': '#1e1e1e',
+      'editor.lineHighlightBackground': '#00000008',
+      'editorLineNumber.foreground': '#6e7781',
+      'editorCursor.foreground': '#1e1e1e',
+      'editor.selectionBackground': '#3366cc44',
+      'editorGutter.background': '#00000000',
+    }
+  });
+}
+
+function updateMonacoTheme(themeId) {
+  if (!_monaco) return;
+  const isLight = LIGHT_THEMES.has(themeId) ||
+    (themeId && themeId.startsWith('custom:') && state.settings.custom_themes?.[themeId] &&
+     LIGHT_THEMES.has(state.settings.custom_themes[themeId].base));
+  _monaco.editor.setTheme(isLight ? 'lb-theme-light' : 'lb-theme');
 }
 
 async function initMonacoEditors() {
@@ -138,10 +162,17 @@ async function initMonacoEditors() {
 
   // Event listeners
   for (const ed of [_monacoFlat, _monacoText, _monacoSp]) {
+    let _prevUndoLine = -1;
     ed.onDidChangeModelContent(() => {
       if (!_suppressMonacoChange) onEditorChanged({ target: ed, isTrusted: true });
     });
-    ed.onDidChangeCursorPosition(() => {
+    ed.onDidChangeCursorPosition((e) => {
+      // Push undo stop when cursor moves to a different line — groups edits per line
+      const line = e.position.lineNumber;
+      if (_prevUndoLine >= 0 && line !== _prevUndoLine) {
+        ed.pushUndoStop();
+      }
+      _prevUndoLine = line;
       updateCursorPosition();
       scheduleDecorationUpdate();
     });

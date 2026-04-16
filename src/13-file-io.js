@@ -1199,7 +1199,21 @@ async function saveFile() {
   if (state.currentIndex >= 0 && editorDirty()) {
     await applyChanges();
   }
-  if (state.appMode === 'other') { await saveTxtFiles(); return; }
+  if (state.appMode === 'other') {
+    const entry = state.entries[state.currentIndex];
+    if (entry && entry.dirty) {
+      await saveTxtSingleEntry(entry);
+      forceVirtualRender();
+      updateMeta();
+      updateProgress();
+      saveSession();
+      deleteRecoveryFile();
+      renderTabBar();
+      if (_sidePanelIdx >= 0) refreshSidePanel();
+      setStatus(`Збережено: ${entry.file}  (${timeStr()})`);
+    }
+    return;
+  }
   if (state.appMode === 'jojo') { await saveJoJoJson(); return; }
   if (!state.filePath) { await saveFileAs(); return; }
   await writeJson(state.filePath);
@@ -1209,7 +1223,15 @@ async function saveFile() {
 
 async function saveAll() {
   if (!state.entries.length) return;
-  await saveFile();
+  // Auto-apply current editor changes before saving
+  if (state.currentIndex >= 0 && editorDirty()) {
+    await applyChanges();
+  }
+  if (state.appMode === 'other') { await saveTxtFiles(); return; }
+  if (state.appMode === 'jojo') { await saveJoJoJson(); return; }
+  if (!state.filePath) { await saveFileAs(); return; }
+  await writeJson(state.filePath);
+  if (_sidePanelIdx >= 0) refreshSidePanel();
 }
 
 async function saveFileAs() {
@@ -1222,18 +1244,19 @@ async function saveFileAs() {
       await applyChanges();
     }
     if (state.appMode === 'other') {
-      // Let user choose a new folder and save copies there
-      const folder = await ipcRenderer.invoke('dialog:open-folder');
-      if (!folder) return;
-      const files = state.entries.map(entry => ({
-        path: nodePath.join(folder, entry.file || `entry_${entry.index}.txt`),
-        text: entry.text.join('\n') + '\n',
-      }));
-      const result = await ioBatchWriteText(files);
-      let msg = `Збережено ${result.ok} / ${result.total} файлів у:\n${folder}`;
-      if (result.errs && result.errs.length) msg += '\n\nПомилки:\n' + result.errs.slice(0, 20).join('\n');
-      await showInfo('Зберегти як', msg);
-      setStatus(`Збережено як: ${ok} файлів → ${folder}`);
+      // Save current file to a new location
+      const entry = state.entries[state.currentIndex];
+      if (!entry) return;
+      const filePath = await ipcRenderer.invoke('dialog:save-file', entry.filePath || entry.file);
+      if (!filePath) return;
+      const content = entry.text.join('\n') + '\n';
+      const enc = entry._encoding || _ENC_UTF8;
+      if (enc === _ENC_UTF8) {
+        await fs.promises.writeFile(filePath, content, 'utf-8');
+      } else {
+        await fs.promises.writeFile(filePath, _encodeString(content, enc));
+      }
+      setStatus(`Збережено як: ${filePath}  (${timeStr()})`);
       return;
     }
     if (state.appMode === 'jojo') {
@@ -1295,7 +1318,7 @@ async function openTxtDirectory() {
 }
 
 function getOtherExtensions() {
-  const raw = (state.settings && state.settings.other_extensions) || '.txt';
+  const raw = (state.settings && state.settings.other_extensions) || '.txt .int';
   return raw.split(/[\s,;]+/).map(e => e.trim().toLowerCase()).filter(Boolean).map(e => e.startsWith('.') ? e : '.' + e);
 }
 
@@ -1437,65 +1460,57 @@ async function loadTxtDirectory(dirPath) {
   );
 }
 
+async function saveTxtSingleEntry(entry) {
+  if (entry._isSpreadsheet && entry._xlsxSourcePath) {
+    let wb;
+    try { wb = XLSX.readFile(entry._xlsxSourcePath, { type: 'file' }); }
+    catch (_) { wb = XLSX.utils.book_new(); }
+    const delim = entry._xlsxDelim || ',';
+
+    if (entry._xlsxSheets && entry._xlsxCurrentSheet) {
+      entry._xlsxSheets[entry._xlsxCurrentSheet] = [...entry.text];
+    }
+
+    if (entry._xlsxSheets) {
+      for (const sn of (entry._xlsxSheetNames || [])) {
+        const sheetLines = entry._xlsxSheets[sn];
+        if (!sheetLines) continue;
+        wb.Sheets[sn] = _textToSheet(sheetLines.join('\n'), delim);
+        if (!wb.SheetNames.includes(sn)) wb.SheetNames.push(sn);
+      }
+    } else {
+      const sn = entry._xlsxCurrentSheet || (entry._xlsxSheetNames && entry._xlsxSheetNames[0]) || 'Sheet1';
+      wb.Sheets[sn] = _textToSheet(entry.text.join('\n'), delim);
+      if (!wb.SheetNames.includes(sn)) wb.SheetNames.push(sn);
+    }
+
+    XLSX.writeFile(wb, entry._xlsxSourcePath);
+    entry.markSaved();
+    return;
+  }
+
+  const content = entry.text.join('\n') + '\n';
+  const enc = entry._encoding || _ENC_UTF8;
+  const tmpPath = entry.filePath + '.tmp';
+  if (enc === _ENC_UTF8) {
+    fs.writeFileSync(tmpPath, content, 'utf-8');
+  } else {
+    fs.writeFileSync(tmpPath, _encodeString(content, enc));
+  }
+  fs.renameSync(tmpPath, entry.filePath);
+  entry.markSaved();
+}
+
 async function saveTxtFiles(silent = false) {
   let ok = 0;
   const errs = [];
 
   for (const entry of state.entries) {
     if (!entry.dirty) continue;
-
-    if (entry._isSpreadsheet && entry._xlsxSourcePath) {
-      // Save spreadsheet: reconstruct workbook with all sheets
-      try {
-        let wb;
-        try { wb = XLSX.readFile(entry._xlsxSourcePath, { type: 'file' }); }
-        catch (_) { wb = XLSX.utils.book_new(); }
-        const delim = entry._xlsxDelim || ',';
-
-        // Sync current sheet's text into the sheets map
-        if (entry._xlsxSheets && entry._xlsxCurrentSheet) {
-          entry._xlsxSheets[entry._xlsxCurrentSheet] = [...entry.text];
-        }
-
-        if (entry._xlsxSheets) {
-          // Multi-sheet: write all sheets
-          for (const sn of (entry._xlsxSheetNames || [])) {
-            const sheetLines = entry._xlsxSheets[sn];
-            if (!sheetLines) continue;
-            wb.Sheets[sn] = _textToSheet(sheetLines.join('\n'), delim);
-            if (!wb.SheetNames.includes(sn)) wb.SheetNames.push(sn);
-          }
-        } else {
-          // Single-sheet
-          const sn = entry._xlsxCurrentSheet || (entry._xlsxSheetNames && entry._xlsxSheetNames[0]) || 'Sheet1';
-          wb.Sheets[sn] = _textToSheet(entry.text.join('\n'), delim);
-          if (!wb.SheetNames.includes(sn)) wb.SheetNames.push(sn);
-        }
-
-        XLSX.writeFile(wb, entry._xlsxSourcePath);
-        entry.markSaved();
-        ok++;
-      } catch (e) {
-        errs.push(`${entry.file}: ${e.message}`);
-      }
-      continue;
-    }
-
     try {
-      const content = entry.text.join('\n') + '\n';
-      const enc = entry._encoding || _ENC_UTF8;
-      // Atomic write: temp file + rename to avoid corruption on crash/disk-full
-      const tmpPath = entry.filePath + '.tmp';
-      if (enc === _ENC_UTF8) {
-        fs.writeFileSync(tmpPath, content, 'utf-8');
-      } else {
-        fs.writeFileSync(tmpPath, _encodeString(content, enc));
-      }
-      fs.renameSync(tmpPath, entry.filePath);
-      entry.markSaved();
+      await saveTxtSingleEntry(entry);
       ok++;
     } catch (e) {
-      // Clean up temp file if rename failed
       try { fs.unlinkSync(entry.filePath + '.tmp'); } catch (_) {}
       errs.push(`${entry.file}: ${e.message}`);
     }

@@ -1,11 +1,3 @@
-  // Truncate long lines
-  if (line.length > 80) {
-    const mPos = pos - lineStart;
-    const start = Math.max(0, mPos - 30);
-    const end = Math.min(line.length, mPos + filt.length + 30);
-    return (start > 0 ? '\u2026' : '') + line.substring(start, end) + (end < line.length ? '\u2026' : '');
-  }
-  return line;
 }
 
 // ── Virtual scroll state ──────────────────────────────────
@@ -18,6 +10,8 @@ let _filteredIndexByEntry = new Map(); // entry.index → position in _filteredE
 let _currentFilter = '';
 let _statusFilter = 'all'; // 'all' | 'untranslated' | 'translated' | 'edited'
 let _filterSnippets = new Map();
+let _filterMatchMeta = []; // parallel to _filteredEntries: {offset, snippet} or null
+let _currentFiltIdx = -1;  // tracks which row in _filteredEntries the user is on (for arrow nav with expanded results)
 let _vStartIdx = -1;
 let _vEndIdx = -1;
 let _vForceRender = false;
@@ -51,21 +45,47 @@ function rebuildFilteredEntries() {
   _currentFilter = filt;
   _filteredEntries = [];
   _filterSnippets.clear();
+  _filterMatchMeta = [];
+  _currentFiltIdx = -1;
   _filteredIndexByEntry.clear();
   // Clear multi-select to avoid actions on entries not visible in filtered list
   clearMultiSelect();
 
   for (const entry of state.entries) {
-    if (filt && !entryMatchesFilter(entry, filt)) continue;
     if (!_entryMatchesStatusFilter(entry)) continue;
-    _filteredIndexByEntry.set(entry.index, _filteredEntries.length);
-    _filteredEntries.push(entry);
-    if (filt && !entry.file.toLowerCase().includes(filt)) {
-      _filterSnippets.set(entry.index, getEntryMatchSnippet(entry, filt));
+
+    if (filt) {
+      if (!entryMatchesFilter(entry, filt)) continue;
+      const contentMatches = getEntryAllMatchLines(entry, filt);
+
+      if (!_filteredIndexByEntry.has(entry.index)) {
+        _filteredIndexByEntry.set(entry.index, _filteredEntries.length);
+      }
+
+      if (contentMatches.length === 0) {
+        // File name / speaker match only — one row, no snippet
+        _filteredEntries.push(entry);
+        _filterMatchMeta.push(null);
+      } else {
+        // Content matches — one row per matching line
+        for (const m of contentMatches) {
+          _filteredEntries.push(entry);
+          _filterMatchMeta.push(m); // {offset, snippet}
+        }
+      }
+    } else {
+      _filteredIndexByEntry.set(entry.index, _filteredEntries.length);
+      _filteredEntries.push(entry);
+      _filterMatchMeta.push(null);
     }
   }
 
-  dom.countLabel.textContent = `Записів: ${_filteredEntries.length} / ${state.entries.length}`;
+  if (filt) {
+    const uniqueEntries = _filteredIndexByEntry.size;
+    dom.countLabel.textContent = `Збігів: ${_filteredEntries.length} у ${uniqueEntries} зап. / ${state.entries.length}`;
+  } else {
+    dom.countLabel.textContent = `Записів: ${_filteredEntries.length} / ${state.entries.length}`;
+  }
   _vStartIdx = -1;
   _vEndIdx = -1;
   _vForceRender = true;
@@ -93,7 +113,7 @@ function getMultiSelectedIndices() {
 }
 
 // ── Create a single entry DOM element ─────────────────────
-function createEntryElement(entry) {
+function createEntryElement(entry, filtIdx) {
   const el = document.createElement('div');
   el.className = 'entry-item';
   if (entry.index === state.currentIndex) el.classList.add('active');
@@ -106,12 +126,14 @@ function createEntryElement(entry) {
   if (entry.external) el.classList.add('entry-external');
   if (state.settings.show_bookmarks !== false && isEntryBookmarked(entry)) el.classList.add('entry-bookmark');
   el.dataset.index = entry.index;
+  if (filtIdx !== undefined) el.dataset.filtIdx = filtIdx;
 
   const prefix = entry.dirty ? '\u25cf ' : '\u00a0\u00a0';
   const noteText = tagData.note || '';
   const filt = _currentFilter;
 
-  if (filt && _filterSnippets.has(entry.index)) {
+  const meta = (filtIdx !== undefined) ? _filterMatchMeta[filtIdx] : null;
+  if (filt && meta && meta.snippet) {
     // Content match — show file name + snippet
     const nameSpan = document.createElement('div');
     nameSpan.className = 'entry-item-name';
@@ -124,23 +146,21 @@ function createEntryElement(entry) {
     }
     el.appendChild(nameSpan);
 
-    const snippet = _filterSnippets.get(entry.index);
-    if (snippet) {
-      const snippetEl = document.createElement('div');
-      snippetEl.className = 'entry-item-snippet';
-      const sLower = snippet.toLowerCase();
-      const mIdx = sLower.indexOf(filt);
-      if (mIdx >= 0) {
-        snippetEl.appendChild(document.createTextNode(snippet.substring(0, mIdx)));
-        const mark = document.createElement('mark');
-        mark.textContent = snippet.substring(mIdx, mIdx + filt.length);
-        snippetEl.appendChild(mark);
-        snippetEl.appendChild(document.createTextNode(snippet.substring(mIdx + filt.length)));
-      } else {
-        snippetEl.textContent = snippet;
-      }
-      el.appendChild(snippetEl);
+    const snippet = meta.snippet;
+    const snippetEl = document.createElement('div');
+    snippetEl.className = 'entry-item-snippet';
+    const sLower = snippet.toLowerCase();
+    const mIdx = sLower.indexOf(filt);
+    if (mIdx >= 0) {
+      snippetEl.appendChild(document.createTextNode(snippet.substring(0, mIdx)));
+      const mark = document.createElement('mark');
+      mark.textContent = snippet.substring(mIdx, mIdx + filt.length);
+      snippetEl.appendChild(mark);
+      snippetEl.appendChild(document.createTextNode(snippet.substring(mIdx + filt.length)));
+    } else {
+      snippetEl.textContent = snippet;
     }
+    el.appendChild(snippetEl);
   } else {
     const textNode = document.createTextNode(`${prefix}[${entry.index + 1}] ${entry.file}`);
     el.appendChild(textNode);
@@ -190,7 +210,7 @@ function virtualRender() {
   // Build DOM fragment for visible items
   const frag = document.createDocumentFragment();
   for (let i = startIdx; i <= endIdx && i < totalCount; i++) {
-    frag.appendChild(createEntryElement(_filteredEntries[i]));
+    frag.appendChild(createEntryElement(_filteredEntries[i], i));
   }
 
   dom.entryList.innerHTML = '';
@@ -207,28 +227,33 @@ function updateVisibleEntry(entryIndex) {
   // Check if within rendered range
   if (filtIdx < _vStartIdx || filtIdx > _vEndIdx) return;
 
-  const el = dom.entryList.querySelector(`[data-index="${entryIndex}"]`);
-  if (!el) return;
+  // Update ALL visible rows for this entry (may have multiple when searching)
+  const els = dom.entryList.querySelectorAll(`[data-index="${entryIndex}"]`);
+  if (els.length === 0) return;
 
   const entry = state.entries.find(e => e.index === entryIndex);
   if (!entry) return;
 
-  // Update classes
-  el.classList.toggle('dirty', !!entry.dirty);
   const tagData = getEntryTagData(entry);
-  el.classList.toggle('tag-translated', tagData.tag === 'translated');
-  el.classList.toggle('tag-edited', tagData.tag === 'edited');
-  el.classList.toggle('entry-bookmark', state.settings.show_bookmarks !== false && isEntryBookmarked(entry));
-  el.classList.toggle('compare-marked', entry.index === _compareFirstIdx);
-
-  // Update dirty prefix
   const prefix = entry.dirty ? '\u25cf ' : '\u00a0\u00a0';
   const noteText = tagData.note || '';
-  // For simple entries (no snippet), just update text content
-  if (!_currentFilter || !_filterSnippets.has(entry.index)) {
-    const firstChild = el.firstChild;
-    if (firstChild && firstChild.nodeType === Node.TEXT_NODE) {
-      firstChild.textContent = `${prefix}[${entry.index + 1}] ${entry.file}`;
+
+  for (const el of els) {
+    // Update classes
+    el.classList.toggle('dirty', !!entry.dirty);
+    el.classList.toggle('tag-translated', tagData.tag === 'translated');
+    el.classList.toggle('tag-edited', tagData.tag === 'edited');
+    el.classList.toggle('entry-bookmark', state.settings.show_bookmarks !== false && isEntryBookmarked(entry));
+    el.classList.toggle('compare-marked', entry.index === _compareFirstIdx);
+
+    // For simple entries (no snippet), just update text content
+    const fi = el.dataset.filtIdx != null ? parseInt(el.dataset.filtIdx) : -1;
+    const hasMeta = fi >= 0 && _filterMatchMeta[fi] && _filterMatchMeta[fi].snippet;
+    if (!_currentFilter || !hasMeta) {
+      const firstChild = el.firstChild;
+      if (firstChild && firstChild.nodeType === Node.TEXT_NODE) {
+        firstChild.textContent = `${prefix}[${entry.index + 1}] ${entry.file}`;
+      }
     }
   }
 
@@ -248,8 +273,19 @@ function refreshList() {
   rebuildFilteredEntries();
 }
 
-async function onListItemClick(newIdx) {
-  if (newIdx === state.currentIndex) return;
+async function onListItemClick(newIdx, matchOffset) {
+  if (newIdx === state.currentIndex) {
+    // Same entry — still scroll to search match if applicable
+    const filt = dom.searchInput.value.trim();
+    if (filt) jumpToTextInEditor(filt, matchOffset);
+    return;
+  }
+
+  // Save current editor view state (scroll, cursor) before switching
+  if (state.currentIndex >= 0 && _monacoReady) {
+    const ed = getActiveEditor();
+    if (ed) _editorViewStates.set(state.currentIndex, ed.saveViewState());
+  }
 
   if (state.currentIndex >= 0 && editorDirty()) {
     await applyChanges();
@@ -294,10 +330,10 @@ async function onListItemClick(newIdx) {
     mainTitle.textContent = curEntry ? `[${newIdx + 1}] ${curEntry.file || ''}` : '';
   }
 
-  // If search filter is active, highlight the first match in the editor
+  // If search filter is active, highlight the match in the editor
   const filt = dom.searchInput.value.trim();
   if (filt) {
-    jumpToTextInEditor(filt);
+    jumpToTextInEditor(filt, matchOffset);
   }
   renderTabBar();
 }
@@ -305,6 +341,11 @@ async function onListItemClick(newIdx) {
 async function onListItemDblClick(idx) {
   // Double-click = open and pin as permanent tab
   if (idx !== state.currentIndex) {
+    // Save current editor view state before switching
+    if (state.currentIndex >= 0 && _monacoReady) {
+      const ed = getActiveEditor();
+      if (ed) _editorViewStates.set(state.currentIndex, ed.saveViewState());
+    }
     if (state.currentIndex >= 0 && editorDirty()) {
       if (_previewTabIdx === state.currentIndex) pinCurrentTab();
       await applyChanges();
@@ -316,18 +357,120 @@ async function onListItemDblClick(idx) {
   openEntryTab(idx, true);
 }
 
-function jumpToTextInEditor(query) {
+// ── Search highlight state (sidebar search → editor) ─────
+const _searchHL = {
+  matches: [],       // [{index, length}, ...]
+  currentIdx: -1,
+  decorationIds: [],
+  query: ''
+};
+
+function jumpToTextInEditor(query, targetOffset) {
   const editor = getActiveEditor();
   if (!editor) return;
-  const text = editor.getValue().toLowerCase();
-  const pos = text.indexOf(query.toLowerCase());
-  if (pos < 0) return;
+
+  // Find all matches
+  _searchHL.matches = [];
+  _searchHL.currentIdx = -1;
+  _searchHL.query = query;
+
+  const text = editor.getValue();
+  const lowerText = text.toLowerCase();
+  const lowerQuery = query.toLowerCase();
+  let searchFrom = 0;
+  while (searchFrom < lowerText.length) {
+    const pos = lowerText.indexOf(lowerQuery, searchFrom);
+    if (pos < 0) break;
+    _searchHL.matches.push({ index: pos, length: query.length });
+    searchFrom = pos + 1;
+  }
+
+  if (_searchHL.matches.length === 0) {
+    clearSearchHighlight();
+    return;
+  }
+
+  // Jump to the match closest to targetOffset (from sidebar click)
+  if (targetOffset !== undefined && _searchHL.matches.length > 1) {
+    let bestIdx = 0;
+    let bestDist = Math.abs(_searchHL.matches[0].index - targetOffset);
+    for (let i = 1; i < _searchHL.matches.length; i++) {
+      const dist = Math.abs(_searchHL.matches[i].index - targetOffset);
+      if (dist < bestDist) { bestIdx = i; bestDist = dist; }
+    }
+    _searchHL.currentIdx = bestIdx;
+  } else {
+    _searchHL.currentIdx = 0;
+  }
+
+  _applySearchHLDecorations(editor);
+  _scrollToSearchHLMatch(editor);
+  _updateSearchHLNav();
+}
+
+function _applySearchHLDecorations(editor) {
   const model = editor.getModel();
-  const startPos = model.getPositionAt(pos);
-  const endPos = model.getPositionAt(pos + query.length);
-  editor.setSelection(new _monaco.Range(startPos.lineNumber, startPos.column, endPos.lineNumber, endPos.column));
-  editor.revealRangeInCenter(new _monaco.Range(startPos.lineNumber, startPos.column, endPos.lineNumber, endPos.column));
-  editor.focus();
+  const decs = _searchHL.matches.map((m, i) => ({
+    range: offsetToRange(model, m.index, m.index + m.length),
+    options: {
+      className: i === _searchHL.currentIdx ? 'find-match-current' : 'find-match',
+    }
+  }));
+  _searchHL.decorationIds = editor.deltaDecorations(_searchHL.decorationIds, decs);
+}
+
+function _scrollToSearchHLMatch(editor) {
+  const m = _searchHL.matches[_searchHL.currentIdx];
+  if (!m) return;
+  const model = editor.getModel();
+  const range = offsetToRange(model, m.index, m.index + m.length);
+  editor.setSelection(range);
+  editor.revealRangeInCenter(range);
+}
+
+function searchHighlightNext() {
+  if (_searchHL.matches.length === 0) return;
+  _searchHL.currentIdx = (_searchHL.currentIdx + 1) % _searchHL.matches.length;
+  const editor = getActiveEditor();
+  if (!editor) return;
+  _applySearchHLDecorations(editor);
+  _scrollToSearchHLMatch(editor);
+  _updateSearchHLNav();
+}
+
+function searchHighlightPrev() {
+  if (_searchHL.matches.length === 0) return;
+  _searchHL.currentIdx = (_searchHL.currentIdx - 1 + _searchHL.matches.length) % _searchHL.matches.length;
+  const editor = getActiveEditor();
+  if (!editor) return;
+  _applySearchHLDecorations(editor);
+  _scrollToSearchHLMatch(editor);
+  _updateSearchHLNav();
+}
+
+function clearSearchHighlight() {
+  _searchHL.matches = [];
+  _searchHL.currentIdx = -1;
+  _searchHL.query = '';
+  const editor = getActiveEditor();
+  if (editor) {
+    _searchHL.decorationIds = editor.deltaDecorations(_searchHL.decorationIds, []);
+  }
+  _updateSearchHLNav();
+}
+
+function _updateSearchHLNav() {
+  const nav = document.getElementById('search-match-nav');
+  if (!nav) return;
+  if (_searchHL.matches.length === 0) {
+    nav.classList.add('hidden');
+    return;
+  }
+  nav.classList.remove('hidden');
+  const label = nav.querySelector('.search-match-label');
+  if (label) {
+    label.textContent = `${_searchHL.currentIdx + 1} / ${_searchHL.matches.length}`;
+  }
 }
 
 let _activeListEl = null;
@@ -472,13 +615,18 @@ function applyGlossaryToEntry(entry, orig, trans) {
 let _originalEditorLines = [];
 let _schemaViewActive = true;      // default: show schema text when schema exists
 let _schemaViewOrigText = '';      // original schema text for dirty check
+const _editorViewStates = new Map(); // entry.index → Monaco viewState (scroll, cursor, selections)
 // _schemaViewCurrentlyUsed is declared in 01-head.js (needed by getActiveEditor)
 
 function _isSchemaViewApplicable(entry) {
   if (!entry) return false;
   const schema = getFileSchema(entry);
   if (!schema) return false;
-  if (schema.customSchemaIdx != null) return false; // regex schemas → use table view
+  // Custom regex schema — applicable if regex is defined
+  if (schema.customSchemaIdx != null) {
+    const cs = (state.settings.custom_schemas || [])[schema.customSchemaIdx];
+    return !!(cs && cs.regex);
+  }
   // Check that schema actually filters something (has textPaths)
   if (!schema.textPaths || schema.textPaths.length === 0) return false;
   return true;
@@ -561,7 +709,7 @@ function loadEditor(deferHeavy) {
   if (_ssViewActive && typeof hideSpreadsheetView === 'function') hideSpreadsheetView();
 
   // Determine if schema view should be used for this entry
-  _schemaViewCurrentlyUsed = _schemaViewActive && _isSchemaViewApplicable(entry) && !_tableViewActive;
+  _schemaViewCurrentlyUsed = _schemaViewActive && _isSchemaViewApplicable(entry) && !_tableViewActive && !entry._schemaExcluded;
 
   // Set editor content (suppress change events during programmatic setValue)
   _suppressMonacoChange = true;
@@ -596,6 +744,14 @@ function loadEditor(deferHeavy) {
   _originalEditorLines = getActiveEditor().getValue().split('\n');
 
   state.loadingEditor = false;
+
+  // Restore saved view state (scroll, cursor, selections) for this entry
+  const savedVS = _editorViewStates.get(entry.index);
+  if (savedVS) {
+    const ed = getActiveEditor();
+    if (ed) ed.restoreViewState(savedVS);
+  }
+
   updateMeta();
   updateEditorDirtyVisual();
   updateSchemaViewButton();

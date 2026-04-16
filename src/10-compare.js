@@ -586,4 +586,44 @@ function getEntryMatchSnippet(entry, filt) {
   const lineStart = textStr.lastIndexOf('\n', pos) + 1;
   let lineEnd = textStr.indexOf('\n', pos);
   if (lineEnd < 0) lineEnd = textStr.length;
-  const line = textStr.substring(lineStart, lineEnd).trim();
+  const line = textStr.substring(lineStart, lineEnd).trim();
+  // Truncate long lines
+  if (line.length > 80) {
+    const mPos = pos - lineStart;
+    const start = Math.max(0, mPos - 30);
+    const end = Math.min(line.length, mPos + filt.length + 30);
+    return (start > 0 ? '\u2026' : '') + line.substring(start, end) + (end < line.length ? '\u2026' : '');
+  }
+  return line;
+}
+
+// Return ALL matching lines (one per unique line) for expanded search results
+function getEntryAllMatchLines(entry, filt) {
+  const textStr = Array.isArray(entry.text) ? entry.text.join('\n') : entry.text;
+  const lower = textStr.toLowerCase();
+  const results = [];
+  const seenLineStarts = new Set();
+  let searchFrom = 0;
+  while (searchFrom < lower.length) {
+    const pos = lower.indexOf(filt, searchFrom);
+    if (pos < 0) break;
+    const lineStart = textStr.lastIndexOf('\n', pos) + 1;
+    if (!seenLineStarts.has(lineStart)) {
+      seenLineStarts.add(lineStart);
+      let lineEnd = textStr.indexOf('\n', pos);
+      if (lineEnd < 0) lineEnd = textStr.length;
+      const line = textStr.substring(lineStart, lineEnd).trim();
+      let snippet;
+      if (line.length > 80) {
+        const mPos = pos - lineStart;
+        const start = Math.max(0, mPos - 30);
+        const end = Math.min(line.length, mPos + filt.length + 30);
+        snippet = (start > 0 ? '\u2026' : '') + line.substring(start, end) + (end < line.length ? '\u2026' : '');
+      } else {
+        snippet = line;
+      }
+      results.push({ offset: pos, snippet });
+    }
+    searchFrom = pos + 1;
+  }
+  return results;
