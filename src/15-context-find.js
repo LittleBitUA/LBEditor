@@ -296,11 +296,16 @@ function setupEntryContextMenu() {
     hideEntryContextMenu();
   });
 
-  // Open in side panel
+  // Open in side panel — pinned mode: stays on this file even when user switches entries
   document.getElementById('ctx-open-side').addEventListener('click', () => {
     if (_ctxTargetIndex >= 0) {
       if (_ctxTargetIndex === _sidePanelIdx) hideSidePanel();
-      else showSidePanel(_ctxTargetIndex);
+      else {
+        _sideOriginalMode = false;
+        _sideFollowMode = false;
+        document.getElementById('tb-original').classList.remove('active');
+        showSidePanel(_ctxTargetIndex);
+      }
     }
     hideEntryContextMenu();
   });
@@ -1660,7 +1665,70 @@ function showSidePanel(entryIdx, originalMode) {
     if (_sideMonaco) _sideMonaco.layout();
   }, 50);
 
+  const syncBtn = document.getElementById('tb-sync-scroll');
+  if (syncBtn) syncBtn.style.display = '';
+  if (_syncScrollEnabled) _installSyncScroll();
+
   setStatus(`Бічна панель: [${entryIdx + 1}] ${entry.file || ''}`);
+}
+
+// ── Synchronised scrolling between the main editor and side panel ──────────
+function _disposeSyncScroll() {
+  for (const d of _syncScrollDisposers) { try { d.dispose(); } catch (_) {} }
+  _syncScrollDisposers = [];
+}
+
+function _getMainSyncEditor() {
+  // Sync the editor the user is currently looking at: schema/flat editor
+  // for non-split mode, the text editor in split mode.
+  if (state.splitMode && state.appMode === 'ishin' && _monacoText) return _monacoText;
+  return _monacoFlat;
+}
+
+function _installSyncScroll() {
+  _disposeSyncScroll();
+  if (!_syncScrollEnabled) return;
+  if (!_sideMonaco || _sidePanelIdx < 0) return;
+  const main = _getMainSyncEditor();
+  if (!main) return;
+
+  const mirror = (from, to) => {
+    if (_syncScrollGuard) return;
+    _syncScrollGuard = true;
+    try {
+      to.setScrollTop(from.getScrollTop());
+      to.setScrollLeft(from.getScrollLeft());
+    } finally {
+      // Release on the next tick so the receiving editor's own onDidScroll
+      // (triggered by setScrollTop/Left) doesn't loop back.
+      requestAnimationFrame(() => { _syncScrollGuard = false; });
+    }
+  };
+
+  _syncScrollDisposers.push(main.onDidScrollChange(() => mirror(main, _sideMonaco)));
+  _syncScrollDisposers.push(_sideMonaco.onDidScrollChange(() => mirror(_sideMonaco, main)));
+
+  // Initial alignment
+  _syncScrollGuard = true;
+  try {
+    _sideMonaco.setScrollTop(main.getScrollTop());
+    _sideMonaco.setScrollLeft(main.getScrollLeft());
+  } finally {
+    requestAnimationFrame(() => { _syncScrollGuard = false; });
+  }
+}
+
+function toggleSyncScroll() {
+  _syncScrollEnabled = !_syncScrollEnabled;
+  const btn = document.getElementById('tb-sync-scroll');
+  if (btn) btn.classList.toggle('active', _syncScrollEnabled);
+  if (_syncScrollEnabled && _sidePanelIdx >= 0) {
+    _installSyncScroll();
+    setStatus('Синхронна прокрутка увімкнена');
+  } else {
+    _disposeSyncScroll();
+    setStatus('Синхронна прокрутка вимкнена');
+  }
 }
 
 function hideSidePanel() {
@@ -1668,6 +1736,8 @@ function hideSidePanel() {
   document.getElementById('side-panel-handle').classList.add('hidden');
   _sidePanelIdx = -1;
   _sideOriginalMode = false;
+  _sideFollowMode = false;
+  _disposeSyncScroll();
   // Reset focus away from closed side panel
   if (_lastFocusedEditor === _sideMonaco) _lastFocusedEditor = null;
   // Hide left panel header
@@ -1678,6 +1748,8 @@ function hideSidePanel() {
   if (btn) btn.classList.remove('active');
   const origBtn = document.getElementById('tb-original');
   if (origBtn) origBtn.classList.remove('active');
+  const syncBtn = document.getElementById('tb-sync-scroll');
+  if (syncBtn) syncBtn.style.display = 'none';
 
   setTimeout(() => {
     if (_monacoFlat) _monacoFlat.layout();
@@ -1688,7 +1760,7 @@ function hideSidePanel() {
 
 function toggleSidePanel() {
   if (_sidePanelIdx >= 0 && !_sideOriginalMode) hideSidePanel();
-  else if (state.currentIndex >= 0) { _sideOriginalMode = false; showSidePanel(state.currentIndex); }
+  else if (state.currentIndex >= 0) { _sideOriginalMode = false; _sideFollowMode = true; showSidePanel(state.currentIndex); }
 }
 
 function toggleOriginalSidePanel() {
@@ -1697,17 +1769,19 @@ function toggleOriginalSidePanel() {
     hideSidePanel();
   } else {
     _sideOriginalMode = true;
+    _sideFollowMode = true;
     if (state.currentIndex >= 0) showSidePanel(state.currentIndex, true);
   }
   document.getElementById('tb-original').classList.toggle('active', _sideOriginalMode);
 }
 
-/** Called when user navigates to a new entry — update side panel only if in "Original" mode.
- *  When a specific file is pinned via context menu, it stays pinned. */
+/** Called when user navigates to a new entry — update side panel when it's
+ *  following the current entry (toolbar-opened). Files pinned via context menu stay put. */
 function updateSidePanelForEntry(entryIdx) {
   if (entryIdx < 0) return;
-  // Only auto-follow current entry in original mode; pinned files stay put
-  if (_sidePanelIdx >= 0 && _sideOriginalMode) showSidePanel(entryIdx, true);
+  if (_sidePanelIdx < 0) return;
+  if (_sideOriginalMode) showSidePanel(entryIdx, true);
+  else if (_sideFollowMode) showSidePanel(entryIdx);
 }
 
 /** Called after save — refresh side panel content for whatever entry it's showing */
@@ -1766,6 +1840,8 @@ function setupToolbar() {
   // Side panel
   document.getElementById('tb-side-panel').addEventListener('click', () => toggleSidePanel());
   document.getElementById('tb-original').addEventListener('click', () => toggleOriginalSidePanel());
+  const syncBtn = document.getElementById('tb-sync-scroll');
+  if (syncBtn) syncBtn.addEventListener('click', () => toggleSyncScroll());
 }
 
 function toggleWhitespace() {

@@ -574,13 +574,22 @@ function setupMigrateModal() {
 // ═══════════════════════════════════════════════════════════
 
 function entryMatchesFilter(entry, filt) {
+  if (_searchCaseSensitive) {
+    const textStr = Array.isArray(entry.text) ? entry.text.join('\n') : (entry.text || '');
+    if (textStr.includes(filt)) return true;
+    if (entry.file && entry.file.includes(filt)) return true;
+    if (entry.speakers) {
+      for (const sp of entry.speakers) if (sp && sp.includes(filt)) return true;
+    }
+    return false;
+  }
   return entry.getSearchIndex().includes(filt);
 }
 
 function getEntryMatchSnippet(entry, filt) {
   const textStr = Array.isArray(entry.text) ? entry.text.join('\n') : entry.text;
-  const lower = textStr.toLowerCase();
-  const pos = lower.indexOf(filt);
+  const hay = _searchCaseSensitive ? textStr : textStr.toLowerCase();
+  const pos = hay.indexOf(filt);
   if (pos < 0) return null;
   // Find the line containing the match
   const lineStart = textStr.lastIndexOf('\n', pos) + 1;
@@ -600,12 +609,27 @@ function getEntryMatchSnippet(entry, filt) {
 // Return ALL matching lines (one per unique line) for expanded search results
 function getEntryAllMatchLines(entry, filt) {
   const textStr = Array.isArray(entry.text) ? entry.text.join('\n') : entry.text;
-  const lower = textStr.toLowerCase();
+  const hay = _searchCaseSensitive ? textStr : textStr.toLowerCase();
   const results = [];
   const seenLineStarts = new Set();
+  // Precompute newline offsets so we can convert an offset \u2192 line number in
+  // O(log n) instead of rescanning the whole text per match.
+  const newlineOffsets = [-1];
+  for (let i = 0; i < textStr.length; i++) {
+    if (textStr.charCodeAt(i) === 10) newlineOffsets.push(i);
+  }
+  const lineNoAt = (pos) => {
+    let lo = 0, hi = newlineOffsets.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (newlineOffsets[mid] < pos) lo = mid; else hi = mid - 1;
+    }
+    return lo + 1; // 1-based
+  };
+
   let searchFrom = 0;
-  while (searchFrom < lower.length) {
-    const pos = lower.indexOf(filt, searchFrom);
+  while (searchFrom < hay.length) {
+    const pos = hay.indexOf(filt, searchFrom);
     if (pos < 0) break;
     const lineStart = textStr.lastIndexOf('\n', pos) + 1;
     if (!seenLineStarts.has(lineStart)) {
@@ -622,7 +646,7 @@ function getEntryAllMatchLines(entry, filt) {
       } else {
         snippet = line;
       }
-      results.push({ offset: pos, snippet });
+      results.push({ offset: pos, snippet, lineNo: lineNoAt(pos) });
     }
     searchFrom = pos + 1;
   }

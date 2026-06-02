@@ -396,31 +396,15 @@ function setupKeyboard() {
     }
   });
 
-  // ── Win+V clipboard history: detect clipboard change when window regains focus ──
-  // Windows updates the clipboard AFTER focus returns to the app, so we poll
-  // a few times with short delays to catch the update reliably.
-  let _clipSnapshotBeforeBlur = '';
-  let _blurTimestamp = 0;
-  ipcRenderer.on('win:blur', () => {
-    _clipSnapshotBeforeBlur = clipboard.readText() || '';
-    _blurTimestamp = Date.now();
-  });
-  ipcRenderer.on('win:focus', () => {
-    const elapsed = Date.now() - _blurTimestamp;
-    if (!_blurTimestamp || elapsed > 5000) return;
-    const snap = _clipSnapshotBeforeBlur;
-    let attempts = 0;
-    const poll = () => {
-      const now = clipboard.readText() || '';
-      if (now && now !== snap) {
-        pasteTextIntoActive(now);
-      } else if (++attempts < 10) {
-        setTimeout(poll, 100);
-      }
-    };
-    setTimeout(poll, 80);
-  });
+  // NOTE: previously we had a win:focus handler that polled the clipboard
+  // after the app regained focus and auto-pasted any detected change. The
+  // intent was to support Win+V clipboard history, but it also misfired on
+  // the very common flow "copy in another app → click back into editor",
+  // pasting at the click target. Removed — Ctrl+V and the native `paste`
+  // event above cover both normal paste and Win+V (Windows synthesizes a
+  // paste event when an item is picked from the history popup).
 
+  // Kept in case other call sites reuse it.
   function pasteTextIntoActive(text) {
     const el = document.activeElement;
     if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
@@ -465,6 +449,7 @@ function setupIPC() {
       case 'save-file':     await saveFile(); break;
       case 'save-file-as':  await saveFileAs(); break;
       case 'save-all':      await saveAll(); break;
+      case 'close-all':     await closeAllFiles(); break;
       case 'migrate-file':  showMigrateModal('file'); break;
       case 'migrate-dir':   showMigrateModal('dir'); break;
       case 'toggle-bookmark':  toggleEntryBookmark(); break;
@@ -554,6 +539,21 @@ function setupEventListeners() {
   });
   document.getElementById('search-match-next').addEventListener('click', () => searchHighlightNext());
   document.getElementById('search-match-prev').addEventListener('click', () => searchHighlightPrev());
+
+  const caseBtn = document.getElementById('search-case');
+  if (caseBtn) {
+    _searchCaseSensitive = state.settings.search_case_sensitive === true;
+    caseBtn.classList.toggle('active', _searchCaseSensitive);
+    caseBtn.setAttribute('aria-pressed', _searchCaseSensitive ? 'true' : 'false');
+    caseBtn.addEventListener('click', () => {
+      _searchCaseSensitive = !_searchCaseSensitive;
+      caseBtn.classList.toggle('active', _searchCaseSensitive);
+      caseBtn.setAttribute('aria-pressed', _searchCaseSensitive ? 'true' : 'false');
+      state.settings.search_case_sensitive = _searchCaseSensitive;
+      saveSettings(state.settings);
+      if (dom.searchInput.value) refreshList();
+    });
+  }
 
   // Status filter buttons
   for (const btn of document.querySelectorAll('.sf-btn')) {
@@ -864,6 +864,8 @@ function init() {
       startRecoveryTimer();
       checkRecoveryOnStartup();
       sendDictToWorker();
+      setupUpdateModal();
+      checkForUpdatesOnStartup();
 
       // ── Done — dismiss loading screen ──
       const ls = document.getElementById('loading-screen');
@@ -873,6 +875,136 @@ function init() {
       }
     }, 0);
   });
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Auto-update (portable .exe)
+// ═══════════════════════════════════════════════════════════
+
+let _updateInfo = null;
+
+function setupUpdateModal() {
+  document.getElementById('update-close').addEventListener('click', hideUpdateModal);
+  document.getElementById('update-later').addEventListener('click', () => {
+    // Remember dismissed version so we don't nag until a newer one ships
+    if (_updateInfo && _updateInfo.latest) {
+      state.settings.update_dismissed_version = _updateInfo.latest;
+      saveSettings(state.settings);
+    }
+    hideUpdateModal();
+  });
+  document.getElementById('update-open-page').addEventListener('click', () => {
+    if (_updateInfo && _updateInfo.releaseUrl) {
+      ipcRenderer.invoke('app:open-external', _updateInfo.releaseUrl);
+    }
+  });
+  document.getElementById('update-install').addEventListener('click', () => {
+    runUpdateFlow();
+  });
+}
+
+async function checkForUpdatesOnStartup() {
+  // Only check in packaged build — pointless in dev
+  try {
+    const info = await ipcRenderer.invoke('app:get-exe-info');
+    if (!info || !info.isPackaged) return;
+    // Wait a moment so the check doesn't compete with initial UI work
+    setTimeout(async () => {
+      const result = await ipcRenderer.invoke('app:check-update');
+      if (!result || !result.ok || !result.hasUpdate) return;
+      // Skip if user already dismissed this exact version
+      if (state.settings.update_dismissed_version === result.latest) return;
+      _updateInfo = Object.assign({}, result, { isPortable: info.isPortable });
+      showUpdateModal();
+    }, 3000);
+  } catch (_) {}
+}
+
+function showUpdateModal() {
+  if (!_updateInfo) return;
+  document.getElementById('update-current').textContent = _updateInfo.current || '—';
+  document.getElementById('update-latest').textContent = _updateInfo.latest || '—';
+  const sizeEl = document.getElementById('update-size');
+  if (_updateInfo.assetSize) {
+    sizeEl.textContent = `Розмір: ${(_updateInfo.assetSize / (1024 * 1024)).toFixed(1)} МБ`;
+  } else {
+    sizeEl.textContent = '';
+  }
+  const notesEl = document.getElementById('update-notes');
+  notesEl.textContent = _updateInfo.releaseNotes || '(без приміток)';
+  document.getElementById('update-progress').classList.add('hidden');
+  document.getElementById('update-error').classList.add('hidden');
+  const installBtn = document.getElementById('update-install');
+  installBtn.disabled = false;
+  if (!_updateInfo.assetUrl) {
+    installBtn.disabled = true;
+    installBtn.title = 'У релізі відсутній portable .exe';
+  } else if (!_updateInfo.isPortable) {
+    installBtn.disabled = true;
+    installBtn.title = 'Авто-оновлення доступне лише для portable-версії';
+  } else {
+    installBtn.title = '';
+  }
+
+  document.getElementById('update-overlay').classList.remove('hidden');
+  document.getElementById('update-modal').classList.remove('hidden');
+}
+
+function hideUpdateModal() {
+  document.getElementById('update-overlay').classList.add('hidden');
+  document.getElementById('update-modal').classList.add('hidden');
+}
+
+async function runUpdateFlow() {
+  if (!_updateInfo || !_updateInfo.assetUrl) return;
+  const installBtn = document.getElementById('update-install');
+  const laterBtn = document.getElementById('update-later');
+  const errEl = document.getElementById('update-error');
+  const progress = document.getElementById('update-progress');
+  const progressLabel = document.getElementById('update-progress-label');
+  const progressBar = document.getElementById('update-progress-bar');
+
+  errEl.classList.add('hidden');
+  installBtn.disabled = true;
+  laterBtn.disabled = true;
+  progress.classList.remove('hidden');
+
+  // 1. Save dirty editor + dirty entries (only when we can save silently —
+  // we don't want to prompt for "Save As" location during an update flow)
+  progressLabel.textContent = 'Збереження змін…';
+  progressBar.style.width = '15%';
+  try {
+    if (state.currentIndex >= 0 && typeof editorDirty === 'function' && editorDirty()) {
+      if (typeof applyChanges === 'function') await applyChanges();
+    }
+    const hasDirty = state.entries.some(e => e.dirty);
+    const canSaveSilently = hasDirty && (
+      state.appMode === 'other' ||
+      state.appMode === 'jojo' ||
+      !!state.filePath
+    );
+    if (canSaveSilently && typeof saveAll === 'function') {
+      await saveAll();
+    }
+  } catch (e) {
+    console.warn('save before update failed:', e);
+  }
+
+  // 2. Hand off to main process for download + replace + relaunch
+  progressLabel.textContent = 'Завантаження нової версії…';
+  progressBar.style.width = '55%';
+  const res = await ipcRenderer.invoke('app:download-and-update', _updateInfo.assetUrl);
+  if (res && res.ok) {
+    progressLabel.textContent = 'Перезапуск…';
+    progressBar.style.width = '100%';
+    // The main process will quit the app shortly; nothing to do here.
+  } else {
+    errEl.textContent = `Не вдалося оновити: ${res && res.error ? res.error : 'невідома помилка'}`;
+    errEl.classList.remove('hidden');
+    progress.classList.add('hidden');
+    installBtn.disabled = false;
+    laterBtn.disabled = false;
+  }
 }
 
 document.addEventListener('DOMContentLoaded', init);

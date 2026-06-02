@@ -196,6 +196,7 @@ class Entry {
     this._cachedFlat = null;
     this._cachedFlatNoSep = null;
     this._progressCache = null;
+    this._parsedCache = undefined;
   }
 
   visibleSpeakers() { return this.speakers.filter(s => !isSystemSpeaker(s)); }
@@ -336,6 +337,7 @@ class TxtEntry {
     this._searchIndex = null;
     this._cachedFlat = null;
     this._progressCache = null;
+    this._parsedCache = undefined;
   }
 
   toFlat() {
@@ -395,6 +397,7 @@ class JoJoEntry {
   _invalidateCaches() {
     this._searchIndex = null;
     this._progressCache = null;
+    this._parsedCache = undefined;
   }
 
   toFlat() {

@@ -1,8 +1,13 @@
 'use strict';
 
-const { app, BrowserWindow, Menu, dialog, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const https = require('https');
+const { spawn } = require('child_process');
+
+const UPDATE_REPO = 'LittleBitUA/LBEditor';
+const UPDATE_ASSET_NAME = 'LB.Editor.exe'; // portable asset name in releases
 
 let liquidGlass = null;
 if (process.platform === 'darwin') {
@@ -106,6 +111,8 @@ function buildMenu() {
         { label: 'Зберегти', accelerator: 'CmdOrCtrl+S', registerAccelerator: false, click: () => send('menu:action', 'save-file') },
         { label: 'Зберегти як...', accelerator: 'CmdOrCtrl+Shift+S', registerAccelerator: false, click: () => send('menu:action', 'save-file-as') },
         { label: 'Зберегти все', accelerator: 'CmdOrCtrl+Alt+S', registerAccelerator: false, click: () => send('menu:action', 'save-all') },
+        { type: 'separator' },
+        { label: 'Закрити все', click: () => send('menu:action', 'close-all') },
         { type: 'separator' },
         { label: 'Відкрити проєкт...', click: () => send('menu:action', 'open-project') },
         { label: 'Зберегти проєкт...', click: () => send('menu:action', 'save-project') },
@@ -324,6 +331,169 @@ function setupIpcHandlers() {
     ensureDefaults(dataDir, resourcesDir);
     event.returnValue = { dataDir, resourcesDir };
   });
+
+  // ── Auto-update (portable .exe from GitHub Releases) ────────────────
+  ipcMain.handle('app:get-version', () => app.getVersion());
+
+  ipcMain.handle('app:get-exe-info', () => ({
+    exePath: process.execPath,
+    isPortable: !!process.env.PORTABLE_EXECUTABLE_DIR,
+    portableDir: process.env.PORTABLE_EXECUTABLE_DIR || null,
+    isPackaged: app.isPackaged,
+    version: app.getVersion(),
+  }));
+
+  ipcMain.handle('app:check-update', async () => {
+    return await checkLatestRelease();
+  });
+
+  ipcMain.handle('app:open-external', (_event, url) => {
+    if (typeof url === 'string' && /^https?:\/\//.test(url)) shell.openExternal(url);
+  });
+
+  ipcMain.handle('app:download-and-update', async (_event, assetUrl) => {
+    if (!app.isPackaged) {
+      return { ok: false, error: 'Auto-update недоступне у dev-режимі.' };
+    }
+    if (!process.env.PORTABLE_EXECUTABLE_DIR) {
+      return { ok: false, error: 'Auto-update доступне лише для portable-версії. Завантажте інсталятор вручну.' };
+    }
+    try {
+      const tmpDir = app.getPath('temp');
+      const targetPath = process.execPath;
+      const tmpExe = path.join(tmpDir, `lb-editor-update-${Date.now()}.exe`);
+      await downloadFile(assetUrl, tmpExe);
+      launchSelfReplaceScript(tmpExe, targetPath);
+      // Give the launcher a moment to start before we exit
+      setTimeout(() => {
+        allowQuit = true;
+        app.quit();
+      }, 300);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e && e.message ? e.message : String(e) };
+    }
+  });
+}
+
+function httpsGetJSON(url, headers) {
+  return new Promise((resolve, reject) => {
+    const opts = { headers: Object.assign({ 'User-Agent': 'LB-Editor-Updater' }, headers || {}) };
+    https.get(url, opts, (res) => {
+      // Handle redirects (GitHub API rarely needs this, but be safe)
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        return httpsGetJSON(res.headers.location, headers).then(resolve, reject);
+      }
+      if (res.statusCode !== 200) {
+        res.resume();
+        return reject(new Error(`HTTP ${res.statusCode} ${url}`));
+      }
+      let buf = '';
+      res.setEncoding('utf-8');
+      res.on('data', (c) => { buf += c; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(buf)); } catch (e) { reject(e); }
+      });
+    }).on('error', reject);
+  });
+}
+
+function downloadFile(url, destPath) {
+  return new Promise((resolve, reject) => {
+    const file = fs.createWriteStream(destPath);
+    const opts = { headers: { 'User-Agent': 'LB-Editor-Updater' } };
+    const req = https.get(url, opts, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        file.close();
+        try { fs.unlinkSync(destPath); } catch (_) {}
+        return downloadFile(res.headers.location, destPath).then(resolve, reject);
+      }
+      if (res.statusCode !== 200) {
+        res.resume();
+        file.close();
+        try { fs.unlinkSync(destPath); } catch (_) {}
+        return reject(new Error(`HTTP ${res.statusCode} ${url}`));
+      }
+      res.pipe(file);
+      file.on('finish', () => file.close(resolve));
+    });
+    req.on('error', (e) => {
+      file.close();
+      try { fs.unlinkSync(destPath); } catch (_) {}
+      reject(e);
+    });
+  });
+}
+
+function semverNewer(latest, current) {
+  const norm = (s) => String(s || '').replace(/^v/i, '').split(/[.\-+]/).map(p => /^\d+$/.test(p) ? parseInt(p, 10) : p);
+  const a = norm(latest), b = norm(current);
+  const n = Math.max(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    const x = a[i] === undefined ? 0 : a[i];
+    const y = b[i] === undefined ? 0 : b[i];
+    if (x === y) continue;
+    if (typeof x === 'number' && typeof y === 'number') return x > y;
+    return String(x) > String(y);
+  }
+  return false;
+}
+
+async function checkLatestRelease() {
+  try {
+    const url = `https://api.github.com/repos/${UPDATE_REPO}/releases/latest`;
+    const data = await httpsGetJSON(url);
+    const tag = data.tag_name || data.name || '';
+    const current = app.getVersion();
+    const hasUpdate = semverNewer(tag, current);
+    const asset = (data.assets || []).find(a => a.name === UPDATE_ASSET_NAME);
+    return {
+      ok: true,
+      current,
+      latest: String(tag).replace(/^v/i, ''),
+      hasUpdate,
+      assetUrl: asset ? asset.browser_download_url : null,
+      releaseUrl: data.html_url,
+      releaseNotes: data.body || '',
+      publishedAt: data.published_at || '',
+      assetSize: asset ? asset.size : 0,
+    };
+  } catch (e) {
+    return { ok: false, error: e && e.message ? e.message : String(e) };
+  }
+}
+
+// Writes a small .cmd that waits for the running .exe to exit, swaps in the
+// downloaded copy, relaunches it, and deletes itself. Spawned detached + hidden
+// so the user never sees a console window.
+function launchSelfReplaceScript(tmpExe, targetExe) {
+  const scriptPath = path.join(app.getPath('temp'), `lb-editor-update-${Date.now()}.cmd`);
+  const escTarget = targetExe.replace(/\\/g, '\\');
+  const escTmp = tmpExe.replace(/\\/g, '\\');
+  const script = [
+    '@echo off',
+    'setlocal',
+    // Wait for current process to release the file lock
+    'ping 127.0.0.1 -n 2 >nul',
+    ':try',
+    `move /Y "${escTmp}" "${escTarget}" >nul 2>&1`,
+    'if errorlevel 1 (',
+    '  ping 127.0.0.1 -n 2 >nul',
+    '  goto try',
+    ')',
+    `start "" "${escTarget}"`,
+    'del "%~f0"',
+  ].join('\r\n');
+  fs.writeFileSync(scriptPath, script, 'utf-8');
+
+  const child = spawn(process.env.ComSpec || 'cmd.exe', ['/c', scriptPath], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.unref();
 }
 
 app.whenReady().then(() => {

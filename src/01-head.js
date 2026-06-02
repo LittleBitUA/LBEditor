@@ -31,6 +31,10 @@ let _suppressMonacoChange = false; // suppress onDidChangeModelContent during se
 let _sideMonaco = null;       // side panel Monaco editor (read-only)
 let _sidePanelIdx = -1;       // entry index shown in side panel (-1 = hidden)
 let _sideOriginalMode = false; // true = side panel shows original text (auto-follows current entry)
+let _sideFollowMode = false;   // true = side panel follows current entry (set when opened via toolbar; cleared when pinned via context menu)
+let _syncScrollEnabled = false; // sync scroll between main editor and side panel
+let _syncScrollGuard = false;   // re-entrancy guard for sync scroll listeners
+let _syncScrollDisposers = [];  // dispose handles for the active scroll listeners
 let _schemaViewCurrentlyUsed = false; // whether current editor content is schema-filtered
 
 // ── Worker thread state ────────────────────────────────────

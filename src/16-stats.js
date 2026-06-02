@@ -320,15 +320,25 @@ function _tryParseEntryKeyValue(entry) {
     if (sectionRe.test(line)) { hasSections = true; break; }
   }
 
+  // A line is a continuation of the previous KV's value when it has content
+  // but no '=', is not a section header, and is not a comment. This keeps
+  // multi-line values intact so the schema view doesn't silently hide the
+  // tail of a value and write-back doesn't leave orphan lines behind. Blank
+  // and comment lines end the value.
+  const commentRe = /^\s*[;#]/;
+  const isContinuation = (line) => line.length > 0 && line.indexOf('=') < 0 && !sectionRe.test(line) && !commentRe.test(line);
+
   if (hasSections) {
     // Parse as array of section objects (for repeating blocks like .int files)
     const sections = [];
     let current = null;
+    let lastKey = null;
     for (const line of lines) {
       const sm = sectionRe.exec(line);
       if (sm) {
         current = { _section: sm[1] };
         sections.push(current);
+        lastKey = null;
         continue;
       }
       if (!current) continue;
@@ -336,7 +346,10 @@ function _tryParseEntryKeyValue(entry) {
       if (eqIdx > 0) {
         const key = line.substring(0, eqIdx).trim();
         const val = line.substring(eqIdx + 1);
-        if (key) current[key] = val;
+        if (key) { current[key] = val; lastKey = key; }
+        else lastKey = null;
+      } else if (lastKey != null && isContinuation(line)) {
+        current[lastKey] += '\n' + line;
       }
     }
     return sections.length > 0 ? sections : null;
@@ -345,12 +358,16 @@ function _tryParseEntryKeyValue(entry) {
   // Flat key=value (no sections)
   const obj = {};
   let hasKV = false;
+  let lastKey = null;
   for (const line of lines) {
     const eqIdx = line.indexOf('=');
     if (eqIdx > 0) {
       const key = line.substring(0, eqIdx).trim();
       const val = line.substring(eqIdx + 1);
-      if (key) { obj[key] = val; hasKV = true; }
+      if (key) { obj[key] = val; hasKV = true; lastKey = key; }
+      else lastKey = null;
+    } else if (lastKey != null && isContinuation(line)) {
+      obj[lastKey] += '\n' + line;
     }
   }
   return hasKV ? obj : null;
@@ -433,15 +450,26 @@ function _tryParseEntryCsv(entry) {
 function _tryParseEntryData(entry) {
   // ishin mode always has entry.data
   if (entry.data && typeof entry.data === 'object') return entry.data;
+  // Cache to avoid re-parsing large files (e.g. 6 MB JSON) on every call —
+  // schema modal, KV/JSON path checks, and effective-textPaths resolution all
+  // hit this function multiple times per UI action. Invalidated whenever the
+  // entry's text changes via _invalidateCaches() (see 02-data.js).
+  if (entry._parsedCache !== undefined) return entry._parsedCache;
   const parseAs = getFileParseAs(entry);
-  if (parseAs === 'json') return _tryParseEntryJson(entry);
-  if (parseAs === 'xml') return _tryParseEntryXml(entry);
-  if (parseAs === 'keyvalue') return _tryParseEntryKeyValue(entry);
-  if (parseAs === 'csv') return _tryParseEntryCsv(entry);
-  // auto: try JSON first, then XML, then Key=Value, then CSV
-  const isCsvFile = entry.filePath && entry.filePath.toLowerCase().endsWith('.csv');
-  if (isCsvFile) return _tryParseEntryCsv(entry) || _tryParseEntryJson(entry);
-  return _tryParseEntryJson(entry) || _tryParseEntryXml(entry) || _tryParseEntryKeyValue(entry) || _tryParseEntryCsv(entry);
+  let result;
+  if (parseAs === 'json') result = _tryParseEntryJson(entry);
+  else if (parseAs === 'xml') result = _tryParseEntryXml(entry);
+  else if (parseAs === 'keyvalue') result = _tryParseEntryKeyValue(entry);
+  else if (parseAs === 'csv') result = _tryParseEntryCsv(entry);
+  else {
+    // auto: try JSON first, then XML, then Key=Value, then CSV
+    const isCsvFile = entry.filePath && entry.filePath.toLowerCase().endsWith('.csv');
+    result = isCsvFile
+      ? (_tryParseEntryCsv(entry) || _tryParseEntryJson(entry))
+      : (_tryParseEntryJson(entry) || _tryParseEntryXml(entry) || _tryParseEntryKeyValue(entry) || _tryParseEntryCsv(entry));
+  }
+  entry._parsedCache = result;
+  return result;
 }
 
 function _getSchemaSampleObject() {
@@ -467,6 +495,36 @@ function _getSchemaSampleObject() {
     }
   }
   return null;
+}
+
+// Returns a synthetic sample that merges keys from every section of the current
+// entry (plus a fallback scan of other entries if needed). This gives the schema
+// tree the full key set across a multi-section file instead of just section [0]'s
+// keys — critical for .int files where keys vary per section.
+function _getMergedSchemaSample() {
+  const idx = (state.currentIndex >= 0 && state.currentIndex < state.entries.length)
+    ? state.currentIndex : 0;
+  const candidates = state.entries[idx] ? [state.entries[idx]] : [];
+  for (const e of state.entries) if (e !== candidates[0]) candidates.push(e);
+
+  const merged = {};
+  let any = false;
+  for (const entry of candidates) {
+    const obj = _tryParseEntryData(entry);
+    if (!obj) continue;
+    any = true;
+    const items = Array.isArray(obj) ? obj : [obj];
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue;
+      for (const k of Object.keys(item)) {
+        if (k in merged) continue;
+        merged[k] = item[k];
+      }
+    }
+    // Only scan additional entries if current one produced nothing useful
+    if (Object.keys(merged).length > 1) break;
+  }
+  return any ? merged : null;
 }
 
 function _getRawTextLines(entry) {
@@ -519,19 +577,49 @@ function _extractByRegex(entry, regexStr, group) {
   }
 }
 
+// Returns the effective textPaths for schema filtering. Falls back to
+// auto-derived paths (every string key across every parsed section) when the
+// file is a key=value or CSV structure without explicit textPaths — so schema
+// view "just works" on .int/.ini/.properties files without the user having to
+// click through the schema modal.
+function _resolveEffectiveTextPaths(entry, schema) {
+  if (schema && Array.isArray(schema.textPaths) && schema.textPaths.length > 0) {
+    return schema.textPaths;
+  }
+  // Respect explicit opt-out
+  if (schema && schema.noSchema) return null;
+  // Only auto-derive for keyvalue/csv shapes — JSON/XML vary too much to guess
+  const fmt = _detectEntryFormat(entry);
+  if (fmt !== 'keyvalue' && fmt !== 'csv') return null;
+  const parsed = _tryParseEntryData(entry);
+  if (!parsed) return null;
+  const items = Array.isArray(parsed) ? parsed : [parsed];
+  const keys = new Set();
+  for (const item of items) {
+    if (!item || typeof item !== 'object') continue;
+    for (const k of Object.keys(item)) {
+      if (k === '_section') continue;
+      if (typeof item[k] === 'string') keys.add(k);
+    }
+  }
+  return keys.size > 0 ? [...keys] : null;
+}
+
 function getTextLinesForEntry(entry) {
   const schema = getFileSchema(entry);
-  if (!schema) return _getRawTextLines(entry);
 
-  // Custom regex schema
-  if (schema.customSchemaIdx != null) {
+  // Custom regex schema stays explicit — we don't auto-fall-through here.
+  if (schema && schema.customSchemaIdx != null) {
     const cs = (state.settings.custom_schemas || [])[schema.customSchemaIdx];
     if (cs && cs.regex) return _extractByRegex(entry, cs.regex, cs.group || 1);
   }
 
+  const textPaths = _resolveEffectiveTextPaths(entry, schema);
+  if (!textPaths) return _getRawTextLines(entry);
+
   // ishin mode — use entry.data
   let data = entry.data;
-  // other/jojo — parse text as JSON/XML
+  // other/jojo — parse text as JSON/XML/KV
   if (!data) {
     const parsed = _tryParseEntryData(entry);
     if (!parsed) return _getRawTextLines(entry);
@@ -540,22 +628,20 @@ function getTextLinesForEntry(entry) {
     if (Array.isArray(parsed)) {
       let lines = [];
       for (const item of parsed) {
-        for (const path of schema.textPaths) {
+        for (const path of textPaths) {
           const vals = extractByPath(item, path);
           for (const v of vals) lines.push(...v.split('\n'));
         }
       }
-      // Schema didn't match this file's structure — fall back to raw text
       return lines.length > 0 ? lines : _getRawTextLines(entry);
     }
     data = parsed;
   }
   let lines = [];
-  for (const path of schema.textPaths) {
+  for (const path of textPaths) {
     const vals = extractByPath(data, path);
     for (const v of vals) lines.push(...v.split('\n'));
   }
-  // Schema didn't match this file's structure — fall back to raw text
   return lines.length > 0 ? lines : _getRawTextLines(entry);
 }
 
@@ -619,17 +705,27 @@ function _getSchemaOrigValues(entry) {
 
 function applySchemaLinesToEntry(entry, editedLines) {
   const schema = getFileSchema(entry);
-  if (!schema || !schema.textPaths || schema.textPaths.length === 0) return false;
-  if (schema.customSchemaIdx != null) {
+  // Custom regex write-back — only when the referenced regex still exists.
+  // A dangling customSchemaIdx (regex was deleted) must fall through to the
+  // explicit/auto textPaths path, not abort.
+  if (schema && schema.customSchemaIdx != null) {
     const cs = (state.settings.custom_schemas || [])[schema.customSchemaIdx];
-    if (!cs || !cs.regex) return false;
-    return _applySchemaRegex(entry, editedLines, cs.regex, cs.group || 1);
+    if (cs && cs.regex) {
+      return _applySchemaRegex(entry, editedLines, cs.regex, cs.group || 1);
+    }
   }
 
+  const textPaths = _resolveEffectiveTextPaths(entry, schema);
+  if (!textPaths) return false;
+
+  const effectiveSchema = (schema && schema.textPaths && schema.textPaths.length > 0)
+    ? schema
+    : { ...(schema || {}), textPaths };
+
   if (state.appMode === 'ishin') {
-    return _applySchemaIshin(entry, editedLines, schema);
+    return _applySchemaIshin(entry, editedLines, effectiveSchema);
   }
-  return _applySchemaOther(entry, editedLines, schema);
+  return _applySchemaOther(entry, editedLines, effectiveSchema);
 }
 
 function _applySchemaIshin(entry, editedLines, schema) {
@@ -678,6 +774,17 @@ function _applySchemaOther(entry, editedLines, schema) {
   // Key=Value: update values in original text
   if (fmt === 'keyvalue') {
     return _applySchemaKeyValue(entry, editedLines, schema, origText);
+  }
+
+  // Safety net: if fmt heuristic chose 'json' but content doesn't start with
+  // { or [, the file is almost certainly Key=Value. Route through the KV path
+  // instead of silently rewriting it as JSON.
+  if (fmt === 'json') {
+    const trimmed = (origText || '').trim();
+    if (trimmed && trimmed[0] !== '{' && trimmed[0] !== '[') {
+      const kvData = _tryParseEntryKeyValue(entry);
+      if (kvData) return _applySchemaKeyValue(entry, editedLines, schema, origText);
+    }
   }
 
   const data = _tryParseEntryData(entry);
@@ -846,23 +953,50 @@ function _applySchemaKeyValue(entry, editedLines, schema, origText) {
     lineIdx += lc;
   }
 
-  // Replace values in original text, consuming matches in order
-  const lines = origText.split('\n');
-  const consumed = new Set();
-  for (const nv of newVals) {
-    const key = nv.path;
-    for (let i = 0; i < lines.length; i++) {
-      if (consumed.has(i)) continue;
-      const eqIdx = lines[i].indexOf('=');
-      if (eqIdx > 0 && lines[i].substring(0, eqIdx).trim() === key) {
-        lines[i] = lines[i].substring(0, eqIdx + 1) + nv.value;
-        consumed.add(i);
-        break;
+  // Walk raw lines, replacing each matched KV block (the '=' line plus any
+  // continuation lines) with the new value. Embedded '\n' in the new value
+  // becomes extra continuation lines, so a shorter edit trims the block and
+  // a longer one extends it — no orphan tail left behind.
+  const sectionRe = /^\s*\[([^\]]+)\]\s*$/;
+  const commentRe = /^\s*[;#]/;
+  const rawLines = origText.split('\n');
+  const result = [];
+  const used = new Set();
+  let i = 0;
+  while (i < rawLines.length) {
+    const line = rawLines[i];
+    const eqIdx = line.indexOf('=');
+    if (eqIdx > 0 && !sectionRe.test(line)) {
+      const key = line.substring(0, eqIdx).trim();
+      let matchIdx = -1;
+      for (let j = 0; j < newVals.length; j++) {
+        if (!used.has(j) && newVals[j].path === key) { matchIdx = j; break; }
+      }
+      if (matchIdx >= 0) {
+        used.add(matchIdx);
+        // Find the extent of this KV block (continuation lines follow)
+        let end = i;
+        for (let k = i + 1; k < rawLines.length; k++) {
+          const nl = rawLines[k];
+          if (nl.length === 0) break;
+          if (sectionRe.test(nl)) break;
+          if (commentRe.test(nl)) break;
+          if (nl.indexOf('=') > 0) break;
+          end = k;
+        }
+        const prefix = line.substring(0, eqIdx + 1);
+        const valueLines = newVals[matchIdx].value.split('\n');
+        result.push(prefix + valueLines[0]);
+        for (let vi = 1; vi < valueLines.length; vi++) result.push(valueLines[vi]);
+        i = end + 1;
+        continue;
       }
     }
+    result.push(line);
+    i++;
   }
 
-  entry.text = lines;
+  entry.text = result;
   return true;
 }
 
@@ -933,20 +1067,25 @@ function showSchemaModal() {
   const defaultPaths = state.appMode === 'ishin' ? ['text'] : [];
   const selectedPaths = new Set(currentSchema ? currentSchema.textPaths : defaultPaths);
 
-  // Key=Value / CSV: auto-select all string fields (except _section) when no schema saved yet
+  // Key=Value / CSV: auto-select all string fields (except _section) when no schema saved yet.
+  // For multi-section .int files, merge keys from ALL sections so schemas created
+  // from the first section's sample don't silently drop keys that live only in
+  // later sections.
   const parseAs = parseTypeEl ? parseTypeEl.value : 'auto';
-  if ((parseAs === 'keyvalue' || parseAs === 'csv') && selectedPaths.size === 0 && sample) {
-    for (const k of Object.keys(sample)) {
+  const mergedSample = _getMergedSchemaSample() || sample;
+  if ((parseAs === 'keyvalue' || parseAs === 'csv') && selectedPaths.size === 0 && mergedSample) {
+    for (const k of Object.keys(mergedSample)) {
       if (k === '_section') continue;
-      if (typeof sample[k] === 'string') selectedPaths.add(k);
+      if (typeof mergedSample[k] === 'string') selectedPaths.add(k);
     }
   }
 
   treeEl.innerHTML = '';
   const searchEl = document.getElementById('schema-search');
   if (searchEl) { searchEl.value = ''; }
-  if (sample && typeof sample === 'object') {
-    renderSchemaNode(treeEl, sample, '', selectedPaths, 0);
+  const treeSample = (parseAs === 'keyvalue' || parseAs === 'csv') ? mergedSample : sample;
+  if (treeSample && typeof treeSample === 'object') {
+    renderSchemaNode(treeEl, treeSample, '', selectedPaths, 0);
   } else {
     treeEl.innerHTML = '<div style="padding:8px;color:var(--text-muted);font-size:12px;">Структурованих даних не знайдено. Використовуйте regex-схеми вище.</div>';
   }
@@ -969,10 +1108,19 @@ function hideSchemaModal() {
   document.getElementById('schema-modal').classList.add('hidden');
 }
 
+// Cap the number of nodes rendered per object level. Flat localisation JSONs
+// can have tens of thousands of string keys; building 10+ DOM elements for
+// each one freezes the modal. Schema tree is still searchable, and the user
+// rarely picks individual strings on such files — they use auto-select or
+// just the search box. The cap doesn't affect what's selectable on Apply.
+const SCHEMA_RENDER_CAP = 500;
+
 function renderSchemaNode(container, obj, parentPath, selectedPaths, depth) {
   if (!obj || typeof obj !== 'object') return;
 
-  const keys = Object.keys(obj);
+  const allKeys = Object.keys(obj);
+  const truncated = allKeys.length > SCHEMA_RENDER_CAP;
+  const keys = truncated ? allKeys.slice(0, SCHEMA_RENDER_CAP) : allKeys;
   for (const key of keys) {
     const val = obj[key];
     const fullPath = parentPath ? parentPath + '.' + key : key;
@@ -1047,6 +1195,13 @@ function renderSchemaNode(container, obj, parentPath, selectedPaths, depth) {
         toggle.textContent = collapsed ? '\u25B8' : '\u25BE';
       });
     }
+  }
+  if (truncated) {
+    const note = document.createElement('div');
+    note.className = 'schema-node schema-truncated-note';
+    note.style.cssText = 'opacity:0.7;font-style:italic;padding-left:24px;font-size:11px;color:var(--text-muted);';
+    note.textContent = `\u2026 \u0449\u0435 ${allKeys.length - SCHEMA_RENDER_CAP} \u043A\u043B\u044E\u0447\u0456\u0432 \u043F\u0440\u0438\u0445\u043E\u0432\u0430\u043D\u043E (\u043F\u043E\u043A\u0430\u0437\u0430\u043D\u043E \u043F\u0435\u0440\u0448\u0456 ${SCHEMA_RENDER_CAP}). \u0412\u0438\u043A\u043E\u0440\u0438\u0441\u0442\u043E\u0432\u0443\u0439\u0442\u0435 \u043F\u043E\u0448\u0443\u043A \u0432\u0438\u0449\u0435.`;
+    container.appendChild(note);
   }
 }
 
@@ -1394,10 +1549,37 @@ function _setupCustomSchemaUI() {
   });
 
   document.getElementById('schema-custom-apply-btn').addEventListener('click', () => {
-    const csIdx = parseInt(document.getElementById('schema-custom-select').value, 10);
-    if (isNaN(csIdx) || csIdx < 0) return;
+    const rawVal = document.getElementById('schema-custom-select').value;
+    const csIdx = rawVal === '' ? -1 : parseInt(rawVal, 10);
     const keys = _getSchemaTargetKeys();
     if (keys.length === 0) return;
+
+    // "— не обрано —" → drop customSchemaIdx from selected files. Keep any
+    // existing textPaths so switching back to the built-in tree doesn't lose
+    // the prior selection. If nothing is left, mark as noSchema so auto-match
+    // by structure signature stays disabled.
+    if (csIdx < 0 || isNaN(csIdx)) {
+      for (const key of keys) {
+        const entry = state.settings.file_schemas[key];
+        if (!entry) continue;
+        delete entry.customSchemaIdx;
+        if ((!Array.isArray(entry.textPaths) || entry.textPaths.length === 0) && !entry.parseAs) {
+          state.settings.file_schemas[key] = { textPaths: [], noSchema: true };
+        }
+      }
+      saveSettings(state.settings);
+      for (const e of state.entries) e._progressCache = null;
+      updateProgress();
+      updateMeta();
+      forceVirtualRender();
+      hideSchemaModal();
+      loadEditor();
+      updateSchemaViewButton();
+      const countMsg = keys.length > 1 ? ` (${keys.length} файлів)` : '';
+      setStatus(`Знято regex-схему${countMsg}`);
+      return;
+    }
+
     const sample = _getSchemaSampleObject();
     const sig = sample ? _computeStructureSignature(sample, 0) : null;
     for (const key of keys) {
@@ -1444,6 +1626,22 @@ async function showStatsModal() {
     }
   } catch (_) {
     s = calculateExtendedStatsSync();
+  }
+  // Worker doesn't know about entry tags — compute editing stats on main thread
+  if (s && s.editedLines === undefined) {
+    let editedFiles = 0, editedLines = 0;
+    for (const entry of state.entries) {
+      const tagData = getEntryTagData(entry);
+      if (tagData.tag === 'edited') {
+        editedFiles++;
+        const lines = getTextLinesForEntry(entry);
+        editedLines += lines.filter(l => l.trim()).length;
+      }
+    }
+    const editPct = s.totalLines > 0 ? (editedLines / s.totalLines * 100) : 0;
+    s.editedFiles = editedFiles;
+    s.editedLines = editedLines;
+    s.editPct = editPct;
   }
   _applyStatsToModal(s);
 }

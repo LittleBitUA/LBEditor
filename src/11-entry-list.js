@@ -9,6 +9,7 @@ let _filteredEntries = [];
 let _filteredIndexByEntry = new Map(); // entry.index → position in _filteredEntries
 let _currentFilter = '';
 let _statusFilter = 'all'; // 'all' | 'untranslated' | 'translated' | 'edited'
+let _searchCaseSensitive = false;
 let _filterSnippets = new Map();
 let _filterMatchMeta = []; // parallel to _filteredEntries: {offset, snippet} or null
 let _currentFiltIdx = -1;  // tracks which row in _filteredEntries the user is on (for arrow nav with expanded results)
@@ -41,7 +42,8 @@ function _entryMatchesStatusFilter(entry) {
 }
 
 function rebuildFilteredEntries() {
-  const filt = dom.searchInput.value.toLowerCase();
+  const rawFilt = dom.searchInput.value;
+  const filt = _searchCaseSensitive ? rawFilt : rawFilt.toLowerCase();
   _currentFilter = filt;
   _filteredEntries = [];
   _filterSnippets.clear();
@@ -156,8 +158,14 @@ function createEntryElement(entry, filtIdx) {
     const snippet = meta.snippet;
     const snippetEl = document.createElement('div');
     snippetEl.className = 'entry-item-snippet';
-    const sLower = snippet.toLowerCase();
-    const mIdx = sLower.indexOf(filt);
+    if (meta.lineNo) {
+      const lineNoEl = document.createElement('span');
+      lineNoEl.className = 'entry-item-lineno';
+      lineNoEl.textContent = `${meta.lineNo}: `;
+      snippetEl.appendChild(lineNoEl);
+    }
+    const sHay = _searchCaseSensitive ? snippet : snippet.toLowerCase();
+    const mIdx = sHay.indexOf(filt);
     if (mIdx >= 0) {
       snippetEl.appendChild(document.createTextNode(snippet.substring(0, mIdx)));
       const mark = document.createElement('mark');
@@ -165,7 +173,7 @@ function createEntryElement(entry, filtIdx) {
       snippetEl.appendChild(mark);
       snippetEl.appendChild(document.createTextNode(snippet.substring(mIdx + filt.length)));
     } else {
-      snippetEl.textContent = snippet;
+      snippetEl.appendChild(document.createTextNode(snippet));
     }
     el.appendChild(snippetEl);
   } else {
@@ -384,11 +392,11 @@ function jumpToTextInEditor(query, targetOffset) {
   _searchHL.query = query;
 
   const text = editor.getValue();
-  const lowerText = text.toLowerCase();
-  const lowerQuery = query.toLowerCase();
+  const hay = _searchCaseSensitive ? text : text.toLowerCase();
+  const needle = _searchCaseSensitive ? query : query.toLowerCase();
   let searchFrom = 0;
-  while (searchFrom < lowerText.length) {
-    const pos = lowerText.indexOf(lowerQuery, searchFrom);
+  while (searchFrom < hay.length) {
+    const pos = hay.indexOf(needle, searchFrom);
     if (pos < 0) break;
     _searchHL.matches.push({ index: pos, length: query.length });
     searchFrom = pos + 1;
@@ -627,23 +635,53 @@ const _editorViewStates = new Map(); // entry.index → Monaco viewState (scroll
 function _isSchemaViewApplicable(entry) {
   if (!entry) return false;
   const schema = getFileSchema(entry);
-  if (!schema) return false;
-  // Custom regex schema — applicable if regex is defined
-  if (schema.customSchemaIdx != null) {
+  // Custom regex schema — applicable if the referenced regex still exists
+  if (schema && schema.customSchemaIdx != null) {
     const cs = (state.settings.custom_schemas || [])[schema.customSchemaIdx];
-    return !!(cs && cs.regex);
+    if (cs && cs.regex) return true;
+    // Regex was deleted — fall through to explicit/auto paths instead of
+    // hiding the button just because of a dangling index.
   }
-  // Check that schema actually filters something (has textPaths)
-  if (!schema.textPaths || schema.textPaths.length === 0) return false;
-  return true;
+  // Explicit textPaths — applicable
+  if (schema && Array.isArray(schema.textPaths) && schema.textPaths.length > 0) return true;
+  // Auto keyvalue/csv — schema view applies if we can derive textPaths from data
+  if (schema && schema.noSchema) return false;
+  const paths = _resolveEffectiveTextPaths(entry, schema);
+  return Array.isArray(paths) && paths.length > 0;
 }
 
-function toggleSchemaView() {
+async function toggleSchemaView() {
   if (state.currentIndex < 0 || state.currentIndex >= state.entries.length) return;
   const entry = state.entries[state.currentIndex];
   if (!_isSchemaViewApplicable(entry) && !_schemaViewCurrentlyUsed) return;
 
-  // Just switch display mode — no auto-save, this is purely visual
+  // Turning OFF schema while editor is dirty: try to propagate edits to entry.text
+  // first so the full view reflects them. If the schema can't apply the edits
+  // (structure mismatch), ask the user whether to discard them — otherwise
+  // loadEditor() below would silently drop the work.
+  if (_schemaViewCurrentlyUsed && editorDirty()) {
+    const editedLines = _monacoFlat.getValue().split('\n');
+    const applied = applySchemaLinesToEntry(entry, editedLines);
+    if (applied) {
+      entry.dirty = true;
+      entry._invalidateCaches();
+      _navHintsCache.delete(entry.index);
+      _schemaViewOrigText = getTextLinesForEntry(entry).join('\n');
+      markRecoveryDirty();
+      updateVisibleEntry(entry.index);
+      updateProgress();
+    } else {
+      const answer = await ask(
+        'Незбережені правки',
+        'Схема не змогла застосувати ваші правки (структура файлу не відповідає).\n\n' +
+        'Перейти на повний файл і ВІДКИНУТИ правки у схемі?\n' +
+        'Натисніть «Ні», щоб залишитись у схемі й спробувати скопіювати текст самостійно.',
+        'yn'
+      );
+      if (answer !== 'y') return;
+    }
+  }
+
   _schemaViewActive = !_schemaViewActive;
   loadEditor();
 

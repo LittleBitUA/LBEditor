@@ -12,12 +12,14 @@ async function applyChanges() {
 
     let ok = applySchemaLinesToEntry(entry, editedLines);
     if (!ok) {
-      // Schema apply failed — exclude this entry from schema view so user isn't stuck
-      entry._schemaExcluded = true;
-      _schemaViewCurrentlyUsed = false;
-      _schemaViewOrigText = '';
-      loadEditor(); // re-evaluates _schemaViewCurrentlyUsed (will be false due to exclusion)
-      setStatus('⚠ Помилка схеми — перемкнуто в повний режим. Повторіть зміни.');
+      // Schema apply failed — keep schema view + user's edits intact so work isn't lost.
+      // User can toggle schema view off manually to inspect/recover if needed.
+      setStatus('⚠ Помилка схеми — зміни НЕ застосовано. Перевірте структуру файлу або вимкніть режим схеми.');
+      await showInfo('Помилка схеми',
+        'Не вдалося застосувати зміни у режимі схеми.\n\n' +
+        'Ваші правки збережено в редакторі. Спробуйте:\n' +
+        '• Вимкнути режим схеми (кнопка у панелі) і зберегти повний текст вручну, або\n' +
+        '• Перевірити структуру файлу/схеми та повторити.');
       return;
     } else {
       const newText = Array.isArray(entry.text) ? [...entry.text] : [entry.text];
@@ -29,9 +31,13 @@ async function applyChanges() {
 
       // Update schema orig text so editorDirty() knows the new baseline
       _schemaViewOrigText = getTextLinesForEntry(entry).join('\n');
-      _suppressMonacoChange = true;
-      _monacoFlat.setValue(_schemaViewOrigText);
-      _suppressMonacoChange = false;
+      if (_monacoFlat.getValue() !== _schemaViewOrigText) {
+        const vs = _monacoFlat.saveViewState();
+        _suppressMonacoChange = true;
+        _monacoFlat.setValue(_schemaViewOrigText);
+        _suppressMonacoChange = false;
+        if (vs) _monacoFlat.restoreViewState(vs);
+      }
       _originalEditorLines = _schemaViewOrigText.split('\n');
 
       updateVisibleEntry(entry.index);

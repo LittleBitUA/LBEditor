@@ -63,7 +63,7 @@ function closeEntryTab(entryIdx) {
   _openTabs.splice(pos, 1);
   if (_previewTabIdx === entryIdx) _previewTabIdx = -1;
 
-  // If closing the active entry, switch to neighbour tab or go to welcome
+  // If closing the active entry, switch to neighbour tab or clear editor
   if (state.currentIndex === entryIdx) {
     if (_openTabs.length > 0) {
       const newIdx = _openTabs[Math.min(pos, _openTabs.length - 1)];
@@ -73,10 +73,45 @@ function closeEntryTab(entryIdx) {
       if (_monacoFlat) _monacoFlat.setValue('');
       if (_monacoText) _monacoText.setValue('');
       if (_monacoSp) _monacoSp.setValue('');
-      showWelcomeScreen();
+      // Only return to welcome when the left panel is also empty
+      if (state.entries.length === 0) {
+        showWelcomeScreen();
+      } else {
+        updateMeta();
+        updateEditorDirtyVisual();
+        const activeEl = dom.entryList ? dom.entryList.querySelector('.entry-item.active') : null;
+        if (activeEl) activeEl.classList.remove('active');
+      }
     }
   }
   renderTabBar();
+}
+
+async function closeAllFiles() {
+  if (state.entries.length === 0 && _openTabs.length === 0) {
+    showWelcomeScreen();
+    return;
+  }
+  if (!(await confirmDiscardAll())) return;
+
+  state.entries = [];
+  state.currentIndex = -1;
+  state.filePath = '';
+  state.txtDirPath = '';
+  state.bookmarks = {};
+  clearEntryTabs();
+
+  if (_monacoFlat) _monacoFlat.setValue('');
+  if (_monacoText) _monacoText.setValue('');
+  if (_monacoSp) _monacoSp.setValue('');
+
+  if (typeof forceVirtualRender === 'function') forceVirtualRender();
+  if (typeof updateMeta === 'function') updateMeta();
+  if (typeof updateProgress === 'function') updateProgress();
+  if (typeof saveSession === 'function') saveSession();
+
+  showWelcomeScreen();
+  setStatus('Закрито всі файли');
 }
 
 function clearEntryTabs() {

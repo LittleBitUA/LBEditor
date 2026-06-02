@@ -31,6 +31,10 @@ let _suppressMonacoChange = false; // suppress onDidChangeModelContent during se
 let _sideMonaco = null;       // side panel Monaco editor (read-only)
 let _sidePanelIdx = -1;       // entry index shown in side panel (-1 = hidden)
 let _sideOriginalMode = false; // true = side panel shows original text (auto-follows current entry)
+let _sideFollowMode = false;   // true = side panel follows current entry (set when opened via toolbar; cleared when pinned via context menu)
+let _syncScrollEnabled = false; // sync scroll between main editor and side panel
+let _syncScrollGuard = false;   // re-entrancy guard for sync scroll listeners
+let _syncScrollDisposers = [];  // dispose handles for the active scroll listeners
 let _schemaViewCurrentlyUsed = false; // whether current editor content is schema-filtered
 
 // ── Worker thread state ────────────────────────────────────
@@ -462,6 +466,7 @@ class Entry {
     this._cachedFlat = null;
     this._cachedFlatNoSep = null;
     this._progressCache = null;
+    this._parsedCache = undefined;
   }
 
   visibleSpeakers() { return this.speakers.filter(s => !isSystemSpeaker(s)); }
@@ -602,6 +607,7 @@ class TxtEntry {
     this._searchIndex = null;
     this._cachedFlat = null;
     this._progressCache = null;
+    this._parsedCache = undefined;
   }
 
   toFlat() {
@@ -661,6 +667,7 @@ class JoJoEntry {
   _invalidateCaches() {
     this._searchIndex = null;
     this._progressCache = null;
+    this._parsedCache = undefined;
   }
 
   toFlat() {
@@ -772,7 +779,7 @@ function closeEntryTab(entryIdx) {
   _openTabs.splice(pos, 1);
   if (_previewTabIdx === entryIdx) _previewTabIdx = -1;
 
-  // If closing the active entry, switch to neighbour tab or go to welcome
+  // If closing the active entry, switch to neighbour tab or clear editor
   if (state.currentIndex === entryIdx) {
     if (_openTabs.length > 0) {
       const newIdx = _openTabs[Math.min(pos, _openTabs.length - 1)];
@@ -782,10 +789,45 @@ function closeEntryTab(entryIdx) {
       if (_monacoFlat) _monacoFlat.setValue('');
       if (_monacoText) _monacoText.setValue('');
       if (_monacoSp) _monacoSp.setValue('');
-      showWelcomeScreen();
+      // Only return to welcome when the left panel is also empty
+      if (state.entries.length === 0) {
+        showWelcomeScreen();
+      } else {
+        updateMeta();
+        updateEditorDirtyVisual();
+        const activeEl = dom.entryList ? dom.entryList.querySelector('.entry-item.active') : null;
+        if (activeEl) activeEl.classList.remove('active');
+      }
     }
   }
   renderTabBar();
+}
+
+async function closeAllFiles() {
+  if (state.entries.length === 0 && _openTabs.length === 0) {
+    showWelcomeScreen();
+    return;
+  }
+  if (!(await confirmDiscardAll())) return;
+
+  state.entries = [];
+  state.currentIndex = -1;
+  state.filePath = '';
+  state.txtDirPath = '';
+  state.bookmarks = {};
+  clearEntryTabs();
+
+  if (_monacoFlat) _monacoFlat.setValue('');
+  if (_monacoText) _monacoText.setValue('');
+  if (_monacoSp) _monacoSp.setValue('');
+
+  if (typeof forceVirtualRender === 'function') forceVirtualRender();
+  if (typeof updateMeta === 'function') updateMeta();
+  if (typeof updateProgress === 'function') updateProgress();
+  if (typeof saveSession === 'function') saveSession();
+
+  showWelcomeScreen();
+  setStatus('Закрито всі файли');
 }
 
 function clearEntryTabs() {
@@ -4373,13 +4415,22 @@ function setupMigrateModal() {
 // ═══════════════════════════════════════════════════════════
 
 function entryMatchesFilter(entry, filt) {
+  if (_searchCaseSensitive) {
+    const textStr = Array.isArray(entry.text) ? entry.text.join('\n') : (entry.text || '');
+    if (textStr.includes(filt)) return true;
+    if (entry.file && entry.file.includes(filt)) return true;
+    if (entry.speakers) {
+      for (const sp of entry.speakers) if (sp && sp.includes(filt)) return true;
+    }
+    return false;
+  }
   return entry.getSearchIndex().includes(filt);
 }
 
 function getEntryMatchSnippet(entry, filt) {
   const textStr = Array.isArray(entry.text) ? entry.text.join('\n') : entry.text;
-  const lower = textStr.toLowerCase();
-  const pos = lower.indexOf(filt);
+  const hay = _searchCaseSensitive ? textStr : textStr.toLowerCase();
+  const pos = hay.indexOf(filt);
   if (pos < 0) return null;
   // Find the line containing the match
   const lineStart = textStr.lastIndexOf('\n', pos) + 1;
@@ -4399,12 +4450,27 @@ function getEntryMatchSnippet(entry, filt) {
 // Return ALL matching lines (one per unique line) for expanded search results
 function getEntryAllMatchLines(entry, filt) {
   const textStr = Array.isArray(entry.text) ? entry.text.join('\n') : entry.text;
-  const lower = textStr.toLowerCase();
+  const hay = _searchCaseSensitive ? textStr : textStr.toLowerCase();
   const results = [];
   const seenLineStarts = new Set();
+  // Precompute newline offsets so we can convert an offset \u2192 line number in
+  // O(log n) instead of rescanning the whole text per match.
+  const newlineOffsets = [-1];
+  for (let i = 0; i < textStr.length; i++) {
+    if (textStr.charCodeAt(i) === 10) newlineOffsets.push(i);
+  }
+  const lineNoAt = (pos) => {
+    let lo = 0, hi = newlineOffsets.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (newlineOffsets[mid] < pos) lo = mid; else hi = mid - 1;
+    }
+    return lo + 1; // 1-based
+  };
+
   let searchFrom = 0;
-  while (searchFrom < lower.length) {
-    const pos = lower.indexOf(filt, searchFrom);
+  while (searchFrom < hay.length) {
+    const pos = hay.indexOf(filt, searchFrom);
     if (pos < 0) break;
     const lineStart = textStr.lastIndexOf('\n', pos) + 1;
     if (!seenLineStarts.has(lineStart)) {
@@ -4421,7 +4487,7 @@ function getEntryAllMatchLines(entry, filt) {
       } else {
         snippet = line;
       }
-      results.push({ offset: pos, snippet });
+      results.push({ offset: pos, snippet, lineNo: lineNoAt(pos) });
     }
     searchFrom = pos + 1;
   }
@@ -4437,6 +4503,7 @@ let _filteredEntries = [];
 let _filteredIndexByEntry = new Map(); // entry.index → position in _filteredEntries
 let _currentFilter = '';
 let _statusFilter = 'all'; // 'all' | 'untranslated' | 'translated' | 'edited'
+let _searchCaseSensitive = false;
 let _filterSnippets = new Map();
 let _filterMatchMeta = []; // parallel to _filteredEntries: {offset, snippet} or null
 let _currentFiltIdx = -1;  // tracks which row in _filteredEntries the user is on (for arrow nav with expanded results)
@@ -4469,7 +4536,8 @@ function _entryMatchesStatusFilter(entry) {
 }
 
 function rebuildFilteredEntries() {
-  const filt = dom.searchInput.value.toLowerCase();
+  const rawFilt = dom.searchInput.value;
+  const filt = _searchCaseSensitive ? rawFilt : rawFilt.toLowerCase();
   _currentFilter = filt;
   _filteredEntries = [];
   _filterSnippets.clear();
@@ -4584,8 +4652,14 @@ function createEntryElement(entry, filtIdx) {
     const snippet = meta.snippet;
     const snippetEl = document.createElement('div');
     snippetEl.className = 'entry-item-snippet';
-    const sLower = snippet.toLowerCase();
-    const mIdx = sLower.indexOf(filt);
+    if (meta.lineNo) {
+      const lineNoEl = document.createElement('span');
+      lineNoEl.className = 'entry-item-lineno';
+      lineNoEl.textContent = `${meta.lineNo}: `;
+      snippetEl.appendChild(lineNoEl);
+    }
+    const sHay = _searchCaseSensitive ? snippet : snippet.toLowerCase();
+    const mIdx = sHay.indexOf(filt);
     if (mIdx >= 0) {
       snippetEl.appendChild(document.createTextNode(snippet.substring(0, mIdx)));
       const mark = document.createElement('mark');
@@ -4593,7 +4667,7 @@ function createEntryElement(entry, filtIdx) {
       snippetEl.appendChild(mark);
       snippetEl.appendChild(document.createTextNode(snippet.substring(mIdx + filt.length)));
     } else {
-      snippetEl.textContent = snippet;
+      snippetEl.appendChild(document.createTextNode(snippet));
     }
     el.appendChild(snippetEl);
   } else {
@@ -4812,11 +4886,11 @@ function jumpToTextInEditor(query, targetOffset) {
   _searchHL.query = query;
 
   const text = editor.getValue();
-  const lowerText = text.toLowerCase();
-  const lowerQuery = query.toLowerCase();
+  const hay = _searchCaseSensitive ? text : text.toLowerCase();
+  const needle = _searchCaseSensitive ? query : query.toLowerCase();
   let searchFrom = 0;
-  while (searchFrom < lowerText.length) {
-    const pos = lowerText.indexOf(lowerQuery, searchFrom);
+  while (searchFrom < hay.length) {
+    const pos = hay.indexOf(needle, searchFrom);
     if (pos < 0) break;
     _searchHL.matches.push({ index: pos, length: query.length });
     searchFrom = pos + 1;
@@ -5055,23 +5129,53 @@ const _editorViewStates = new Map(); // entry.index → Monaco viewState (scroll
 function _isSchemaViewApplicable(entry) {
   if (!entry) return false;
   const schema = getFileSchema(entry);
-  if (!schema) return false;
-  // Custom regex schema — applicable if regex is defined
-  if (schema.customSchemaIdx != null) {
+  // Custom regex schema — applicable if the referenced regex still exists
+  if (schema && schema.customSchemaIdx != null) {
     const cs = (state.settings.custom_schemas || [])[schema.customSchemaIdx];
-    return !!(cs && cs.regex);
+    if (cs && cs.regex) return true;
+    // Regex was deleted — fall through to explicit/auto paths instead of
+    // hiding the button just because of a dangling index.
   }
-  // Check that schema actually filters something (has textPaths)
-  if (!schema.textPaths || schema.textPaths.length === 0) return false;
-  return true;
+  // Explicit textPaths — applicable
+  if (schema && Array.isArray(schema.textPaths) && schema.textPaths.length > 0) return true;
+  // Auto keyvalue/csv — schema view applies if we can derive textPaths from data
+  if (schema && schema.noSchema) return false;
+  const paths = _resolveEffectiveTextPaths(entry, schema);
+  return Array.isArray(paths) && paths.length > 0;
 }
 
-function toggleSchemaView() {
+async function toggleSchemaView() {
   if (state.currentIndex < 0 || state.currentIndex >= state.entries.length) return;
   const entry = state.entries[state.currentIndex];
   if (!_isSchemaViewApplicable(entry) && !_schemaViewCurrentlyUsed) return;
 
-  // Just switch display mode — no auto-save, this is purely visual
+  // Turning OFF schema while editor is dirty: try to propagate edits to entry.text
+  // first so the full view reflects them. If the schema can't apply the edits
+  // (structure mismatch), ask the user whether to discard them — otherwise
+  // loadEditor() below would silently drop the work.
+  if (_schemaViewCurrentlyUsed && editorDirty()) {
+    const editedLines = _monacoFlat.getValue().split('\n');
+    const applied = applySchemaLinesToEntry(entry, editedLines);
+    if (applied) {
+      entry.dirty = true;
+      entry._invalidateCaches();
+      _navHintsCache.delete(entry.index);
+      _schemaViewOrigText = getTextLinesForEntry(entry).join('\n');
+      markRecoveryDirty();
+      updateVisibleEntry(entry.index);
+      updateProgress();
+    } else {
+      const answer = await ask(
+        'Незбережені правки',
+        'Схема не змогла застосувати ваші правки (структура файлу не відповідає).\n\n' +
+        'Перейти на повний файл і ВІДКИНУТИ правки у схемі?\n' +
+        'Натисніть «Ні», щоб залишитись у схемі й спробувати скопіювати текст самостійно.',
+        'yn'
+      );
+      if (answer !== 'y') return;
+    }
+  }
+
   _schemaViewActive = !_schemaViewActive;
   loadEditor();
 
@@ -5479,12 +5583,14 @@ async function applyChanges() {
 
     let ok = applySchemaLinesToEntry(entry, editedLines);
     if (!ok) {
-      // Schema apply failed — exclude this entry from schema view so user isn't stuck
-      entry._schemaExcluded = true;
-      _schemaViewCurrentlyUsed = false;
-      _schemaViewOrigText = '';
-      loadEditor(); // re-evaluates _schemaViewCurrentlyUsed (will be false due to exclusion)
-      setStatus('⚠ Помилка схеми — перемкнуто в повний режим. Повторіть зміни.');
+      // Schema apply failed — keep schema view + user's edits intact so work isn't lost.
+      // User can toggle schema view off manually to inspect/recover if needed.
+      setStatus('⚠ Помилка схеми — зміни НЕ застосовано. Перевірте структуру файлу або вимкніть режим схеми.');
+      await showInfo('Помилка схеми',
+        'Не вдалося застосувати зміни у режимі схеми.\n\n' +
+        'Ваші правки збережено в редакторі. Спробуйте:\n' +
+        '• Вимкнути режим схеми (кнопка у панелі) і зберегти повний текст вручну, або\n' +
+        '• Перевірити структуру файлу/схеми та повторити.');
       return;
     } else {
       const newText = Array.isArray(entry.text) ? [...entry.text] : [entry.text];
@@ -5496,9 +5602,13 @@ async function applyChanges() {
 
       // Update schema orig text so editorDirty() knows the new baseline
       _schemaViewOrigText = getTextLinesForEntry(entry).join('\n');
-      _suppressMonacoChange = true;
-      _monacoFlat.setValue(_schemaViewOrigText);
-      _suppressMonacoChange = false;
+      if (_monacoFlat.getValue() !== _schemaViewOrigText) {
+        const vs = _monacoFlat.saveViewState();
+        _suppressMonacoChange = true;
+        _monacoFlat.setValue(_schemaViewOrigText);
+        _suppressMonacoChange = false;
+        if (vs) _monacoFlat.restoreViewState(vs);
+      }
       _originalEditorLines = _schemaViewOrigText.split('\n');
 
       updateVisibleEntry(entry.index);
@@ -8787,11 +8897,16 @@ function setupEntryContextMenu() {
     hideEntryContextMenu();
   });
 
-  // Open in side panel
+  // Open in side panel — pinned mode: stays on this file even when user switches entries
   document.getElementById('ctx-open-side').addEventListener('click', () => {
     if (_ctxTargetIndex >= 0) {
       if (_ctxTargetIndex === _sidePanelIdx) hideSidePanel();
-      else showSidePanel(_ctxTargetIndex);
+      else {
+        _sideOriginalMode = false;
+        _sideFollowMode = false;
+        document.getElementById('tb-original').classList.remove('active');
+        showSidePanel(_ctxTargetIndex);
+      }
     }
     hideEntryContextMenu();
   });
@@ -10151,7 +10266,70 @@ function showSidePanel(entryIdx, originalMode) {
     if (_sideMonaco) _sideMonaco.layout();
   }, 50);
 
+  const syncBtn = document.getElementById('tb-sync-scroll');
+  if (syncBtn) syncBtn.style.display = '';
+  if (_syncScrollEnabled) _installSyncScroll();
+
   setStatus(`Бічна панель: [${entryIdx + 1}] ${entry.file || ''}`);
+}
+
+// ── Synchronised scrolling between the main editor and side panel ──────────
+function _disposeSyncScroll() {
+  for (const d of _syncScrollDisposers) { try { d.dispose(); } catch (_) {} }
+  _syncScrollDisposers = [];
+}
+
+function _getMainSyncEditor() {
+  // Sync the editor the user is currently looking at: schema/flat editor
+  // for non-split mode, the text editor in split mode.
+  if (state.splitMode && state.appMode === 'ishin' && _monacoText) return _monacoText;
+  return _monacoFlat;
+}
+
+function _installSyncScroll() {
+  _disposeSyncScroll();
+  if (!_syncScrollEnabled) return;
+  if (!_sideMonaco || _sidePanelIdx < 0) return;
+  const main = _getMainSyncEditor();
+  if (!main) return;
+
+  const mirror = (from, to) => {
+    if (_syncScrollGuard) return;
+    _syncScrollGuard = true;
+    try {
+      to.setScrollTop(from.getScrollTop());
+      to.setScrollLeft(from.getScrollLeft());
+    } finally {
+      // Release on the next tick so the receiving editor's own onDidScroll
+      // (triggered by setScrollTop/Left) doesn't loop back.
+      requestAnimationFrame(() => { _syncScrollGuard = false; });
+    }
+  };
+
+  _syncScrollDisposers.push(main.onDidScrollChange(() => mirror(main, _sideMonaco)));
+  _syncScrollDisposers.push(_sideMonaco.onDidScrollChange(() => mirror(_sideMonaco, main)));
+
+  // Initial alignment
+  _syncScrollGuard = true;
+  try {
+    _sideMonaco.setScrollTop(main.getScrollTop());
+    _sideMonaco.setScrollLeft(main.getScrollLeft());
+  } finally {
+    requestAnimationFrame(() => { _syncScrollGuard = false; });
+  }
+}
+
+function toggleSyncScroll() {
+  _syncScrollEnabled = !_syncScrollEnabled;
+  const btn = document.getElementById('tb-sync-scroll');
+  if (btn) btn.classList.toggle('active', _syncScrollEnabled);
+  if (_syncScrollEnabled && _sidePanelIdx >= 0) {
+    _installSyncScroll();
+    setStatus('Синхронна прокрутка увімкнена');
+  } else {
+    _disposeSyncScroll();
+    setStatus('Синхронна прокрутка вимкнена');
+  }
 }
 
 function hideSidePanel() {
@@ -10159,6 +10337,8 @@ function hideSidePanel() {
   document.getElementById('side-panel-handle').classList.add('hidden');
   _sidePanelIdx = -1;
   _sideOriginalMode = false;
+  _sideFollowMode = false;
+  _disposeSyncScroll();
   // Reset focus away from closed side panel
   if (_lastFocusedEditor === _sideMonaco) _lastFocusedEditor = null;
   // Hide left panel header
@@ -10169,6 +10349,8 @@ function hideSidePanel() {
   if (btn) btn.classList.remove('active');
   const origBtn = document.getElementById('tb-original');
   if (origBtn) origBtn.classList.remove('active');
+  const syncBtn = document.getElementById('tb-sync-scroll');
+  if (syncBtn) syncBtn.style.display = 'none';
 
   setTimeout(() => {
     if (_monacoFlat) _monacoFlat.layout();
@@ -10179,7 +10361,7 @@ function hideSidePanel() {
 
 function toggleSidePanel() {
   if (_sidePanelIdx >= 0 && !_sideOriginalMode) hideSidePanel();
-  else if (state.currentIndex >= 0) { _sideOriginalMode = false; showSidePanel(state.currentIndex); }
+  else if (state.currentIndex >= 0) { _sideOriginalMode = false; _sideFollowMode = true; showSidePanel(state.currentIndex); }
 }
 
 function toggleOriginalSidePanel() {
@@ -10188,17 +10370,19 @@ function toggleOriginalSidePanel() {
     hideSidePanel();
   } else {
     _sideOriginalMode = true;
+    _sideFollowMode = true;
     if (state.currentIndex >= 0) showSidePanel(state.currentIndex, true);
   }
   document.getElementById('tb-original').classList.toggle('active', _sideOriginalMode);
 }
 
-/** Called when user navigates to a new entry — update side panel only if in "Original" mode.
- *  When a specific file is pinned via context menu, it stays pinned. */
+/** Called when user navigates to a new entry — update side panel when it's
+ *  following the current entry (toolbar-opened). Files pinned via context menu stay put. */
 function updateSidePanelForEntry(entryIdx) {
   if (entryIdx < 0) return;
-  // Only auto-follow current entry in original mode; pinned files stay put
-  if (_sidePanelIdx >= 0 && _sideOriginalMode) showSidePanel(entryIdx, true);
+  if (_sidePanelIdx < 0) return;
+  if (_sideOriginalMode) showSidePanel(entryIdx, true);
+  else if (_sideFollowMode) showSidePanel(entryIdx);
 }
 
 /** Called after save — refresh side panel content for whatever entry it's showing */
@@ -10257,6 +10441,8 @@ function setupToolbar() {
   // Side panel
   document.getElementById('tb-side-panel').addEventListener('click', () => toggleSidePanel());
   document.getElementById('tb-original').addEventListener('click', () => toggleOriginalSidePanel());
+  const syncBtn = document.getElementById('tb-sync-scroll');
+  if (syncBtn) syncBtn.addEventListener('click', () => toggleSyncScroll());
 }
 
 function toggleWhitespace() {
@@ -10735,15 +10921,25 @@ function _tryParseEntryKeyValue(entry) {
     if (sectionRe.test(line)) { hasSections = true; break; }
   }
 
+  // A line is a continuation of the previous KV's value when it has content
+  // but no '=', is not a section header, and is not a comment. This keeps
+  // multi-line values intact so the schema view doesn't silently hide the
+  // tail of a value and write-back doesn't leave orphan lines behind. Blank
+  // and comment lines end the value.
+  const commentRe = /^\s*[;#]/;
+  const isContinuation = (line) => line.length > 0 && line.indexOf('=') < 0 && !sectionRe.test(line) && !commentRe.test(line);
+
   if (hasSections) {
     // Parse as array of section objects (for repeating blocks like .int files)
     const sections = [];
     let current = null;
+    let lastKey = null;
     for (const line of lines) {
       const sm = sectionRe.exec(line);
       if (sm) {
         current = { _section: sm[1] };
         sections.push(current);
+        lastKey = null;
         continue;
       }
       if (!current) continue;
@@ -10751,7 +10947,10 @@ function _tryParseEntryKeyValue(entry) {
       if (eqIdx > 0) {
         const key = line.substring(0, eqIdx).trim();
         const val = line.substring(eqIdx + 1);
-        if (key) current[key] = val;
+        if (key) { current[key] = val; lastKey = key; }
+        else lastKey = null;
+      } else if (lastKey != null && isContinuation(line)) {
+        current[lastKey] += '\n' + line;
       }
     }
     return sections.length > 0 ? sections : null;
@@ -10760,12 +10959,16 @@ function _tryParseEntryKeyValue(entry) {
   // Flat key=value (no sections)
   const obj = {};
   let hasKV = false;
+  let lastKey = null;
   for (const line of lines) {
     const eqIdx = line.indexOf('=');
     if (eqIdx > 0) {
       const key = line.substring(0, eqIdx).trim();
       const val = line.substring(eqIdx + 1);
-      if (key) { obj[key] = val; hasKV = true; }
+      if (key) { obj[key] = val; hasKV = true; lastKey = key; }
+      else lastKey = null;
+    } else if (lastKey != null && isContinuation(line)) {
+      obj[lastKey] += '\n' + line;
     }
   }
   return hasKV ? obj : null;
@@ -10848,15 +11051,26 @@ function _tryParseEntryCsv(entry) {
 function _tryParseEntryData(entry) {
   // ishin mode always has entry.data
   if (entry.data && typeof entry.data === 'object') return entry.data;
+  // Cache to avoid re-parsing large files (e.g. 6 MB JSON) on every call —
+  // schema modal, KV/JSON path checks, and effective-textPaths resolution all
+  // hit this function multiple times per UI action. Invalidated whenever the
+  // entry's text changes via _invalidateCaches() (see 02-data.js).
+  if (entry._parsedCache !== undefined) return entry._parsedCache;
   const parseAs = getFileParseAs(entry);
-  if (parseAs === 'json') return _tryParseEntryJson(entry);
-  if (parseAs === 'xml') return _tryParseEntryXml(entry);
-  if (parseAs === 'keyvalue') return _tryParseEntryKeyValue(entry);
-  if (parseAs === 'csv') return _tryParseEntryCsv(entry);
-  // auto: try JSON first, then XML, then Key=Value, then CSV
-  const isCsvFile = entry.filePath && entry.filePath.toLowerCase().endsWith('.csv');
-  if (isCsvFile) return _tryParseEntryCsv(entry) || _tryParseEntryJson(entry);
-  return _tryParseEntryJson(entry) || _tryParseEntryXml(entry) || _tryParseEntryKeyValue(entry) || _tryParseEntryCsv(entry);
+  let result;
+  if (parseAs === 'json') result = _tryParseEntryJson(entry);
+  else if (parseAs === 'xml') result = _tryParseEntryXml(entry);
+  else if (parseAs === 'keyvalue') result = _tryParseEntryKeyValue(entry);
+  else if (parseAs === 'csv') result = _tryParseEntryCsv(entry);
+  else {
+    // auto: try JSON first, then XML, then Key=Value, then CSV
+    const isCsvFile = entry.filePath && entry.filePath.toLowerCase().endsWith('.csv');
+    result = isCsvFile
+      ? (_tryParseEntryCsv(entry) || _tryParseEntryJson(entry))
+      : (_tryParseEntryJson(entry) || _tryParseEntryXml(entry) || _tryParseEntryKeyValue(entry) || _tryParseEntryCsv(entry));
+  }
+  entry._parsedCache = result;
+  return result;
 }
 
 function _getSchemaSampleObject() {
@@ -10882,6 +11096,36 @@ function _getSchemaSampleObject() {
     }
   }
   return null;
+}
+
+// Returns a synthetic sample that merges keys from every section of the current
+// entry (plus a fallback scan of other entries if needed). This gives the schema
+// tree the full key set across a multi-section file instead of just section [0]'s
+// keys — critical for .int files where keys vary per section.
+function _getMergedSchemaSample() {
+  const idx = (state.currentIndex >= 0 && state.currentIndex < state.entries.length)
+    ? state.currentIndex : 0;
+  const candidates = state.entries[idx] ? [state.entries[idx]] : [];
+  for (const e of state.entries) if (e !== candidates[0]) candidates.push(e);
+
+  const merged = {};
+  let any = false;
+  for (const entry of candidates) {
+    const obj = _tryParseEntryData(entry);
+    if (!obj) continue;
+    any = true;
+    const items = Array.isArray(obj) ? obj : [obj];
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue;
+      for (const k of Object.keys(item)) {
+        if (k in merged) continue;
+        merged[k] = item[k];
+      }
+    }
+    // Only scan additional entries if current one produced nothing useful
+    if (Object.keys(merged).length > 1) break;
+  }
+  return any ? merged : null;
 }
 
 function _getRawTextLines(entry) {
@@ -10934,19 +11178,49 @@ function _extractByRegex(entry, regexStr, group) {
   }
 }
 
+// Returns the effective textPaths for schema filtering. Falls back to
+// auto-derived paths (every string key across every parsed section) when the
+// file is a key=value or CSV structure without explicit textPaths — so schema
+// view "just works" on .int/.ini/.properties files without the user having to
+// click through the schema modal.
+function _resolveEffectiveTextPaths(entry, schema) {
+  if (schema && Array.isArray(schema.textPaths) && schema.textPaths.length > 0) {
+    return schema.textPaths;
+  }
+  // Respect explicit opt-out
+  if (schema && schema.noSchema) return null;
+  // Only auto-derive for keyvalue/csv shapes — JSON/XML vary too much to guess
+  const fmt = _detectEntryFormat(entry);
+  if (fmt !== 'keyvalue' && fmt !== 'csv') return null;
+  const parsed = _tryParseEntryData(entry);
+  if (!parsed) return null;
+  const items = Array.isArray(parsed) ? parsed : [parsed];
+  const keys = new Set();
+  for (const item of items) {
+    if (!item || typeof item !== 'object') continue;
+    for (const k of Object.keys(item)) {
+      if (k === '_section') continue;
+      if (typeof item[k] === 'string') keys.add(k);
+    }
+  }
+  return keys.size > 0 ? [...keys] : null;
+}
+
 function getTextLinesForEntry(entry) {
   const schema = getFileSchema(entry);
-  if (!schema) return _getRawTextLines(entry);
 
-  // Custom regex schema
-  if (schema.customSchemaIdx != null) {
+  // Custom regex schema stays explicit — we don't auto-fall-through here.
+  if (schema && schema.customSchemaIdx != null) {
     const cs = (state.settings.custom_schemas || [])[schema.customSchemaIdx];
     if (cs && cs.regex) return _extractByRegex(entry, cs.regex, cs.group || 1);
   }
 
+  const textPaths = _resolveEffectiveTextPaths(entry, schema);
+  if (!textPaths) return _getRawTextLines(entry);
+
   // ishin mode — use entry.data
   let data = entry.data;
-  // other/jojo — parse text as JSON/XML
+  // other/jojo — parse text as JSON/XML/KV
   if (!data) {
     const parsed = _tryParseEntryData(entry);
     if (!parsed) return _getRawTextLines(entry);
@@ -10955,22 +11229,20 @@ function getTextLinesForEntry(entry) {
     if (Array.isArray(parsed)) {
       let lines = [];
       for (const item of parsed) {
-        for (const path of schema.textPaths) {
+        for (const path of textPaths) {
           const vals = extractByPath(item, path);
           for (const v of vals) lines.push(...v.split('\n'));
         }
       }
-      // Schema didn't match this file's structure — fall back to raw text
       return lines.length > 0 ? lines : _getRawTextLines(entry);
     }
     data = parsed;
   }
   let lines = [];
-  for (const path of schema.textPaths) {
+  for (const path of textPaths) {
     const vals = extractByPath(data, path);
     for (const v of vals) lines.push(...v.split('\n'));
   }
-  // Schema didn't match this file's structure — fall back to raw text
   return lines.length > 0 ? lines : _getRawTextLines(entry);
 }
 
@@ -11034,17 +11306,27 @@ function _getSchemaOrigValues(entry) {
 
 function applySchemaLinesToEntry(entry, editedLines) {
   const schema = getFileSchema(entry);
-  if (!schema || !schema.textPaths || schema.textPaths.length === 0) return false;
-  if (schema.customSchemaIdx != null) {
+  // Custom regex write-back — only when the referenced regex still exists.
+  // A dangling customSchemaIdx (regex was deleted) must fall through to the
+  // explicit/auto textPaths path, not abort.
+  if (schema && schema.customSchemaIdx != null) {
     const cs = (state.settings.custom_schemas || [])[schema.customSchemaIdx];
-    if (!cs || !cs.regex) return false;
-    return _applySchemaRegex(entry, editedLines, cs.regex, cs.group || 1);
+    if (cs && cs.regex) {
+      return _applySchemaRegex(entry, editedLines, cs.regex, cs.group || 1);
+    }
   }
 
+  const textPaths = _resolveEffectiveTextPaths(entry, schema);
+  if (!textPaths) return false;
+
+  const effectiveSchema = (schema && schema.textPaths && schema.textPaths.length > 0)
+    ? schema
+    : { ...(schema || {}), textPaths };
+
   if (state.appMode === 'ishin') {
-    return _applySchemaIshin(entry, editedLines, schema);
+    return _applySchemaIshin(entry, editedLines, effectiveSchema);
   }
-  return _applySchemaOther(entry, editedLines, schema);
+  return _applySchemaOther(entry, editedLines, effectiveSchema);
 }
 
 function _applySchemaIshin(entry, editedLines, schema) {
@@ -11093,6 +11375,17 @@ function _applySchemaOther(entry, editedLines, schema) {
   // Key=Value: update values in original text
   if (fmt === 'keyvalue') {
     return _applySchemaKeyValue(entry, editedLines, schema, origText);
+  }
+
+  // Safety net: if fmt heuristic chose 'json' but content doesn't start with
+  // { or [, the file is almost certainly Key=Value. Route through the KV path
+  // instead of silently rewriting it as JSON.
+  if (fmt === 'json') {
+    const trimmed = (origText || '').trim();
+    if (trimmed && trimmed[0] !== '{' && trimmed[0] !== '[') {
+      const kvData = _tryParseEntryKeyValue(entry);
+      if (kvData) return _applySchemaKeyValue(entry, editedLines, schema, origText);
+    }
   }
 
   const data = _tryParseEntryData(entry);
@@ -11261,23 +11554,50 @@ function _applySchemaKeyValue(entry, editedLines, schema, origText) {
     lineIdx += lc;
   }
 
-  // Replace values in original text, consuming matches in order
-  const lines = origText.split('\n');
-  const consumed = new Set();
-  for (const nv of newVals) {
-    const key = nv.path;
-    for (let i = 0; i < lines.length; i++) {
-      if (consumed.has(i)) continue;
-      const eqIdx = lines[i].indexOf('=');
-      if (eqIdx > 0 && lines[i].substring(0, eqIdx).trim() === key) {
-        lines[i] = lines[i].substring(0, eqIdx + 1) + nv.value;
-        consumed.add(i);
-        break;
+  // Walk raw lines, replacing each matched KV block (the '=' line plus any
+  // continuation lines) with the new value. Embedded '\n' in the new value
+  // becomes extra continuation lines, so a shorter edit trims the block and
+  // a longer one extends it — no orphan tail left behind.
+  const sectionRe = /^\s*\[([^\]]+)\]\s*$/;
+  const commentRe = /^\s*[;#]/;
+  const rawLines = origText.split('\n');
+  const result = [];
+  const used = new Set();
+  let i = 0;
+  while (i < rawLines.length) {
+    const line = rawLines[i];
+    const eqIdx = line.indexOf('=');
+    if (eqIdx > 0 && !sectionRe.test(line)) {
+      const key = line.substring(0, eqIdx).trim();
+      let matchIdx = -1;
+      for (let j = 0; j < newVals.length; j++) {
+        if (!used.has(j) && newVals[j].path === key) { matchIdx = j; break; }
+      }
+      if (matchIdx >= 0) {
+        used.add(matchIdx);
+        // Find the extent of this KV block (continuation lines follow)
+        let end = i;
+        for (let k = i + 1; k < rawLines.length; k++) {
+          const nl = rawLines[k];
+          if (nl.length === 0) break;
+          if (sectionRe.test(nl)) break;
+          if (commentRe.test(nl)) break;
+          if (nl.indexOf('=') > 0) break;
+          end = k;
+        }
+        const prefix = line.substring(0, eqIdx + 1);
+        const valueLines = newVals[matchIdx].value.split('\n');
+        result.push(prefix + valueLines[0]);
+        for (let vi = 1; vi < valueLines.length; vi++) result.push(valueLines[vi]);
+        i = end + 1;
+        continue;
       }
     }
+    result.push(line);
+    i++;
   }
 
-  entry.text = lines;
+  entry.text = result;
   return true;
 }
 
@@ -11348,20 +11668,25 @@ function showSchemaModal() {
   const defaultPaths = state.appMode === 'ishin' ? ['text'] : [];
   const selectedPaths = new Set(currentSchema ? currentSchema.textPaths : defaultPaths);
 
-  // Key=Value / CSV: auto-select all string fields (except _section) when no schema saved yet
+  // Key=Value / CSV: auto-select all string fields (except _section) when no schema saved yet.
+  // For multi-section .int files, merge keys from ALL sections so schemas created
+  // from the first section's sample don't silently drop keys that live only in
+  // later sections.
   const parseAs = parseTypeEl ? parseTypeEl.value : 'auto';
-  if ((parseAs === 'keyvalue' || parseAs === 'csv') && selectedPaths.size === 0 && sample) {
-    for (const k of Object.keys(sample)) {
+  const mergedSample = _getMergedSchemaSample() || sample;
+  if ((parseAs === 'keyvalue' || parseAs === 'csv') && selectedPaths.size === 0 && mergedSample) {
+    for (const k of Object.keys(mergedSample)) {
       if (k === '_section') continue;
-      if (typeof sample[k] === 'string') selectedPaths.add(k);
+      if (typeof mergedSample[k] === 'string') selectedPaths.add(k);
     }
   }
 
   treeEl.innerHTML = '';
   const searchEl = document.getElementById('schema-search');
   if (searchEl) { searchEl.value = ''; }
-  if (sample && typeof sample === 'object') {
-    renderSchemaNode(treeEl, sample, '', selectedPaths, 0);
+  const treeSample = (parseAs === 'keyvalue' || parseAs === 'csv') ? mergedSample : sample;
+  if (treeSample && typeof treeSample === 'object') {
+    renderSchemaNode(treeEl, treeSample, '', selectedPaths, 0);
   } else {
     treeEl.innerHTML = '<div style="padding:8px;color:var(--text-muted);font-size:12px;">Структурованих даних не знайдено. Використовуйте regex-схеми вище.</div>';
   }
@@ -11384,10 +11709,19 @@ function hideSchemaModal() {
   document.getElementById('schema-modal').classList.add('hidden');
 }
 
+// Cap the number of nodes rendered per object level. Flat localisation JSONs
+// can have tens of thousands of string keys; building 10+ DOM elements for
+// each one freezes the modal. Schema tree is still searchable, and the user
+// rarely picks individual strings on such files — they use auto-select or
+// just the search box. The cap doesn't affect what's selectable on Apply.
+const SCHEMA_RENDER_CAP = 500;
+
 function renderSchemaNode(container, obj, parentPath, selectedPaths, depth) {
   if (!obj || typeof obj !== 'object') return;
 
-  const keys = Object.keys(obj);
+  const allKeys = Object.keys(obj);
+  const truncated = allKeys.length > SCHEMA_RENDER_CAP;
+  const keys = truncated ? allKeys.slice(0, SCHEMA_RENDER_CAP) : allKeys;
   for (const key of keys) {
     const val = obj[key];
     const fullPath = parentPath ? parentPath + '.' + key : key;
@@ -11462,6 +11796,13 @@ function renderSchemaNode(container, obj, parentPath, selectedPaths, depth) {
         toggle.textContent = collapsed ? '\u25B8' : '\u25BE';
       });
     }
+  }
+  if (truncated) {
+    const note = document.createElement('div');
+    note.className = 'schema-node schema-truncated-note';
+    note.style.cssText = 'opacity:0.7;font-style:italic;padding-left:24px;font-size:11px;color:var(--text-muted);';
+    note.textContent = `\u2026 \u0449\u0435 ${allKeys.length - SCHEMA_RENDER_CAP} \u043A\u043B\u044E\u0447\u0456\u0432 \u043F\u0440\u0438\u0445\u043E\u0432\u0430\u043D\u043E (\u043F\u043E\u043A\u0430\u0437\u0430\u043D\u043E \u043F\u0435\u0440\u0448\u0456 ${SCHEMA_RENDER_CAP}). \u0412\u0438\u043A\u043E\u0440\u0438\u0441\u0442\u043E\u0432\u0443\u0439\u0442\u0435 \u043F\u043E\u0448\u0443\u043A \u0432\u0438\u0449\u0435.`;
+    container.appendChild(note);
   }
 }
 
@@ -11809,10 +12150,37 @@ function _setupCustomSchemaUI() {
   });
 
   document.getElementById('schema-custom-apply-btn').addEventListener('click', () => {
-    const csIdx = parseInt(document.getElementById('schema-custom-select').value, 10);
-    if (isNaN(csIdx) || csIdx < 0) return;
+    const rawVal = document.getElementById('schema-custom-select').value;
+    const csIdx = rawVal === '' ? -1 : parseInt(rawVal, 10);
     const keys = _getSchemaTargetKeys();
     if (keys.length === 0) return;
+
+    // "— не обрано —" → drop customSchemaIdx from selected files. Keep any
+    // existing textPaths so switching back to the built-in tree doesn't lose
+    // the prior selection. If nothing is left, mark as noSchema so auto-match
+    // by structure signature stays disabled.
+    if (csIdx < 0 || isNaN(csIdx)) {
+      for (const key of keys) {
+        const entry = state.settings.file_schemas[key];
+        if (!entry) continue;
+        delete entry.customSchemaIdx;
+        if ((!Array.isArray(entry.textPaths) || entry.textPaths.length === 0) && !entry.parseAs) {
+          state.settings.file_schemas[key] = { textPaths: [], noSchema: true };
+        }
+      }
+      saveSettings(state.settings);
+      for (const e of state.entries) e._progressCache = null;
+      updateProgress();
+      updateMeta();
+      forceVirtualRender();
+      hideSchemaModal();
+      loadEditor();
+      updateSchemaViewButton();
+      const countMsg = keys.length > 1 ? ` (${keys.length} файлів)` : '';
+      setStatus(`Знято regex-схему${countMsg}`);
+      return;
+    }
+
     const sample = _getSchemaSampleObject();
     const sig = sample ? _computeStructureSignature(sample, 0) : null;
     for (const key of keys) {
@@ -11859,6 +12227,22 @@ async function showStatsModal() {
     }
   } catch (_) {
     s = calculateExtendedStatsSync();
+  }
+  // Worker doesn't know about entry tags — compute editing stats on main thread
+  if (s && s.editedLines === undefined) {
+    let editedFiles = 0, editedLines = 0;
+    for (const entry of state.entries) {
+      const tagData = getEntryTagData(entry);
+      if (tagData.tag === 'edited') {
+        editedFiles++;
+        const lines = getTextLinesForEntry(entry);
+        editedLines += lines.filter(l => l.trim()).length;
+      }
+    }
+    const editPct = s.totalLines > 0 ? (editedLines / s.totalLines * 100) : 0;
+    s.editedFiles = editedFiles;
+    s.editedLines = editedLines;
+    s.editPct = editPct;
   }
   _applyStatsToModal(s);
 }
@@ -13011,31 +13395,15 @@ function setupKeyboard() {
     }
   });
 
-  // ── Win+V clipboard history: detect clipboard change when window regains focus ──
-  // Windows updates the clipboard AFTER focus returns to the app, so we poll
-  // a few times with short delays to catch the update reliably.
-  let _clipSnapshotBeforeBlur = '';
-  let _blurTimestamp = 0;
-  ipcRenderer.on('win:blur', () => {
-    _clipSnapshotBeforeBlur = clipboard.readText() || '';
-    _blurTimestamp = Date.now();
-  });
-  ipcRenderer.on('win:focus', () => {
-    const elapsed = Date.now() - _blurTimestamp;
-    if (!_blurTimestamp || elapsed > 5000) return;
-    const snap = _clipSnapshotBeforeBlur;
-    let attempts = 0;
-    const poll = () => {
-      const now = clipboard.readText() || '';
-      if (now && now !== snap) {
-        pasteTextIntoActive(now);
-      } else if (++attempts < 10) {
-        setTimeout(poll, 100);
-      }
-    };
-    setTimeout(poll, 80);
-  });
+  // NOTE: previously we had a win:focus handler that polled the clipboard
+  // after the app regained focus and auto-pasted any detected change. The
+  // intent was to support Win+V clipboard history, but it also misfired on
+  // the very common flow "copy in another app → click back into editor",
+  // pasting at the click target. Removed — Ctrl+V and the native `paste`
+  // event above cover both normal paste and Win+V (Windows synthesizes a
+  // paste event when an item is picked from the history popup).
 
+  // Kept in case other call sites reuse it.
   function pasteTextIntoActive(text) {
     const el = document.activeElement;
     if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
@@ -13080,6 +13448,7 @@ function setupIPC() {
       case 'save-file':     await saveFile(); break;
       case 'save-file-as':  await saveFileAs(); break;
       case 'save-all':      await saveAll(); break;
+      case 'close-all':     await closeAllFiles(); break;
       case 'migrate-file':  showMigrateModal('file'); break;
       case 'migrate-dir':   showMigrateModal('dir'); break;
       case 'toggle-bookmark':  toggleEntryBookmark(); break;
@@ -13169,6 +13538,21 @@ function setupEventListeners() {
   });
   document.getElementById('search-match-next').addEventListener('click', () => searchHighlightNext());
   document.getElementById('search-match-prev').addEventListener('click', () => searchHighlightPrev());
+
+  const caseBtn = document.getElementById('search-case');
+  if (caseBtn) {
+    _searchCaseSensitive = state.settings.search_case_sensitive === true;
+    caseBtn.classList.toggle('active', _searchCaseSensitive);
+    caseBtn.setAttribute('aria-pressed', _searchCaseSensitive ? 'true' : 'false');
+    caseBtn.addEventListener('click', () => {
+      _searchCaseSensitive = !_searchCaseSensitive;
+      caseBtn.classList.toggle('active', _searchCaseSensitive);
+      caseBtn.setAttribute('aria-pressed', _searchCaseSensitive ? 'true' : 'false');
+      state.settings.search_case_sensitive = _searchCaseSensitive;
+      saveSettings(state.settings);
+      if (dom.searchInput.value) refreshList();
+    });
+  }
 
   // Status filter buttons
   for (const btn of document.querySelectorAll('.sf-btn')) {
@@ -13479,6 +13863,8 @@ function init() {
       startRecoveryTimer();
       checkRecoveryOnStartup();
       sendDictToWorker();
+      setupUpdateModal();
+      checkForUpdatesOnStartup();
 
       // ── Done — dismiss loading screen ──
       const ls = document.getElementById('loading-screen');
@@ -13488,6 +13874,136 @@ function init() {
       }
     }, 0);
   });
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Auto-update (portable .exe)
+// ═══════════════════════════════════════════════════════════
+
+let _updateInfo = null;
+
+function setupUpdateModal() {
+  document.getElementById('update-close').addEventListener('click', hideUpdateModal);
+  document.getElementById('update-later').addEventListener('click', () => {
+    // Remember dismissed version so we don't nag until a newer one ships
+    if (_updateInfo && _updateInfo.latest) {
+      state.settings.update_dismissed_version = _updateInfo.latest;
+      saveSettings(state.settings);
+    }
+    hideUpdateModal();
+  });
+  document.getElementById('update-open-page').addEventListener('click', () => {
+    if (_updateInfo && _updateInfo.releaseUrl) {
+      ipcRenderer.invoke('app:open-external', _updateInfo.releaseUrl);
+    }
+  });
+  document.getElementById('update-install').addEventListener('click', () => {
+    runUpdateFlow();
+  });
+}
+
+async function checkForUpdatesOnStartup() {
+  // Only check in packaged build — pointless in dev
+  try {
+    const info = await ipcRenderer.invoke('app:get-exe-info');
+    if (!info || !info.isPackaged) return;
+    // Wait a moment so the check doesn't compete with initial UI work
+    setTimeout(async () => {
+      const result = await ipcRenderer.invoke('app:check-update');
+      if (!result || !result.ok || !result.hasUpdate) return;
+      // Skip if user already dismissed this exact version
+      if (state.settings.update_dismissed_version === result.latest) return;
+      _updateInfo = Object.assign({}, result, { isPortable: info.isPortable });
+      showUpdateModal();
+    }, 3000);
+  } catch (_) {}
+}
+
+function showUpdateModal() {
+  if (!_updateInfo) return;
+  document.getElementById('update-current').textContent = _updateInfo.current || '—';
+  document.getElementById('update-latest').textContent = _updateInfo.latest || '—';
+  const sizeEl = document.getElementById('update-size');
+  if (_updateInfo.assetSize) {
+    sizeEl.textContent = `Розмір: ${(_updateInfo.assetSize / (1024 * 1024)).toFixed(1)} МБ`;
+  } else {
+    sizeEl.textContent = '';
+  }
+  const notesEl = document.getElementById('update-notes');
+  notesEl.textContent = _updateInfo.releaseNotes || '(без приміток)';
+  document.getElementById('update-progress').classList.add('hidden');
+  document.getElementById('update-error').classList.add('hidden');
+  const installBtn = document.getElementById('update-install');
+  installBtn.disabled = false;
+  if (!_updateInfo.assetUrl) {
+    installBtn.disabled = true;
+    installBtn.title = 'У релізі відсутній portable .exe';
+  } else if (!_updateInfo.isPortable) {
+    installBtn.disabled = true;
+    installBtn.title = 'Авто-оновлення доступне лише для portable-версії';
+  } else {
+    installBtn.title = '';
+  }
+
+  document.getElementById('update-overlay').classList.remove('hidden');
+  document.getElementById('update-modal').classList.remove('hidden');
+}
+
+function hideUpdateModal() {
+  document.getElementById('update-overlay').classList.add('hidden');
+  document.getElementById('update-modal').classList.add('hidden');
+}
+
+async function runUpdateFlow() {
+  if (!_updateInfo || !_updateInfo.assetUrl) return;
+  const installBtn = document.getElementById('update-install');
+  const laterBtn = document.getElementById('update-later');
+  const errEl = document.getElementById('update-error');
+  const progress = document.getElementById('update-progress');
+  const progressLabel = document.getElementById('update-progress-label');
+  const progressBar = document.getElementById('update-progress-bar');
+
+  errEl.classList.add('hidden');
+  installBtn.disabled = true;
+  laterBtn.disabled = true;
+  progress.classList.remove('hidden');
+
+  // 1. Save dirty editor + dirty entries (only when we can save silently —
+  // we don't want to prompt for "Save As" location during an update flow)
+  progressLabel.textContent = 'Збереження змін…';
+  progressBar.style.width = '15%';
+  try {
+    if (state.currentIndex >= 0 && typeof editorDirty === 'function' && editorDirty()) {
+      if (typeof applyChanges === 'function') await applyChanges();
+    }
+    const hasDirty = state.entries.some(e => e.dirty);
+    const canSaveSilently = hasDirty && (
+      state.appMode === 'other' ||
+      state.appMode === 'jojo' ||
+      !!state.filePath
+    );
+    if (canSaveSilently && typeof saveAll === 'function') {
+      await saveAll();
+    }
+  } catch (e) {
+    console.warn('save before update failed:', e);
+  }
+
+  // 2. Hand off to main process for download + replace + relaunch
+  progressLabel.textContent = 'Завантаження нової версії…';
+  progressBar.style.width = '55%';
+  const res = await ipcRenderer.invoke('app:download-and-update', _updateInfo.assetUrl);
+  if (res && res.ok) {
+    progressLabel.textContent = 'Перезапуск…';
+    progressBar.style.width = '100%';
+    // The main process will quit the app shortly; nothing to do here.
+  } else {
+    errEl.textContent = `Не вдалося оновити: ${res && res.error ? res.error : 'невідома помилка'}`;
+    errEl.classList.remove('hidden');
+    progress.classList.add('hidden');
+    installBtn.disabled = false;
+    laterBtn.disabled = false;
+  }
 }
 
 document.addEventListener('DOMContentLoaded', init);
