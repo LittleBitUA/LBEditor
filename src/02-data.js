@@ -25,7 +25,7 @@ const DEFAULT_SETTINGS = {
   progress_games_path: '',
   progress_game_id: '',
   progress_code_words: '',
-  other_extensions: '.txt .int .json .csv .xlsx .xls .ods .tsv',
+  other_extensions: '.txt .int .json .csv .xlsx .xls .ods .tsv .srt',
   csv_formats: {}, // { filePath_or_ext: { delimiter, quoting, hasHeaders, encoding } }
   power_warning_enabled: true,
   power_schedule: null, // { 0: Array(48), ..., 6: Array(48) } — per day, half-hour slots
@@ -197,6 +197,12 @@ class Entry {
     this._cachedFlatNoSep = null;
     this._progressCache = null;
     this._parsedCache = undefined;
+    this._formatCache = undefined;
+    this._effPathsCache = undefined;
+    this._effPathsCacheVer = undefined;
+    this._schemaCache = undefined;
+    this._schemaCacheVer = undefined;
+    this._searchCache = undefined;
   }
 
   visibleSpeakers() { return this.speakers.filter(s => !isSystemSpeaker(s)); }
@@ -338,6 +344,12 @@ class TxtEntry {
     this._cachedFlat = null;
     this._progressCache = null;
     this._parsedCache = undefined;
+    this._formatCache = undefined;
+    this._effPathsCache = undefined;
+    this._effPathsCacheVer = undefined;
+    this._schemaCache = undefined;
+    this._schemaCacheVer = undefined;
+    this._searchCache = undefined;
   }
 
   toFlat() {
@@ -398,6 +410,12 @@ class JoJoEntry {
     this._searchIndex = null;
     this._progressCache = null;
     this._parsedCache = undefined;
+    this._formatCache = undefined;
+    this._effPathsCache = undefined;
+    this._effPathsCacheVer = undefined;
+    this._schemaCache = undefined;
+    this._schemaCacheVer = undefined;
+    this._searchCache = undefined;
   }
 
   toFlat() {

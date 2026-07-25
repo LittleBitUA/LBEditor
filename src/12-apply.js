@@ -15,8 +15,15 @@ async function applyChanges() {
       // Schema apply failed — keep schema view + user's edits intact so work isn't lost.
       // User can toggle schema view off manually to inspect/recover if needed.
       setStatus('⚠ Помилка схеми — зміни НЕ застосовано. Перевірте структуру файлу або вимкніть режим схеми.');
+      // SRT fails for exactly one reason worth naming: the number of
+      // blank-line-separated blocks no longer matches the number of субтитрів.
+      const srtHint = _detectEntryFormat(entry) === 'srt'
+        ? '\n\nSRT: кількість блоків не збігається з кількістю субтитрів. ' +
+          'Порожні рядки розділяють субтитри — не додавайте й не видаляйте їх ' +
+          '(рядки всередині блоку змінювати можна).'
+        : '';
       await showInfo('Помилка схеми',
-        'Не вдалося застосувати зміни у режимі схеми.\n\n' +
+        'Не вдалося застосувати зміни у режимі схеми.' + srtHint + '\n\n' +
         'Ваші правки збережено в редакторі. Спробуйте:\n' +
         '• Вимкнути режим схеми (кнопка у панелі) і зберегти повний текст вручну, або\n' +
         '• Перевірити структуру файлу/схеми та повторити.');
@@ -180,10 +187,15 @@ function silentApply() {
     const editedLines = _monacoFlat.getValue().split('\n');
     if (applySchemaLinesToEntry(entry, editedLines)) {
       entry._invalidateCaches();
+      entry._schemaApplyFailed = false;
       _schemaViewOrigText = getTextLinesForEntry(entry).join('\n');
     } else {
-      // Schema apply failed silently — just skip, don't change global state
-      // The editor still has the user's edits, they just aren't synced to entry.text
+      // Schema apply failed: edits stay in the editor but DON'T flow to
+      // entry.text. Mark the entry so the autosave/recovery snapshot knows
+      // the on-disk version is stale and the dirty visual stays correct.
+      // The next manual applyChanges() will show the schema-error dialog.
+      entry._schemaApplyFailed = true;
+      setStatus('⚠ Зміни у схема-режимі не застосовано (структура не співпадає) — скористайтесь повним файлом');
     }
     updateVisibleEntry(entry.index);
     updateMeta();

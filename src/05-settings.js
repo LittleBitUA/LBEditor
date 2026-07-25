@@ -37,6 +37,10 @@ function loadSettings() {
     }
   }
   if (result.power_warning_enabled === undefined) result.power_warning_enabled = true;
+  // .srt was added after 1.4.0 — top it up for settings saved before that
+  if (typeof result.other_extensions === 'string' && !/\.srt\b/i.test(result.other_extensions)) {
+    result.other_extensions = (result.other_extensions.trim() + ' .srt').trim();
+  }
   if (!result.custom_themes || typeof result.custom_themes !== 'object') result.custom_themes = {};
   if (!result.file_schemas || typeof result.file_schemas !== 'object') result.file_schemas = {};
   if (!Array.isArray(result.custom_schemas)) result.custom_schemas = [];

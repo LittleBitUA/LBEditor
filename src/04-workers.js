@@ -31,6 +31,10 @@ function initHighlightWorker() {
     _highlightWorker.on('error', (err) => {
       console.error('Highlight worker crashed:', err);
       _highlightWorkerReady = false;
+      // Drop any in-flight requests so the Map doesn't leak forever; callers
+      // already tolerate a missing response (the spell/glossary highlight
+      // simply doesn't appear until the next edit).
+      if (typeof _pendingHighlight !== 'undefined') _pendingHighlight.clear();
     });
   } catch (e) {
     console.error('Failed to create highlight worker:', e);

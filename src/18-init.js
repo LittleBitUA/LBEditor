@@ -300,7 +300,7 @@ function setupKeyboard() {
     }
 
     // Ctrl+W — close current entry tab
-    if (code === 'KeyW' && !e.shiftKey && _openTabs.length > 0) {
+    if (code === 'KeyW' && !e.shiftKey && _openTabs.length > 0 && state.currentIndex >= 0) {
       e.preventDefault(); e.stopPropagation();
       closeEntryTab(state.currentIndex);
       return;

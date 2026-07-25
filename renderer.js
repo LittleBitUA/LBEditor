@@ -178,7 +178,10 @@ async function initMonacoEditors() {
       }
       _prevUndoLine = line;
       updateCursorPosition();
-      scheduleDecorationUpdate();
+      // Decorations (bookmarks, modified-line strip) don't depend on cursor —
+      // only on the document content / bookmark state. Rescheduling them on
+      // every arrow-key tap meant full-document scans for nothing. We refresh
+      // them from onDidChangeModelContent and from loadEditor / toggleBookmark.
     });
     ed.onDidFocusEditorWidget(() => { _lastFocusedEditor = ed; });
     if (typeof setupEditorGlossaryHover === 'function') setupEditorGlossaryHover(ed);
@@ -295,7 +298,7 @@ const DEFAULT_SETTINGS = {
   progress_games_path: '',
   progress_game_id: '',
   progress_code_words: '',
-  other_extensions: '.txt .int .json .csv .xlsx .xls .ods .tsv',
+  other_extensions: '.txt .int .json .csv .xlsx .xls .ods .tsv .srt',
   csv_formats: {}, // { filePath_or_ext: { delimiter, quoting, hasHeaders, encoding } }
   power_warning_enabled: true,
   power_schedule: null, // { 0: Array(48), ..., 6: Array(48) } — per day, half-hour slots
@@ -467,6 +470,12 @@ class Entry {
     this._cachedFlatNoSep = null;
     this._progressCache = null;
     this._parsedCache = undefined;
+    this._formatCache = undefined;
+    this._effPathsCache = undefined;
+    this._effPathsCacheVer = undefined;
+    this._schemaCache = undefined;
+    this._schemaCacheVer = undefined;
+    this._searchCache = undefined;
   }
 
   visibleSpeakers() { return this.speakers.filter(s => !isSystemSpeaker(s)); }
@@ -608,6 +617,12 @@ class TxtEntry {
     this._cachedFlat = null;
     this._progressCache = null;
     this._parsedCache = undefined;
+    this._formatCache = undefined;
+    this._effPathsCache = undefined;
+    this._effPathsCacheVer = undefined;
+    this._schemaCache = undefined;
+    this._schemaCacheVer = undefined;
+    this._searchCache = undefined;
   }
 
   toFlat() {
@@ -668,6 +683,12 @@ class JoJoEntry {
     this._searchIndex = null;
     this._progressCache = null;
     this._parsedCache = undefined;
+    this._formatCache = undefined;
+    this._effPathsCache = undefined;
+    this._effPathsCacheVer = undefined;
+    this._schemaCache = undefined;
+    this._schemaCacheVer = undefined;
+    this._searchCache = undefined;
   }
 
   toFlat() {
@@ -816,6 +837,11 @@ async function closeAllFiles() {
   state.txtDirPath = '';
   state.bookmarks = {};
   clearEntryTabs();
+
+  // Reset per-entry caches/maps that would otherwise leak past close
+  if (typeof _editorViewStates !== 'undefined') _editorViewStates.clear();
+  if (typeof invalidateDupMap === 'function') invalidateDupMap();
+  if (typeof _navHintsCache !== 'undefined') _navHintsCache.clear();
 
   if (_monacoFlat) _monacoFlat.setValue('');
   if (_monacoText) _monacoText.setValue('');
@@ -971,6 +997,10 @@ function initHighlightWorker() {
     _highlightWorker.on('error', (err) => {
       console.error('Highlight worker crashed:', err);
       _highlightWorkerReady = false;
+      // Drop any in-flight requests so the Map doesn't leak forever; callers
+      // already tolerate a missing response (the spell/glossary highlight
+      // simply doesn't appear until the next edit).
+      if (typeof _pendingHighlight !== 'undefined') _pendingHighlight.clear();
     });
   } catch (e) {
     console.error('Failed to create highlight worker:', e);
@@ -1351,6 +1381,10 @@ function loadSettings() {
     }
   }
   if (result.power_warning_enabled === undefined) result.power_warning_enabled = true;
+  // .srt was added after 1.4.0 — top it up for settings saved before that
+  if (typeof result.other_extensions === 'string' && !/\.srt\b/i.test(result.other_extensions)) {
+    result.other_extensions = (result.other_extensions.trim() + ' .srt').trim();
+  }
   if (!result.custom_themes || typeof result.custom_themes !== 'object') result.custom_themes = {};
   if (!result.file_schemas || typeof result.file_schemas !== 'object') result.file_schemas = {};
   if (!Array.isArray(result.custom_schemas)) result.custom_schemas = [];
@@ -4416,7 +4450,7 @@ function setupMigrateModal() {
 
 function entryMatchesFilter(entry, filt) {
   if (_searchCaseSensitive) {
-    const textStr = Array.isArray(entry.text) ? entry.text.join('\n') : (entry.text || '');
+    const textStr = _getEntrySearchCache(entry).textStr;
     if (textStr.includes(filt)) return true;
     if (entry.file && entry.file.includes(filt)) return true;
     if (entry.speakers) {
@@ -4428,8 +4462,9 @@ function entryMatchesFilter(entry, filt) {
 }
 
 function getEntryMatchSnippet(entry, filt) {
-  const textStr = Array.isArray(entry.text) ? entry.text.join('\n') : entry.text;
-  const hay = _searchCaseSensitive ? textStr : textStr.toLowerCase();
+  const cache = _getEntrySearchCache(entry);
+  const textStr = cache.textStr;
+  const hay = _searchCaseSensitive ? textStr : cache.textLower;
   const pos = hay.indexOf(filt);
   if (pos < 0) return null;
   // Find the line containing the match
@@ -4447,18 +4482,33 @@ function getEntryMatchSnippet(entry, filt) {
   return line;
 }
 
-// Return ALL matching lines (one per unique line) for expanded search results
-function getEntryAllMatchLines(entry, filt) {
-  const textStr = Array.isArray(entry.text) ? entry.text.join('\n') : entry.text;
-  const hay = _searchCaseSensitive ? textStr : textStr.toLowerCase();
-  const results = [];
-  const seenLineStarts = new Set();
-  // Precompute newline offsets so we can convert an offset \u2192 line number in
-  // O(log n) instead of rescanning the whole text per match.
+// Lazily built per-entry search cache: joined text, its lowercase, and a
+// flat array of newline offsets. Invalidated alongside _searchIndex etc. via
+// _invalidateCaches (set to undefined to keep the property-shape stable).
+function _getEntrySearchCache(entry) {
+  if (entry._searchCache) return entry._searchCache;
+  const textStr = Array.isArray(entry.text) ? entry.text.join('\n') : (entry.text || '');
+  const textLower = textStr.toLowerCase();
   const newlineOffsets = [-1];
   for (let i = 0; i < textStr.length; i++) {
     if (textStr.charCodeAt(i) === 10) newlineOffsets.push(i);
   }
+  entry._searchCache = { textStr, textLower, newlineOffsets };
+  return entry._searchCache;
+}
+
+// Return ALL matching lines (one per unique line) for expanded search results
+function getEntryAllMatchLines(entry, filt) {
+  // Pull both the joined string and the newline-offset table from the entry's
+  // search cache. Sidebar search invokes this per-entry on every debounced
+  // keystroke; without caching, 5000 entries \u00d7 100 KB each = ~500 MB of string
+  // allocations and full newline scans per character typed.
+  const cache = _getEntrySearchCache(entry);
+  const textStr = cache.textStr;
+  const hay = _searchCaseSensitive ? textStr : cache.textLower;
+  const newlineOffsets = cache.newlineOffsets;
+  const results = [];
+  const seenLineStarts = new Set();
   const lineNoAt = (pos) => {
     let lo = 0, hi = newlineOffsets.length - 1;
     while (lo < hi) {
@@ -4797,7 +4847,7 @@ async function onListItemClick(newIdx, matchOffset) {
   // Save current editor view state (scroll, cursor) before switching
   if (state.currentIndex >= 0 && _monacoReady) {
     const ed = getActiveEditor();
-    if (ed) _editorViewStates.set(state.currentIndex, ed.saveViewState());
+    if (ed) _setEditorViewState(state.entries[state.currentIndex], ed.saveViewState());
   }
 
   if (state.currentIndex >= 0 && editorDirty()) {
@@ -4855,7 +4905,7 @@ async function onListItemDblClick(idx) {
     // Save current editor view state before switching
     if (state.currentIndex >= 0 && _monacoReady) {
       const ed = getActiveEditor();
-      if (ed) _editorViewStates.set(state.currentIndex, ed.saveViewState());
+      if (ed) _setEditorViewState(state.entries[state.currentIndex], ed.saveViewState());
     }
     if (state.currentIndex >= 0 && editorDirty()) {
       if (_previewTabIdx === state.currentIndex) pinCurrentTab();
@@ -5037,8 +5087,21 @@ function _ensureGlossaryRegexMap() {
 
 function findGlossaryMatches(entry) {
   _ensureGlossaryRegexMap();
-  const textStr = Array.isArray(entry.text) ? entry.text.join('\n') : entry.text;
-  const combined = textStr + '\n' + entry.visibleSpeakers().join('\n');
+  // Fast path: the analysis worker has already precomputed which glossary
+  // terms appear in this entry. The cached `names` are the displayed list,
+  // and `count` may be larger when there are more than 4 hits. Either way the
+  // tooltip only needs the first few names, so this is sufficient and avoids
+  // re-allocating a 1+ MB string + 900-regex tests on every mouse hover.
+  const hint = _navHintsCache.get(entry.index);
+  if (hint && Array.isArray(hint.names)) {
+    return hint.names.map(n => [n, state.glossary[n]]).filter(p => p[1] !== undefined);
+  }
+  // Fallback (cold cache or no worker): reuse the lowercase search index
+  // already cached on the entry instead of rebuilding text + speakers per call.
+  const combined = entry.getSearchIndex ? entry.getSearchIndex() : (
+    (Array.isArray(entry.text) ? entry.text.join('\n') : entry.text) + '\n' +
+    (entry.visibleSpeakers ? entry.visibleSpeakers().join('\n') : '')
+  );
   return Object.entries(state.glossary).filter(([orig]) => {
     const re = _glossaryRegexMap.get(orig);
     return re ? re.test(combined) : false;
@@ -5123,7 +5186,29 @@ function applyGlossaryToEntry(entry, orig, trans) {
 let _originalEditorLines = [];
 let _schemaViewActive = true;      // default: show schema text when schema exists
 let _schemaViewOrigText = '';      // original schema text for dirty check
-const _editorViewStates = new Map(); // entry.index → Monaco viewState (scroll, cursor, selections)
+const _editorViewStates = new Map(); // stable entry key → Monaco viewState (scroll, cursor, selections)
+const _EDITOR_VS_LIMIT = 200; // LRU cap so visiting thousands of files doesn't leak viewStates forever
+function _entryViewKey(entry) {
+  if (!entry) return null;
+  // Stable across entries[].splice — entry.index gets re-numbered on removal,
+  // which would otherwise restore wrong cursor/scroll to the wrong file.
+  return entry.filePath || entry.file || `idx:${entry.index}`;
+}
+function _setEditorViewState(entry, vs) {
+  const key = _entryViewKey(entry);
+  if (!key || !vs) return;
+  // re-insert to move to "most recent" end of the Map iteration order
+  if (_editorViewStates.has(key)) _editorViewStates.delete(key);
+  _editorViewStates.set(key, vs);
+  while (_editorViewStates.size > _EDITOR_VS_LIMIT) {
+    const oldest = _editorViewStates.keys().next().value;
+    _editorViewStates.delete(oldest);
+  }
+}
+function _getEditorViewState(entry) {
+  const key = _entryViewKey(entry);
+  return key ? _editorViewStates.get(key) : null;
+}
 // _schemaViewCurrentlyUsed is declared in 01-head.js (needed by getActiveEditor)
 
 function _isSchemaViewApplicable(entry) {
@@ -5284,7 +5369,7 @@ function loadEditor(deferHeavy) {
   state.loadingEditor = false;
 
   // Restore saved view state (scroll, cursor, selections) for this entry
-  const savedVS = _editorViewStates.get(entry.index);
+  const savedVS = _getEditorViewState(entry);
   if (savedVS) {
     const ed = getActiveEditor();
     if (ed) ed.restoreViewState(savedVS);
@@ -5586,8 +5671,15 @@ async function applyChanges() {
       // Schema apply failed — keep schema view + user's edits intact so work isn't lost.
       // User can toggle schema view off manually to inspect/recover if needed.
       setStatus('⚠ Помилка схеми — зміни НЕ застосовано. Перевірте структуру файлу або вимкніть режим схеми.');
+      // SRT fails for exactly one reason worth naming: the number of
+      // blank-line-separated blocks no longer matches the number of субтитрів.
+      const srtHint = _detectEntryFormat(entry) === 'srt'
+        ? '\n\nSRT: кількість блоків не збігається з кількістю субтитрів. ' +
+          'Порожні рядки розділяють субтитри — не додавайте й не видаляйте їх ' +
+          '(рядки всередині блоку змінювати можна).'
+        : '';
       await showInfo('Помилка схеми',
-        'Не вдалося застосувати зміни у режимі схеми.\n\n' +
+        'Не вдалося застосувати зміни у режимі схеми.' + srtHint + '\n\n' +
         'Ваші правки збережено в редакторі. Спробуйте:\n' +
         '• Вимкнути режим схеми (кнопка у панелі) і зберегти повний текст вручну, або\n' +
         '• Перевірити структуру файлу/схеми та повторити.');
@@ -5751,10 +5843,15 @@ function silentApply() {
     const editedLines = _monacoFlat.getValue().split('\n');
     if (applySchemaLinesToEntry(entry, editedLines)) {
       entry._invalidateCaches();
+      entry._schemaApplyFailed = false;
       _schemaViewOrigText = getTextLinesForEntry(entry).join('\n');
     } else {
-      // Schema apply failed silently — just skip, don't change global state
-      // The editor still has the user's edits, they just aren't synced to entry.text
+      // Schema apply failed: edits stay in the editor but DON'T flow to
+      // entry.text. Mark the entry so the autosave/recovery snapshot knows
+      // the on-disk version is stale and the dirty visual stays correct.
+      // The next manual applyChanges() will show the schema-error dialog.
+      entry._schemaApplyFailed = true;
+      setStatus('⚠ Зміни у схема-режимі не застосовано (структура не співпадає) — скористайтесь повним файлом');
     }
     updateVisibleEntry(entry.index);
     updateMeta();
@@ -7265,6 +7362,7 @@ async function writeJson(filePath, silent = false) {
   }
 
   for (const e of state.entries) e.markSaved();
+  invalidateDupMap();
   forceVirtualRender();
   updateMeta();
   updateProgress();
@@ -7473,6 +7571,7 @@ async function saveTxtSingleEntry(entry) {
   }
   fs.renameSync(tmpPath, entry.filePath);
   entry.markSaved();
+  invalidateDupMap();
 }
 
 async function saveTxtFiles(silent = false) {
@@ -7489,6 +7588,7 @@ async function saveTxtFiles(silent = false) {
       errs.push(`${entry.file}: ${e.message}`);
     }
   }
+  invalidateDupMap();
 
   forceVirtualRender();
   updateMeta();
@@ -7577,6 +7677,7 @@ async function saveJoJoJson(silent = false) {
   }
 
   for (const e of state.entries) e.markSaved();
+  invalidateDupMap();
   forceVirtualRender();
   updateMeta();
   updateProgress();
@@ -8728,6 +8829,10 @@ function removeEntryFromList(idx) {
     state.entries[i].index = i;
   }
 
+  // Maps keyed by old indices would now target the wrong entry post-reindex
+  if (typeof invalidateDupMap === 'function') invalidateDupMap();
+  if (typeof _navHintsCache !== 'undefined') _navHintsCache.clear();
+
   // Remove tab directly (don't use closeEntryTab — it may trigger
   // onListItemClick → applyChanges which would corrupt the next entry
   // since state.entries has already been spliced)
@@ -9066,19 +9171,35 @@ function onEditorMouseUp(e, editor) {
 
 let glossCloudState = { editor: null, start: 0, end: 0, term: '', trans: '' };
 
-function findGlossTermAtCursor(text, pos) {
+// Cached combined-OR regex over all glossary terms — recompiled only when the
+// glossary keys actually change. Previously this ran on every mouse-up in
+// Monaco, allocating a 900-alternative regex each time.
+let _glossCursorRegex = null;
+let _glossCursorRegexVersion = '';
+let _glossCursorLowerMap = null;
+function _ensureGlossCursorRegex() {
   const terms = Object.keys(state.glossary);
-  if (terms.length === 0) return null;
-
-  const sorted = terms.sort((a, b) => b.length - a.length);
+  const keyStr = terms.join('\x00');
+  if (_glossCursorRegexVersion === keyStr && _glossCursorRegex) return terms;
+  _glossCursorRegexVersion = keyStr;
+  if (terms.length === 0) { _glossCursorRegex = null; _glossCursorLowerMap = null; return terms; }
+  const sorted = terms.slice().sort((a, b) => b.length - a.length);
   const pattern = sorted.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  const regex = new RegExp(pattern, 'gi');
+  _glossCursorRegex = new RegExp(pattern, 'gi');
+  _glossCursorLowerMap = new Map();
+  for (const t of terms) _glossCursorLowerMap.set(t.toLowerCase(), t);
+  return terms;
+}
 
+function findGlossTermAtCursor(text, pos) {
+  const terms = _ensureGlossCursorRegex();
+  if (!_glossCursorRegex) return null;
+  _glossCursorRegex.lastIndex = 0;
   let match;
-  while ((match = regex.exec(text)) !== null) {
+  while ((match = _glossCursorRegex.exec(text)) !== null) {
     if (pos >= match.index && pos <= match.index + match[0].length) {
       const matchedText = match[0];
-      const glossKey = terms.find(t => t.toLowerCase() === matchedText.toLowerCase());
+      const glossKey = _glossCursorLowerMap.get(matchedText.toLowerCase());
       return {
         term: matchedText,
         trans: glossKey ? state.glossary[glossKey] : undefined,
@@ -10735,7 +10856,29 @@ function _findSchemaByStructure(entry) {
   return null;
 }
 
+// Bumped any time something in state.settings.file_schemas / custom_schemas
+// changes meaning. Per-entry caches keyed by this version are invalidated for
+// free on bump — way cheaper than recomputing for every getFileSchema call.
+let _schemaVersion = 0;
+function bumpSchemaVersion() { _schemaVersion++; }
+
 function getFileSchema(entry) {
+  // Cached resolution per entry — `getFileSchema` is called several times per
+  // entry switch (button visibility, lines extraction, dirty check, ...). With
+  // 100+ saved schemas the structure-signature fallback below is the slowest
+  // path; memoise it.
+  if (entry && entry._schemaCache && entry._schemaCacheVer === _schemaVersion) {
+    return entry._schemaCache;
+  }
+  const resolved = _resolveFileSchema(entry);
+  if (entry) {
+    entry._schemaCache = resolved;
+    entry._schemaCacheVer = _schemaVersion;
+  }
+  return resolved;
+}
+
+function _resolveFileSchema(entry) {
   // Per-file schema (for "other" mode with mixed file structures)
   if (entry && entry.filePath) {
     const s = state.settings.file_schemas[entry.filePath];
@@ -10784,6 +10927,7 @@ function saveFileSchema(textPaths, parseAs) {
     }
   }
   saveSettings(state.settings);
+  bumpSchemaVersion();
   for (const e of state.entries) e._progressCache = null;
   updateProgress();
   updateMeta();
@@ -11048,6 +11192,121 @@ function _tryParseEntryCsv(entry) {
   return objects;
 }
 
+// ── SRT subtitles ────────────────────────────────────────────
+// Built-in schema: the editor shows only the spoken lines, one cue per block,
+// blocks separated by a blank line. Counter + timecode lines stay in the file
+// and are re-attached on write-back, so they can't be broken by a translator.
+
+const SRT_TIME_RE = /^\s*-?\d{1,4}:\d{1,2}:\d{1,2}[,.]\d{1,3}\s*-->\s*-?\d{1,4}:\d{1,2}:\d{1,2}[,.]\d{1,3}/;
+
+function _srtStrip(line) {
+  return String(line == null ? '' : line).replace(/^\uFEFF/, '').trim();
+}
+
+// A counter line only counts as one when a timecode follows it
+function _isSrtCounter(lines, i) {
+  return /^\d+$/.test(_srtStrip(lines[i])) && i + 1 < lines.length && SRT_TIME_RE.test(lines[i + 1]);
+}
+
+// `raw` is either the full text or an already-split line array. Only the head
+// is scanned — a subtitle file shows its first timecode within a few lines.
+function _looksLikeSrt(raw) {
+  if (!raw) return false;
+  const head = Array.isArray(raw) ? raw.slice(0, 80) : raw.slice(0, 8000).split('\n');
+  for (const l of head) { if (SRT_TIME_RE.test(l)) return true; }
+  return false;
+}
+
+// → [{ num, time, text: [lines] }] or null when the content isn't SRT.
+// `num` is null for files that omit the counter line.
+function _tryParseEntrySrt(entry) {
+  const raw = _getRawTextLines(entry);
+  if (!_looksLikeSrt(raw)) return null;
+  const cues = [];
+  let i = 0;
+  while (i < raw.length) {
+    if (!_srtStrip(raw[i])) { i++; continue; }
+    let num = null;
+    if (_isSrtCounter(raw, i)) { num = raw[i]; i++; }
+    if (!SRT_TIME_RE.test(raw[i])) return null; // stray content — not a clean SRT
+    const time = raw[i];
+    i++;
+    const text = [];
+    while (i < raw.length && _srtStrip(raw[i])) {
+      if (SRT_TIME_RE.test(raw[i]) || _isSrtCounter(raw, i)) break; // next cue, blank line missing
+      text.push(raw[i]);
+      i++;
+    }
+    cues.push({ num, time, text });
+  }
+  return cues.length > 0 ? cues : null;
+}
+
+function _isSrtCueArray(v) {
+  return Array.isArray(v) && v.length > 0 && v[0] &&
+         typeof v[0].time === 'string' && Array.isArray(v[0].text);
+}
+
+// Cues of the current entry, or null if it isn't parseable as SRT.
+// Rides on _parsedCache so a big subtitle file is scanned once per edit.
+function _getSrtCues(entry) {
+  const parsed = _tryParseEntryData(entry);
+  return _isSrtCueArray(parsed) ? parsed : null;
+}
+
+// Editor lines: cue texts, one blank line BETWEEN cues (no trailing blank —
+// that keeps the blank↔cue mapping unambiguous when the edits come back).
+function _srtCuesToLines(cues) {
+  const lines = [];
+  for (let i = 0; i < cues.length; i++) {
+    if (i > 0) lines.push('');
+    for (const t of cues[i].text) lines.push(t);
+  }
+  return lines;
+}
+
+function _srtCuesToFileLines(cues) {
+  const out = [];
+  for (let i = 0; i < cues.length; i++) {
+    if (i > 0) out.push('');
+    if (cues[i].num !== null) out.push(cues[i].num);
+    out.push(cues[i].time);
+    for (const t of cues[i].text) out.push(t);
+  }
+  return out;
+}
+
+function _applySchemaSrt(entry, editedLines) {
+  const cues = _getSrtCues(entry);
+  if (!cues) return false;
+
+  // Split the edited text back into cues on blank lines
+  const groups = [];
+  let cur = [];
+  for (const line of editedLines) {
+    if (!_srtStrip(line)) { groups.push(cur); cur = []; }
+    else cur.push(line);
+  }
+  groups.push(cur);
+  // Trailing blank lines the user (or the editor) left behind aren't extra cues
+  while (groups.length > cues.length && groups[groups.length - 1].length === 0) groups.pop();
+
+  // Refuse rather than guess: a changed block count would shift every
+  // subtitle onto the wrong timecode.
+  if (groups.length !== cues.length) return false;
+
+  for (let i = 0; i < cues.length; i++) cues[i].text = groups[i];
+
+  const raw = _getRawTextLines(entry);
+  let trailing = 0;
+  while (trailing < raw.length && !_srtStrip(raw[raw.length - 1 - trailing])) trailing++;
+  const out = _srtCuesToFileLines(cues);
+  for (let i = 0; i < trailing; i++) out.push('');
+
+  entry.text = (state.appMode === 'jojo') ? out.join('\n') : out;
+  return true;
+}
+
 function _tryParseEntryData(entry) {
   // ishin mode always has entry.data
   if (entry.data && typeof entry.data === 'object') return entry.data;
@@ -11062,12 +11321,14 @@ function _tryParseEntryData(entry) {
   else if (parseAs === 'xml') result = _tryParseEntryXml(entry);
   else if (parseAs === 'keyvalue') result = _tryParseEntryKeyValue(entry);
   else if (parseAs === 'csv') result = _tryParseEntryCsv(entry);
+  else if (parseAs === 'srt') result = _tryParseEntrySrt(entry);
   else {
-    // auto: try JSON first, then XML, then Key=Value, then CSV
+    // auto: try JSON first, then XML, then SRT, then Key=Value, then CSV
     const isCsvFile = entry.filePath && entry.filePath.toLowerCase().endsWith('.csv');
     result = isCsvFile
       ? (_tryParseEntryCsv(entry) || _tryParseEntryJson(entry))
-      : (_tryParseEntryJson(entry) || _tryParseEntryXml(entry) || _tryParseEntryKeyValue(entry) || _tryParseEntryCsv(entry));
+      : (_tryParseEntryJson(entry) || _tryParseEntryXml(entry) || _tryParseEntrySrt(entry) ||
+         _tryParseEntryKeyValue(entry) || _tryParseEntryCsv(entry));
   }
   entry._parsedCache = result;
   return result;
@@ -11184,26 +11445,48 @@ function _extractByRegex(entry, regexStr, group) {
 // view "just works" on .int/.ini/.properties files without the user having to
 // click through the schema modal.
 function _resolveEffectiveTextPaths(entry, schema) {
-  if (schema && Array.isArray(schema.textPaths) && schema.textPaths.length > 0) {
-    return schema.textPaths;
+  // Cached per entry+schema version. For a 10000-section .int the auto-derive
+  // walked every section's keys per call; this function is called 3–5x per
+  // entry switch / save / button update.
+  if (entry && entry._effPathsCache && entry._effPathsCacheVer === _schemaVersion) {
+    return entry._effPathsCache.paths;
   }
-  // Respect explicit opt-out
-  if (schema && schema.noSchema) return null;
-  // Only auto-derive for keyvalue/csv shapes — JSON/XML vary too much to guess
-  const fmt = _detectEntryFormat(entry);
-  if (fmt !== 'keyvalue' && fmt !== 'csv') return null;
-  const parsed = _tryParseEntryData(entry);
-  if (!parsed) return null;
-  const items = Array.isArray(parsed) ? parsed : [parsed];
-  const keys = new Set();
-  for (const item of items) {
-    if (!item || typeof item !== 'object') continue;
-    for (const k of Object.keys(item)) {
-      if (k === '_section') continue;
-      if (typeof item[k] === 'string') keys.add(k);
+  let paths;
+  if (schema && Array.isArray(schema.textPaths) && schema.textPaths.length > 0) {
+    paths = schema.textPaths;
+  } else if (schema && schema.noSchema) {
+    paths = null;
+  } else {
+    const fmt = _detectEntryFormat(entry);
+    if (fmt === 'srt') {
+      // SRT has a built-in schema (cue text only) — the path is nominal, the
+      // real extraction/write-back is handled by the _srt* helpers.
+      paths = _getSrtCues(entry) ? ['text'] : null;
+    } else if (fmt !== 'keyvalue' && fmt !== 'csv') {
+      paths = null;
+    } else {
+      const parsed = _tryParseEntryData(entry);
+      if (!parsed) {
+        paths = null;
+      } else {
+        const items = Array.isArray(parsed) ? parsed : [parsed];
+        const keys = new Set();
+        for (const item of items) {
+          if (!item || typeof item !== 'object') continue;
+          for (const k of Object.keys(item)) {
+            if (k === '_section') continue;
+            if (typeof item[k] === 'string') keys.add(k);
+          }
+        }
+        paths = keys.size > 0 ? [...keys] : null;
+      }
     }
   }
-  return keys.size > 0 ? [...keys] : null;
+  if (entry) {
+    entry._effPathsCache = { paths };
+    entry._effPathsCacheVer = _schemaVersion;
+  }
+  return paths;
 }
 
 function getTextLinesForEntry(entry) {
@@ -11213,6 +11496,12 @@ function getTextLinesForEntry(entry) {
   if (schema && schema.customSchemaIdx != null) {
     const cs = (state.settings.custom_schemas || [])[schema.customSchemaIdx];
     if (cs && cs.regex) return _extractByRegex(entry, cs.regex, cs.group || 1);
+  }
+
+  // SRT built-in schema — cue text only, blank line between cues
+  if (_detectEntryFormat(entry) === 'srt') {
+    const cues = _getSrtCues(entry);
+    if (cues) return _srtCuesToLines(cues);
   }
 
   const textPaths = _resolveEffectiveTextPaths(entry, schema);
@@ -11316,6 +11605,12 @@ function applySchemaLinesToEntry(entry, editedLines) {
     }
   }
 
+  // SRT built-in schema — never fall through to the generic paths below, they
+  // would re-serialize the subtitles as JSON.
+  if (_detectEntryFormat(entry) === 'srt' && _getSrtCues(entry)) {
+    return _applySchemaSrt(entry, editedLines);
+  }
+
   const textPaths = _resolveEffectiveTextPaths(entry, schema);
   if (!textPaths) return false;
 
@@ -11391,15 +11686,19 @@ function _applySchemaOther(entry, editedLines, schema) {
   const data = _tryParseEntryData(entry);
   if (!data) return false;
 
-  const cloned = JSON.parse(JSON.stringify(data));
-  const isArr = Array.isArray(cloned);
-  const items = isArr ? cloned : [cloned];
-  const origItems = isArr ? data : [data];
+  // Mutate the parsed data in place — extractByPath returns primitive strings
+  // (snapshots) and _collectWritableSlots returns container references in the
+  // same traversal order, so writes through one path don't affect reads on
+  // sibling paths. _parsedCache is invalidated by the caller via
+  // entry._invalidateCaches(), so the next read reparses if needed. This drops
+  // a full JSON.parse(JSON.stringify(data)) clone (~ 100-200 ms on a 5 MB JSON).
+  const isArr = Array.isArray(data);
+  const items = isArr ? data : [data];
 
   let lineIdx = 0;
   for (let ei = 0; ei < items.length; ei++) {
     for (const pathStr of schema.textPaths) {
-      const origVals = extractByPath(origItems[ei], pathStr);
+      const origVals = extractByPath(items[ei], pathStr);
       const slots = _collectWritableSlots(items[ei], pathStr);
       for (let i = 0; i < Math.min(origVals.length, slots.length); i++) {
         const lc = origVals[i].split('\n').length;
@@ -11411,7 +11710,7 @@ function _applySchemaOther(entry, editedLines, schema) {
 
   // CSV: re-serialize as CSV
   if (fmt === 'csv') {
-    return _applySchemaCsv(entry, editedLines, schema, origText, cloned, isArr);
+    return _applySchemaCsv(entry, editedLines, schema, origText, data, isArr);
   }
 
   // Detect original indent for JSON re-serialization
@@ -11419,7 +11718,7 @@ function _applySchemaOther(entry, editedLines, schema) {
   let indent = 2;
   if (indentMatch) indent = indentMatch[1].includes('\t') ? '\t' : indentMatch[1].length;
 
-  const serialized = JSON.stringify(isArr ? cloned : cloned, null, indent);
+  const serialized = JSON.stringify(data, null, indent);
 
   if (state.appMode === 'jojo') {
     entry.text = serialized;
@@ -11430,25 +11729,38 @@ function _applySchemaOther(entry, editedLines, schema) {
 }
 
 function _detectEntryFormat(entry) {
+  // Cache: detection runs JSON.parse + DOMParser on the FULL file text. For a
+  // 5 MB JSON, every redundant call costs hundreds of ms. Invalidated together
+  // with _parsedCache in _invalidateCaches.
+  if (entry && entry._formatCache !== undefined) return entry._formatCache;
   const parseAs = getFileParseAs(entry);
-  if (parseAs !== 'auto') return parseAs;
+  if (parseAs !== 'auto') {
+    if (entry) entry._formatCache = parseAs;
+    return parseAs;
+  }
   const raw = Array.isArray(entry.text) ? entry.text.join('\n') : (entry.text || '');
   const trimmed = raw.trim();
+  let result;
   if (trimmed.startsWith('<')) {
     try {
       const doc = new DOMParser().parseFromString(trimmed, 'application/xml');
-      if (!doc.querySelector('parsererror')) return 'xml';
+      if (!doc.querySelector('parsererror')) result = 'xml';
     } catch (_) {}
   }
-  try { const p = JSON.parse(trimmed); if (p && typeof p === 'object') return 'json'; } catch (_) {}
-  // Check CSV
-  if (entry.filePath && entry.filePath.toLowerCase().endsWith('.csv')) return 'csv';
-  // Check key=value
-  const lines = raw.split('\n');
-  let kvCount = 0;
-  for (const l of lines) { if (l.indexOf('=') > 0) kvCount++; }
-  if (kvCount >= 2 && kvCount / lines.filter(l => l.trim()).length > 0.5) return 'keyvalue';
-  return 'json';
+  if (!result) {
+    try { const p = JSON.parse(trimmed); if (p && typeof p === 'object') result = 'json'; } catch (_) {}
+  }
+  if (!result && _looksLikeSrt(raw)) result = 'srt';
+  if (!result && entry.filePath && entry.filePath.toLowerCase().endsWith('.csv')) result = 'csv';
+  if (!result) {
+    const lines = raw.split('\n');
+    let kvCount = 0;
+    for (const l of lines) { if (l.indexOf('=') > 0) kvCount++; }
+    if (kvCount >= 2 && kvCount / lines.filter(l => l.trim()).length > 0.5) result = 'keyvalue';
+  }
+  if (!result) result = 'json';
+  if (entry) entry._formatCache = result;
+  return result;
 }
 
 function _applySchemaXml(entry, editedLines, schema, origText) {
@@ -11649,9 +11961,15 @@ function showSchemaModal() {
   const currentEntry = (state.currentIndex >= 0 && state.currentIndex < state.entries.length)
     ? state.entries[state.currentIndex] : null;
 
-  // Set parse type dropdown
+  // Set parse type dropdown. SRT is surfaced explicitly when auto-detected, so
+  // that pressing "Зберегти" pins the built-in subtitle schema instead of
+  // storing an empty one (which would switch schema view off for the file).
   const parseTypeEl = document.getElementById('schema-parse-type');
-  if (parseTypeEl) parseTypeEl.value = getFileParseAs(currentEntry);
+  if (parseTypeEl) {
+    const stored = getFileParseAs(currentEntry);
+    parseTypeEl.value = (stored === 'auto' && currentEntry && _detectEntryFormat(currentEntry) === 'srt')
+      ? 'srt' : stored;
+  }
 
   const fileName = (state.appMode === 'other' && currentEntry)
     ? currentEntry.file
@@ -11685,7 +12003,9 @@ function showSchemaModal() {
   const searchEl = document.getElementById('schema-search');
   if (searchEl) { searchEl.value = ''; }
   const treeSample = (parseAs === 'keyvalue' || parseAs === 'csv') ? mergedSample : sample;
-  if (treeSample && typeof treeSample === 'object') {
+  if (parseAs === 'srt') {
+    treeEl.innerHTML = _srtSchemaNoteHtml();
+  } else if (treeSample && typeof treeSample === 'object') {
     renderSchemaNode(treeEl, treeSample, '', selectedPaths, 0);
   } else {
     treeEl.innerHTML = '<div style="padding:8px;color:var(--text-muted);font-size:12px;">Структурованих даних не знайдено. Використовуйте regex-схеми вище.</div>';
@@ -11702,6 +12022,18 @@ function showSchemaModal() {
 
   overlay.classList.remove('hidden');
   modal.classList.remove('hidden');
+}
+
+// SRT has no field picker — the schema is fixed. Explain it instead of showing
+// a num/time/text tree whose checkboxes would do nothing.
+function _srtSchemaNoteHtml() {
+  return '<div style="padding:8px;color:var(--text-muted);font-size:12px;line-height:1.6;">' +
+    '<b>Субтитри SRT — вбудована схема.</b><br>' +
+    'У режимі схеми показуються лише репліки: кожен субтитр окремим блоком, блоки розділені порожнім рядком. ' +
+    'Номери й тайм-коди лишаються у файлі та повертаються на місце під час застосування.<br>' +
+    '<i>Не додавайте й не видаляйте порожні рядки — саме вони розмежовують субтитри. ' +
+    'Кількість рядків усередині блоку змінювати можна.</i>' +
+    '</div>';
 }
 
 function hideSchemaModal() {
@@ -11854,6 +12186,34 @@ function collectSchemaPaths() {
   return Array.from(checks).map(c => c.dataset.path);
 }
 
+// Last real segment of a schema path — `rows.*.value` → `value`
+function _schemaPathLeaf(path) {
+  if (!path) return '';
+  const parts = String(path).split('.');
+  let i = parts.length - 1;
+  while (i > 0 && parts[i] === '*') i--;
+  return parts[i];
+}
+
+// Nesting level of a schema path, ignoring the `*` array markers
+function _schemaPathDepth(path) {
+  if (!path) return 0;
+  return String(path).split('.').filter(p => p !== '*').length;
+}
+
+// A checkbox joins a Shift range only while it is on screen: not filtered out
+// by the search box and not buried in a collapsed subtree.
+function _isSchemaCheckVisible(check) {
+  const tree = document.getElementById('schema-tree');
+  let el = check.closest('.schema-node');
+  while (el && el !== tree) {
+    if (el.classList.contains('schema-hidden')) return false;
+    if (el.classList.contains('schema-children') && el.classList.contains('collapsed')) return false;
+    el = el.parentElement;
+  }
+  return true;
+}
+
 function setupSchemaModal() {
   document.getElementById('schema-close').addEventListener('click', hideSchemaModal);
   document.getElementById('schema-close-btn').addEventListener('click', hideSchemaModal);
@@ -11894,8 +12254,20 @@ function setupSchemaModal() {
       if (parseAs !== 'auto') state.settings.file_schemas[key].parseAs = parseAs;
       else delete state.settings.file_schemas[key].parseAs;
     }
+    // parseAs change ⇒ all derived caches are stale (parsed object, format,
+    // text-lines, progress numbers). Clear so the next read reparses with the
+    // new format.
+    for (const e of state.entries) {
+      e._parsedCache = undefined;
+      e._progressCache = null;
+    }
+    bumpSchemaVersion();
     // Re-open modal with new parse
     const treeEl = document.getElementById('schema-tree');
+    if (parseAs === 'srt') {
+      treeEl.innerHTML = _srtSchemaNoteHtml();
+      return;
+    }
     const sample = _getSchemaSampleObject();
     if (!sample || typeof sample !== 'object') {
       showInfo('Схема', 'Не вдалося визначити структуру з обраним типом.');
@@ -11926,15 +12298,29 @@ function setupSchemaModal() {
   document.getElementById('schema-tree').addEventListener('click', (e) => {
     const check = e.target.closest('.schema-check');
     if (!check) return;
-    if (e.shiftKey && _schemaLastCheck && _schemaLastCheck !== check) {
-      const all = Array.from(document.querySelectorAll('#schema-tree .schema-check'));
+    if (e.shiftKey && _schemaLastCheck && _schemaLastCheck !== check && _schemaLastCheck.isConnected) {
+      // Only checkboxes the user can actually see take part in the range —
+      // collapsed subtrees and search-filtered nodes must not be swept in.
+      const all = Array.from(document.querySelectorAll('#schema-tree .schema-check'))
+        .filter(_isSchemaCheckVisible);
       const from = all.indexOf(_schemaLastCheck);
       const to = all.indexOf(check);
       if (from >= 0 && to >= 0) {
         const lo = Math.min(from, to);
         const hi = Math.max(from, to);
+        // Same field name on both ends ⇒ the user is picking one field out of
+        // repeated records ({id: {key, value}} → every `value`), not a flat run
+        // of neighbouring keys. Take that field only, skip its siblings.
+        const leaf = _schemaPathLeaf(_schemaLastCheck.dataset.path);
+        const depth = _schemaPathDepth(_schemaLastCheck.dataset.path);
+        const oneField = leaf === _schemaPathLeaf(check.dataset.path) &&
+                         depth === _schemaPathDepth(check.dataset.path);
         const checked = check.checked;
-        for (let i = lo; i <= hi; i++) all[i].checked = checked;
+        for (let i = lo; i <= hi; i++) {
+          const p = all[i].dataset.path;
+          if (oneField && (_schemaPathLeaf(p) !== leaf || _schemaPathDepth(p) !== depth)) continue;
+          all[i].checked = checked;
+        }
       }
     }
     _schemaLastCheck = check;
@@ -12008,7 +12394,9 @@ function _renderCustomSchemaList() {
         if (fs.customSchemaIdx === deletedIdx) { delete fs.customSchemaIdx; }
         else if (fs.customSchemaIdx > deletedIdx) { fs.customSchemaIdx--; }
       }
-      saveSettings();
+      saveSettings(state.settings);
+      bumpSchemaVersion();
+      for (const e of state.entries) { e._progressCache = null; }
       _renderCustomSchemaList();
     });
     item.appendChild(del);
@@ -12144,6 +12532,7 @@ function _setupCustomSchemaUI() {
     }
     _editingIdx = -1;
     saveSettings(state.settings);
+    bumpSchemaVersion();
     editor.classList.add('hidden');
     _renderCustomSchemaList();
     setStatus(`Regex-схему «${name}» збережено`);
@@ -12169,6 +12558,7 @@ function _setupCustomSchemaUI() {
         }
       }
       saveSettings(state.settings);
+      bumpSchemaVersion();
       for (const e of state.entries) e._progressCache = null;
       updateProgress();
       updateMeta();
@@ -12189,6 +12579,7 @@ function _setupCustomSchemaUI() {
       state.settings.file_schemas[key] = schemaEntry;
     }
     saveSettings(state.settings);
+    bumpSchemaVersion();
     for (const e of state.entries) e._progressCache = null;
     updateProgress();
     updateMeta();
@@ -13299,7 +13690,7 @@ function setupKeyboard() {
     }
 
     // Ctrl+W — close current entry tab
-    if (code === 'KeyW' && !e.shiftKey && _openTabs.length > 0) {
+    if (code === 'KeyW' && !e.shiftKey && _openTabs.length > 0 && state.currentIndex >= 0) {
       e.preventDefault(); e.stopPropagation();
       closeEntryTab(state.currentIndex);
       return;

@@ -127,6 +127,10 @@ function removeEntryFromList(idx) {
     state.entries[i].index = i;
   }
 
+  // Maps keyed by old indices would now target the wrong entry post-reindex
+  if (typeof invalidateDupMap === 'function') invalidateDupMap();
+  if (typeof _navHintsCache !== 'undefined') _navHintsCache.clear();
+
   // Remove tab directly (don't use closeEntryTab — it may trigger
   // onListItemClick → applyChanges which would corrupt the next entry
   // since state.entries has already been spliced)
@@ -465,19 +469,35 @@ function onEditorMouseUp(e, editor) {
 
 let glossCloudState = { editor: null, start: 0, end: 0, term: '', trans: '' };
 
-function findGlossTermAtCursor(text, pos) {
+// Cached combined-OR regex over all glossary terms — recompiled only when the
+// glossary keys actually change. Previously this ran on every mouse-up in
+// Monaco, allocating a 900-alternative regex each time.
+let _glossCursorRegex = null;
+let _glossCursorRegexVersion = '';
+let _glossCursorLowerMap = null;
+function _ensureGlossCursorRegex() {
   const terms = Object.keys(state.glossary);
-  if (terms.length === 0) return null;
-
-  const sorted = terms.sort((a, b) => b.length - a.length);
+  const keyStr = terms.join('\x00');
+  if (_glossCursorRegexVersion === keyStr && _glossCursorRegex) return terms;
+  _glossCursorRegexVersion = keyStr;
+  if (terms.length === 0) { _glossCursorRegex = null; _glossCursorLowerMap = null; return terms; }
+  const sorted = terms.slice().sort((a, b) => b.length - a.length);
   const pattern = sorted.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  const regex = new RegExp(pattern, 'gi');
+  _glossCursorRegex = new RegExp(pattern, 'gi');
+  _glossCursorLowerMap = new Map();
+  for (const t of terms) _glossCursorLowerMap.set(t.toLowerCase(), t);
+  return terms;
+}
 
+function findGlossTermAtCursor(text, pos) {
+  const terms = _ensureGlossCursorRegex();
+  if (!_glossCursorRegex) return null;
+  _glossCursorRegex.lastIndex = 0;
   let match;
-  while ((match = regex.exec(text)) !== null) {
+  while ((match = _glossCursorRegex.exec(text)) !== null) {
     if (pos >= match.index && pos <= match.index + match[0].length) {
       const matchedText = match[0];
-      const glossKey = terms.find(t => t.toLowerCase() === matchedText.toLowerCase());
+      const glossKey = _glossCursorLowerMap.get(matchedText.toLowerCase());
       return {
         term: matchedText,
         trans: glossKey ? state.glossary[glossKey] : undefined,

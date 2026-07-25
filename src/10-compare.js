@@ -575,7 +575,7 @@ function setupMigrateModal() {
 
 function entryMatchesFilter(entry, filt) {
   if (_searchCaseSensitive) {
-    const textStr = Array.isArray(entry.text) ? entry.text.join('\n') : (entry.text || '');
+    const textStr = _getEntrySearchCache(entry).textStr;
     if (textStr.includes(filt)) return true;
     if (entry.file && entry.file.includes(filt)) return true;
     if (entry.speakers) {
@@ -587,8 +587,9 @@ function entryMatchesFilter(entry, filt) {
 }
 
 function getEntryMatchSnippet(entry, filt) {
-  const textStr = Array.isArray(entry.text) ? entry.text.join('\n') : entry.text;
-  const hay = _searchCaseSensitive ? textStr : textStr.toLowerCase();
+  const cache = _getEntrySearchCache(entry);
+  const textStr = cache.textStr;
+  const hay = _searchCaseSensitive ? textStr : cache.textLower;
   const pos = hay.indexOf(filt);
   if (pos < 0) return null;
   // Find the line containing the match
@@ -606,18 +607,33 @@ function getEntryMatchSnippet(entry, filt) {
   return line;
 }
 
-// Return ALL matching lines (one per unique line) for expanded search results
-function getEntryAllMatchLines(entry, filt) {
-  const textStr = Array.isArray(entry.text) ? entry.text.join('\n') : entry.text;
-  const hay = _searchCaseSensitive ? textStr : textStr.toLowerCase();
-  const results = [];
-  const seenLineStarts = new Set();
-  // Precompute newline offsets so we can convert an offset \u2192 line number in
-  // O(log n) instead of rescanning the whole text per match.
+// Lazily built per-entry search cache: joined text, its lowercase, and a
+// flat array of newline offsets. Invalidated alongside _searchIndex etc. via
+// _invalidateCaches (set to undefined to keep the property-shape stable).
+function _getEntrySearchCache(entry) {
+  if (entry._searchCache) return entry._searchCache;
+  const textStr = Array.isArray(entry.text) ? entry.text.join('\n') : (entry.text || '');
+  const textLower = textStr.toLowerCase();
   const newlineOffsets = [-1];
   for (let i = 0; i < textStr.length; i++) {
     if (textStr.charCodeAt(i) === 10) newlineOffsets.push(i);
   }
+  entry._searchCache = { textStr, textLower, newlineOffsets };
+  return entry._searchCache;
+}
+
+// Return ALL matching lines (one per unique line) for expanded search results
+function getEntryAllMatchLines(entry, filt) {
+  // Pull both the joined string and the newline-offset table from the entry's
+  // search cache. Sidebar search invokes this per-entry on every debounced
+  // keystroke; without caching, 5000 entries \u00d7 100 KB each = ~500 MB of string
+  // allocations and full newline scans per character typed.
+  const cache = _getEntrySearchCache(entry);
+  const textStr = cache.textStr;
+  const hay = _searchCaseSensitive ? textStr : cache.textLower;
+  const newlineOffsets = cache.newlineOffsets;
+  const results = [];
+  const seenLineStarts = new Set();
   const lineNoAt = (pos) => {
     let lo = 0, hi = newlineOffsets.length - 1;
     while (lo < hi) {

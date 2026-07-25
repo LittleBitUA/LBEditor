@@ -303,7 +303,7 @@ async function onListItemClick(newIdx, matchOffset) {
   // Save current editor view state (scroll, cursor) before switching
   if (state.currentIndex >= 0 && _monacoReady) {
     const ed = getActiveEditor();
-    if (ed) _editorViewStates.set(state.currentIndex, ed.saveViewState());
+    if (ed) _setEditorViewState(state.entries[state.currentIndex], ed.saveViewState());
   }
 
   if (state.currentIndex >= 0 && editorDirty()) {
@@ -361,7 +361,7 @@ async function onListItemDblClick(idx) {
     // Save current editor view state before switching
     if (state.currentIndex >= 0 && _monacoReady) {
       const ed = getActiveEditor();
-      if (ed) _editorViewStates.set(state.currentIndex, ed.saveViewState());
+      if (ed) _setEditorViewState(state.entries[state.currentIndex], ed.saveViewState());
     }
     if (state.currentIndex >= 0 && editorDirty()) {
       if (_previewTabIdx === state.currentIndex) pinCurrentTab();
@@ -543,8 +543,21 @@ function _ensureGlossaryRegexMap() {
 
 function findGlossaryMatches(entry) {
   _ensureGlossaryRegexMap();
-  const textStr = Array.isArray(entry.text) ? entry.text.join('\n') : entry.text;
-  const combined = textStr + '\n' + entry.visibleSpeakers().join('\n');
+  // Fast path: the analysis worker has already precomputed which glossary
+  // terms appear in this entry. The cached `names` are the displayed list,
+  // and `count` may be larger when there are more than 4 hits. Either way the
+  // tooltip only needs the first few names, so this is sufficient and avoids
+  // re-allocating a 1+ MB string + 900-regex tests on every mouse hover.
+  const hint = _navHintsCache.get(entry.index);
+  if (hint && Array.isArray(hint.names)) {
+    return hint.names.map(n => [n, state.glossary[n]]).filter(p => p[1] !== undefined);
+  }
+  // Fallback (cold cache or no worker): reuse the lowercase search index
+  // already cached on the entry instead of rebuilding text + speakers per call.
+  const combined = entry.getSearchIndex ? entry.getSearchIndex() : (
+    (Array.isArray(entry.text) ? entry.text.join('\n') : entry.text) + '\n' +
+    (entry.visibleSpeakers ? entry.visibleSpeakers().join('\n') : '')
+  );
   return Object.entries(state.glossary).filter(([orig]) => {
     const re = _glossaryRegexMap.get(orig);
     return re ? re.test(combined) : false;
@@ -629,7 +642,29 @@ function applyGlossaryToEntry(entry, orig, trans) {
 let _originalEditorLines = [];
 let _schemaViewActive = true;      // default: show schema text when schema exists
 let _schemaViewOrigText = '';      // original schema text for dirty check
-const _editorViewStates = new Map(); // entry.index → Monaco viewState (scroll, cursor, selections)
+const _editorViewStates = new Map(); // stable entry key → Monaco viewState (scroll, cursor, selections)
+const _EDITOR_VS_LIMIT = 200; // LRU cap so visiting thousands of files doesn't leak viewStates forever
+function _entryViewKey(entry) {
+  if (!entry) return null;
+  // Stable across entries[].splice — entry.index gets re-numbered on removal,
+  // which would otherwise restore wrong cursor/scroll to the wrong file.
+  return entry.filePath || entry.file || `idx:${entry.index}`;
+}
+function _setEditorViewState(entry, vs) {
+  const key = _entryViewKey(entry);
+  if (!key || !vs) return;
+  // re-insert to move to "most recent" end of the Map iteration order
+  if (_editorViewStates.has(key)) _editorViewStates.delete(key);
+  _editorViewStates.set(key, vs);
+  while (_editorViewStates.size > _EDITOR_VS_LIMIT) {
+    const oldest = _editorViewStates.keys().next().value;
+    _editorViewStates.delete(oldest);
+  }
+}
+function _getEditorViewState(entry) {
+  const key = _entryViewKey(entry);
+  return key ? _editorViewStates.get(key) : null;
+}
 // _schemaViewCurrentlyUsed is declared in 01-head.js (needed by getActiveEditor)
 
 function _isSchemaViewApplicable(entry) {
@@ -790,7 +825,7 @@ function loadEditor(deferHeavy) {
   state.loadingEditor = false;
 
   // Restore saved view state (scroll, cursor, selections) for this entry
-  const savedVS = _editorViewStates.get(entry.index);
+  const savedVS = _getEditorViewState(entry);
   if (savedVS) {
     const ed = getActiveEditor();
     if (ed) ed.restoreViewState(savedVS);

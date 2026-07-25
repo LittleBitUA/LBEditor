@@ -178,7 +178,10 @@ async function initMonacoEditors() {
       }
       _prevUndoLine = line;
       updateCursorPosition();
-      scheduleDecorationUpdate();
+      // Decorations (bookmarks, modified-line strip) don't depend on cursor —
+      // only on the document content / bookmark state. Rescheduling them on
+      // every arrow-key tap meant full-document scans for nothing. We refresh
+      // them from onDidChangeModelContent and from loadEditor / toggleBookmark.
     });
     ed.onDidFocusEditorWidget(() => { _lastFocusedEditor = ed; });
     if (typeof setupEditorGlossaryHover === 'function') setupEditorGlossaryHover(ed);

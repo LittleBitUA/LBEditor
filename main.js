@@ -218,6 +218,7 @@ function setupIpcHandlers() {
       filters: [
         { name: 'JSON', extensions: ['json'] },
         { name: 'Text / CSV', extensions: ['txt', 'int', 'csv', 'tsv'] },
+        { name: 'Субтитри', extensions: ['srt'] },
         { name: 'Excel', extensions: ['xlsx', 'xls', 'ods'] },
         { name: 'All', extensions: ['*'] },
       ],

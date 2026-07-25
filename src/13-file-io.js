@@ -1291,6 +1291,7 @@ async function writeJson(filePath, silent = false) {
   }
 
   for (const e of state.entries) e.markSaved();
+  invalidateDupMap();
   forceVirtualRender();
   updateMeta();
   updateProgress();
@@ -1499,6 +1500,7 @@ async function saveTxtSingleEntry(entry) {
   }
   fs.renameSync(tmpPath, entry.filePath);
   entry.markSaved();
+  invalidateDupMap();
 }
 
 async function saveTxtFiles(silent = false) {
@@ -1515,6 +1517,7 @@ async function saveTxtFiles(silent = false) {
       errs.push(`${entry.file}: ${e.message}`);
     }
   }
+  invalidateDupMap();
 
   forceVirtualRender();
   updateMeta();
@@ -1603,6 +1606,7 @@ async function saveJoJoJson(silent = false) {
   }
 
   for (const e of state.entries) e.markSaved();
+  invalidateDupMap();
   forceVirtualRender();
   updateMeta();
   updateProgress();

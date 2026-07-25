@@ -101,6 +101,11 @@ async function closeAllFiles() {
   state.bookmarks = {};
   clearEntryTabs();
 
+  // Reset per-entry caches/maps that would otherwise leak past close
+  if (typeof _editorViewStates !== 'undefined') _editorViewStates.clear();
+  if (typeof invalidateDupMap === 'function') invalidateDupMap();
+  if (typeof _navHintsCache !== 'undefined') _navHintsCache.clear();
+
   if (_monacoFlat) _monacoFlat.setValue('');
   if (_monacoText) _monacoText.setValue('');
   if (_monacoSp) _monacoSp.setValue('');
