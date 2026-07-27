@@ -2236,13 +2236,66 @@ function saveSessions(data) {
   ioWriteJSON(SESSIONS_FILE, data);
 }
 
+function currentSessionKey() {
+  const key = state.appMode === 'other'
+    ? ('txtdir:' + normPath(state.txtDirPath || ''))
+    : normPath(state.filePath || '');
+  return (!key || key === 'txtdir:') ? null : key;
+}
+
 function saveSession() {
   if (state.currentIndex < 0) return;
-  const key = state.appMode === 'other' ? ('txtdir:' + normPath(state.txtDirPath || '')) : normPath(state.filePath || '');
-  if (!key || key === 'txtdir:') return;
+  const key = currentSessionKey();
+  if (!key) return;
   const sessions = loadSessions();
-  sessions[key] = { index: state.currentIndex, timestamp: new Date().toISOString().slice(0, 19), mode: state.appMode };
+  const prev = sessions[key] || {};
+  sessions[key] = {
+    ...prev,
+    index: state.currentIndex,
+    timestamp: new Date().toISOString().slice(0, 19),
+    mode: state.appMode,
+  };
   saveSessions(sessions);
+}
+
+// Latest computed progress for the open project, stashed by _applyProgress.
+let _lastProgressSnapshot = null;
+let _sessionProgressTimer = null;
+
+// Progress recalculates on every keystroke-ish event; persist at most once every
+// few seconds so the welcome screen has fresh numbers without hammering disk.
+function scheduleSessionProgressSave() {
+  if (_sessionProgressTimer) return;
+  _sessionProgressTimer = setTimeout(() => {
+    _sessionProgressTimer = null;
+    saveSessionProgress();
+  }, 4000);
+}
+
+function saveSessionProgress() {
+  const snap = _lastProgressSnapshot;
+  const key = currentSessionKey();
+  if (!snap || !key) return;
+  try {
+    const sessions = loadSessions();
+    const prev = sessions[key] || {};
+    sessions[key] = {
+      ...prev,
+      mode: prev.mode || state.appMode,
+      timestamp: prev.timestamp || new Date().toISOString().slice(0, 19),
+      progress: {
+        pct: Math.round(snap.pct * 10) / 10,
+        files: snap.transE,
+        totalFiles: snap.totalE,
+        units: snap.tVal,
+        totalUnits: snap.tTotal,
+        unit: snap.useWords ? 'words' : 'lines',
+      },
+    };
+    saveSessions(sessions);
+  } catch (e) {
+    logError('saveSessionProgress', e);
+  }
 }
 
 function restoreSessionIndex() {
@@ -2318,6 +2371,40 @@ function setupProjectDict(name) {
 //  Welcome Screen
 // ═══════════════════════════════════════════════════════════
 
+// Inline SVG beats emoji here: it inherits the theme colour, renders the same
+// on every machine, and stays crisp at any zoom.
+const WELCOME_ICON_FOLDER =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" ' +
+  'stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+const WELCOME_ICON_FILE =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" ' +
+  'stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>';
+
+// Progress strip for a project card. Sessions saved before progress was
+// recorded simply have no bar — better than showing a fake 0%.
+function _welcomeProgressHtml(p) {
+  if (!p || typeof p.pct !== 'number') {
+    return '<div class="welcome-card-progress is-unknown">' +
+             '<div class="welcome-progress-track"><div class="welcome-progress-bar" style="width:0%"></div></div>' +
+             '<span class="welcome-progress-label">—</span>' +
+           '</div>';
+  }
+  const pct = Math.max(0, Math.min(100, p.pct));
+  const tier = pct >= 100 ? 'done' : pct >= 66 ? 'high' : pct >= 33 ? 'mid' : 'low';
+  const unit = p.unit === 'words' ? 'слів' : 'рядків';
+  const detail = (typeof p.units === 'number' && typeof p.totalUnits === 'number')
+    ? `${p.units} / ${p.totalUnits} ${unit}` : '';
+  const files = (typeof p.files === 'number' && typeof p.totalFiles === 'number')
+    ? `${p.files} / ${p.totalFiles} файлів` : '';
+  const title = [detail, files].filter(Boolean).join(' · ');
+  return `<div class="welcome-card-progress" data-tier="${tier}"${title ? ` title="${escHtml(title)}"` : ''}>` +
+           `<div class="welcome-progress-track"><div class="welcome-progress-bar" style="width:${pct}%"></div></div>` +
+           `<span class="welcome-progress-label">${pct.toFixed(pct % 1 === 0 ? 0 : 1)}%</span>` +
+         `</div>`;
+}
+
 function showWelcomeScreen() {
   const welcomeEl = document.getElementById('welcome-screen');
   const splitEl = document.getElementById('split-container');
@@ -2326,6 +2413,44 @@ function showWelcomeScreen() {
   splitEl.classList.add('hidden');
   statusBar.classList.add('hidden');
   buildRecentFilesList();
+  _fillWelcomeVersion();
+}
+
+async function _fillWelcomeVersion() {
+  const el = document.getElementById('welcome-version');
+  if (!el || el.textContent) return;
+  try {
+    const v = await ipcRenderer.invoke('app:get-version');
+    if (v) el.textContent = 'v' + v;
+  } catch (e) {
+    logError('welcomeVersion', e);
+  }
+}
+
+// Live filter over the rendered recent list — cheap enough to do in the DOM,
+// the list is capped at 15 items.
+function _filterWelcomeRecent(query) {
+  const q = String(query || '').trim().toLowerCase();
+  const list = document.getElementById('welcome-recent-list');
+  if (!list) return;
+  let shown = 0;
+  for (const item of list.querySelectorAll('.welcome-card')) {
+    const hay = (item.dataset.search || '').toLowerCase();
+    const match = !q || hay.includes(q);
+    item.style.display = match ? '' : 'none';
+    if (match) shown++;
+  }
+  let empty = list.querySelector('.welcome-filter-empty');
+  if (shown === 0 && q) {
+    if (!empty) {
+      empty = document.createElement('div');
+      empty.className = 'welcome-empty welcome-filter-empty';
+      empty.textContent = 'Нічого не знайдено';
+      list.appendChild(empty);
+    }
+  } else if (empty) {
+    empty.remove();
+  }
 }
 
 function hideWelcomeScreen() {
@@ -2416,18 +2541,23 @@ async function _buildRecentFilesListAsync(container) {
     }
 
     const item = document.createElement('div');
-    item.className = 'welcome-file-item';
-    if (!exists) item.style.opacity = '0.45';
+    item.className = 'welcome-card' + (exists ? '' : ' missing');
+    item.dataset.search = displayName + ' ' + parentPath;
+    item.title = exists ? rawPath : `Не знайдено: ${rawPath}`;
     item.innerHTML =
-      `<div class="welcome-file-info">` +
-        `<div class="welcome-file-name">${escHtml(displayName)}</div>` +
-        `<div class="welcome-file-path">${escHtml(parentPath)}</div>` +
+      `<div class="welcome-card-top">` +
+        `<span class="welcome-file-icon">${isTxtDir ? WELCOME_ICON_FOLDER : WELCOME_ICON_FILE}</span>` +
+        `<div class="welcome-file-info">` +
+          `<div class="welcome-file-name">${escHtml(displayName)}</div>` +
+          `<div class="welcome-file-path">${escHtml(parentPath)}</div>` +
+        `</div>` +
+        `<button class="welcome-file-remove" title="Видалити зі списку">&times;</button>` +
       `</div>` +
-      `<div class="welcome-file-meta">` +
+      _welcomeProgressHtml(data.progress) +
+      `<div class="welcome-card-foot">` +
         `<span class="welcome-file-badge ${badgeClass}">${badgeLabel}</span>` +
         `<span class="welcome-file-date">${escHtml(dateLabel)}</span>` +
-      `</div>` +
-      `<button class="welcome-file-remove" title="Видалити зі списку">&times;</button>`;
+      `</div>`;
 
     // Click to open
     item.addEventListener('click', (e) => {
@@ -2449,6 +2579,10 @@ async function _buildRecentFilesListAsync(container) {
 
     container.appendChild(item);
   }
+
+  // Re-apply an active filter after a rebuild (e.g. after removing an item)
+  const filterEl = document.getElementById('welcome-recent-filter');
+  if (filterEl && filterEl.value) _filterWelcomeRecent(filterEl.value);
 }
 
 function removeFromRecent(key) {
@@ -2486,6 +2620,20 @@ function setupWelcomeListeners() {
       if (filePath) loadJsonAuto(filePath);
     } finally { _dialogBusy = false; }
   });
+
+  const filterEl = document.getElementById('welcome-recent-filter');
+  if (filterEl) {
+    filterEl.addEventListener('input', () => _filterWelcomeRecent(filterEl.value));
+    filterEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { filterEl.value = ''; _filterWelcomeRecent(''); }
+      // Enter opens the only remaining match — fast keyboard path into a project
+      if (e.key === 'Enter') {
+        const visible = [...document.querySelectorAll('#welcome-recent-list .welcome-card')]
+          .filter(el => el.style.display !== 'none');
+        if (visible.length === 1) visible[0].click();
+      }
+    });
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -6069,6 +6217,11 @@ function _applyProgress(transE, totalE, transL, totalL, editedFiles, editedLines
   // Set color tier on track
   const track = dom.progBar.parentElement;
   if (track) track.dataset.tier = pct >= 100 ? 'done' : pct >= 66 ? 'high' : pct >= 33 ? 'mid' : 'low';
+
+  // Remember it for the welcome screen — otherwise it would have to reopen and
+  // reparse every recent project just to draw a progress bar.
+  _lastProgressSnapshot = { pct, transE, totalE, tVal, tTotal, useWords };
+  scheduleSessionProgressSave();
 
   // Tooltip
   const remain = tTotal - tVal;

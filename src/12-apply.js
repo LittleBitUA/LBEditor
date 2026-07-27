@@ -330,6 +330,11 @@ function _applyProgress(transE, totalE, transL, totalL, editedFiles, editedLines
   const track = dom.progBar.parentElement;
   if (track) track.dataset.tier = pct >= 100 ? 'done' : pct >= 66 ? 'high' : pct >= 33 ? 'mid' : 'low';
 
+  // Remember it for the welcome screen — otherwise it would have to reopen and
+  // reparse every recent project just to draw a progress bar.
+  _lastProgressSnapshot = { pct, transE, totalE, tVal, tTotal, useWords };
+  scheduleSessionProgressSave();
+
   // Tooltip
   const remain = tTotal - tVal;
   const remainE = totalE - transE;
