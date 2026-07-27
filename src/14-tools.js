@@ -566,6 +566,65 @@ function getActiveTextarea() {
   return null;
 }
 
+// Reading-speed limits used to colour the SRT indicator. Broadly the values
+// professional subtitling guidelines converge on.
+const SRT_CPS_WARN = 17;
+const SRT_CPS_BAD = 21;
+const SRT_LINE_LEN_WARN = 42;
+
+// In SRT schema view the timecodes aren't in the buffer, so the translator has
+// no idea how long the line they're writing stays on screen. Show the cue's
+// timecode plus its reading speed for whichever cue the cursor sits in.
+function updateSrtCueStatus(lineNumber) {
+  const el = document.getElementById('status-srt');
+  if (!el) return;
+  const entry = state.entries[state.currentIndex];
+  if (!entry || !_schemaViewCurrentlyUsed || _detectEntryFormat(entry) !== 'srt') {
+    el.textContent = '';
+    el.className = 'status-srt';
+    return;
+  }
+  const cues = _getSrtCues(entry);
+  if (!cues) { el.textContent = ''; return; }
+
+  // Editor line → cue index: cues are separated by exactly one blank line, so
+  // walking the same layout cuesToEditorLines produces keeps them in sync.
+  let line = 1, found = -1;
+  for (let i = 0; i < cues.length; i++) {
+    if (i > 0) line++; // blank separator
+    const span = cues[i].text.length;
+    if (lineNumber >= line && lineNumber < line + Math.max(span, 1)) { found = i; break; }
+    line += span;
+  }
+  if (found < 0) { el.textContent = ''; el.className = 'status-srt'; return; }
+
+  // Measure what's actually in the editor now, not the last-saved cue text.
+  const model = getActiveEditor().getModel();
+  let start = 1;
+  for (let i = 0; i < found; i++) start += cues[i].text.length + (i > 0 ? 1 : 0);
+  if (found > 0) start += 1;
+  const liveText = [];
+  for (let l = start; l <= model.getLineCount(); l++) {
+    const t = model.getLineContent(l);
+    if (!t.trim()) break;
+    liveText.push(t);
+  }
+
+  const m = libSrt.cueMetrics({ time: cues[found].time, text: liveText });
+  const tc = String(cues[found].time).trim();
+  const cps = m.cps === null ? '—' : m.cps.toFixed(1);
+  el.textContent = `Субтитр ${found + 1}/${cues.length} · ${tc} · ${cps} зн/с · ${m.maxLineLen} зн.`;
+
+  let cls = 'status-srt';
+  if (m.cps !== null && m.cps >= SRT_CPS_BAD) cls += ' srt-bad';
+  else if ((m.cps !== null && m.cps >= SRT_CPS_WARN) || m.maxLineLen > SRT_LINE_LEN_WARN) cls += ' srt-warn';
+  el.className = cls;
+  el.title = m.durationMs !== null
+    ? `Тривалість ${(m.durationMs / 1000).toFixed(2)} с · ${m.chars} символів · ${m.lineCount} ряд.\n` +
+      `Норма до ${SRT_CPS_WARN} зн/с, критично від ${SRT_CPS_BAD}. Рядок бажано до ${SRT_LINE_LEN_WARN} символів.`
+    : 'Тайм-код не розпізнано';
+}
+
 function updateCursorPosition() {
   if (!dom.statusCursor) return;
   if (!_monacoReady || state.currentIndex < 0) {
@@ -579,6 +638,8 @@ function updateCursorPosition() {
   if (!pos) { dom.statusCursor.textContent = ''; return; }
   const totalLines = editor.getModel().getLineCount();
   dom.statusCursor.textContent = `Рядок ${pos.lineNumber} / ${totalLines}, Стовп ${pos.column}`;
+
+  updateSrtCueStatus(pos.lineNumber);
 
   // Show file encoding
   const encEl = document.getElementById('status-encoding');

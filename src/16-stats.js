@@ -191,6 +191,48 @@ function saveFileSchema(textPaths, parseAs) {
   forceVirtualRender();
 }
 
+// Structure fingerprint of one entry, or null when it has no parseable data.
+function _entryStructureSig(entry) {
+  const parsed = _tryParseEntryData(entry);
+  if (!parsed || typeof parsed !== 'object') return null;
+  const sample = Array.isArray(parsed)
+    ? (parsed.length > 0 && typeof parsed[0] === 'object' ? parsed[0] : null)
+    : parsed;
+  if (!sample) return null;
+  return _computeStructureSignature(sample, 0) || null;
+}
+
+// Apply the current schema to every loaded file that has the same structure.
+// Matching on structure rather than "all files" keeps a schema built for one
+// layout from being stamped onto unrelated files in the same folder.
+// → { applied, skipped }
+function saveSchemaToMatchingFiles(textPaths, parseAs) {
+  const current = state.entries[state.currentIndex];
+  const sig = current ? _entryStructureSig(current) : null;
+  if (!sig) return { applied: 0, skipped: 0 };
+
+  let applied = 0, skipped = 0;
+  for (const entry of state.entries) {
+    if (!entry.filePath) { skipped++; continue; }
+    if (_entryStructureSig(entry) !== sig) { skipped++; continue; }
+    const schemaEntry = state.settings.file_schemas[entry.filePath] || {};
+    delete schemaEntry.noSchema;
+    schemaEntry.textPaths = textPaths || [];
+    if (parseAs && parseAs !== 'auto') schemaEntry.parseAs = parseAs;
+    else delete schemaEntry.parseAs;
+    schemaEntry.structureSig = sig;
+    state.settings.file_schemas[entry.filePath] = schemaEntry;
+    applied++;
+  }
+  saveSettings(state.settings);
+  bumpSchemaVersion();
+  for (const e of state.entries) e._progressCache = null;
+  updateProgress();
+  updateMeta();
+  forceVirtualRender();
+  return { applied, skipped };
+}
+
 function _getSchemaTargetKeys() {
   // If multi-selected, apply to all selected entries
   if (state.appMode === 'other' && _multiSelected.size > 1) {
@@ -682,6 +724,15 @@ function _applySchemaOther(entry, editedLines, schema) {
     }
   }
 
+  // JSON: splice the new values straight into the original text so every byte
+  // the translator didn't touch — escaping style, indentation, trailing
+  // newline, CRLF — survives. Falls through to the re-serialize path below if
+  // the text scan and the parsed view disagree.
+  if (fmt === 'json') {
+    const spliced = _applySchemaJsonInPlace(entry, editedLines, schema, origText);
+    if (spliced) return true;
+  }
+
   const data = _tryParseEntryData(entry);
   if (!data) return false;
 
@@ -725,6 +776,74 @@ function _applySchemaOther(entry, editedLines, schema) {
     entry.text = serialized.split('\n');
   }
   return true;
+}
+
+// Write edited schema lines back into the raw JSON text without re-serialising
+// the document. Returns true on success; false means "couldn't do it safely,
+// use the old path" — never a partial write.
+function _applySchemaJsonInPlace(entry, editedLines, schema, origText) {
+  try {
+    const data = _tryParseEntryData(entry);
+    if (!data) return false;
+
+    // Which paths the schema selected, as a set of path shapes the text
+    // scanner produces ("rows.*.text", "title").
+    const wanted = new Set(schema.textPaths);
+    const slots = libJsonEdit.scanStrings(origText).filter(s => wanted.has(s.path));
+
+    // The parsed view is the source of truth for how many values there are and
+    // in what order; if the text scan disagrees, bail out rather than guess.
+    const origVals = [];
+    const items = Array.isArray(data) ? data : [data];
+    for (const item of items) {
+      for (const pathStr of schema.textPaths) {
+        for (const v of extractByPath(item, pathStr)) origVals.push(v);
+      }
+    }
+    if (slots.length !== origVals.length) return false;
+    for (let i = 0; i < slots.length; i++) {
+      if (slots[i].value !== origVals[i]) return false; // order mismatch
+    }
+
+    // Map the flat editor lines onto the values, honouring multi-line values.
+    const newValues = [];
+    let lineIdx = 0;
+    for (const ov of origVals) {
+      const lc = ov.split('\n').length;
+      newValues.push(editedLines.slice(lineIdx, lineIdx + lc).join('\n'));
+      lineIdx += lc;
+    }
+
+    const out = libJsonEdit.spliceStrings(origText,
+      slots.map((s, i) => ({ start: s.start, end: s.end, value: newValues[i] })));
+
+    entry.text = (state.appMode === 'jojo') ? out : out.split('\n');
+    return true;
+  } catch (e) {
+    logError('applySchemaJsonInPlace', e);
+    return false;
+  }
+}
+
+// Dry-run of the schema write-back: returns { ok, before, after } without
+// leaving anything behind. Schema apply mutates entry.text (and the cached
+// parse), so snapshot and restore both around it.
+function previewSchemaApply(entry, editedLines) {
+  const before = Array.isArray(entry.text) ? entry.text.join('\n') : String(entry.text);
+  const snapshot = Array.isArray(entry.text) ? [...entry.text] : entry.text;
+  let ok = false;
+  let after = before;
+  try {
+    ok = applySchemaLinesToEntry(entry, editedLines);
+    if (ok) after = Array.isArray(entry.text) ? entry.text.join('\n') : String(entry.text);
+  } catch (e) {
+    logError('previewSchemaApply', e);
+    ok = false;
+  } finally {
+    entry.text = snapshot;
+    entry._invalidateCaches();
+  }
+  return { ok, before, after };
 }
 
 function _detectEntryFormat(entry) {
@@ -1220,6 +1339,29 @@ function setupSchemaModal() {
     const schemaKeys = _getSchemaTargetKeys();
     const bulkMsg = schemaKeys.length > 1 ? ` (${schemaKeys.length} файлів)` : '';
     setStatus(`Схему збережено: ${paths.length > 0 ? paths.join(', ') : 'стандартна'}${parseAs !== 'auto' ? ' (' + parseAs.toUpperCase() + ')' : ''}${bulkMsg}`);
+  });
+
+  document.getElementById('schema-apply-all-btn').addEventListener('click', async () => {
+    const paths = collectSchemaPaths();
+    const parseAs = document.getElementById('schema-parse-type').value;
+    const matching = state.entries.filter(e => e.filePath).length;
+    if (matching === 0) {
+      showInfo('Схема', 'Немає завантажених файлів, до яких можна застосувати схему.');
+      return;
+    }
+    const answer = await ask('Застосувати до всіх схожих',
+      'Схему буде записано для всіх завантажених файлів з такою ж структурою.\n\n' +
+      'Наявні схеми цих файлів буде перезаписано. Продовжити?', 'yn');
+    if (answer !== 'y') return;
+
+    const { applied, skipped } = saveSchemaToMatchingFiles(paths, parseAs);
+    hideSchemaModal();
+    if (paths.length > 0 || parseAs !== 'auto') _schemaViewActive = true;
+    loadEditor();
+    updateSchemaViewButton();
+    setStatus(applied > 0
+      ? `Схему застосовано до ${applied} файлів${skipped > 0 ? `, пропущено ${skipped} (інша структура)` : ''}`
+      : 'Не знайдено файлів з такою ж структурою');
   });
 
   document.getElementById('schema-reset-btn').addEventListener('click', () => {

@@ -720,23 +720,39 @@ async function toggleSchemaView() {
   _schemaViewActive = !_schemaViewActive;
   loadEditor();
 
-  const btn = document.getElementById('tb-schema-view');
-  if (btn) {
-    btn.classList.toggle('active', _schemaViewCurrentlyUsed);
-    btn.title = _schemaViewCurrentlyUsed
-      ? 'Режим схеми (тільки текст для перекладу). Натисніть для повного файлу'
-      : 'Повний файл. Натисніть для режиму схеми';
-  }
+  updateSchemaViewButton();
 
   setStatus(_schemaViewCurrentlyUsed ? 'Режим схеми: тільки текст для перекладу' : 'Повний файл');
 }
 
+// What "Застосувати" would write to the file, as a diff against what's there
+// now. Schema write-back is the one operation that rewrites a file the user
+// can't see, so let them look before it happens.
+function showSchemaApplyPreview() {
+  if (state.currentIndex < 0 || state.currentIndex >= state.entries.length) return;
+  const entry = state.entries[state.currentIndex];
+  if (!_schemaViewCurrentlyUsed) return;
+
+  const { ok, before, after } = previewSchemaApply(entry, _monacoFlat.getValue().split('\n'));
+  if (!ok) {
+    showInfo('Прев\'ю змін',
+      'Схема не може застосувати ці правки — файл лишиться без змін.\n\n' +
+      (_detectEntryFormat(entry) === 'srt'
+        ? 'SRT: кількість блоків не збігається з кількістю субтитрів. Порожні рядки розділяють субтитри.'
+        : 'Перевірте, чи структура файлу відповідає схемі.'));
+    return;
+  }
+  showDiffModal(before, after, `Що зміниться у файлі: ${entry.file}`);
+}
+
 function updateSchemaViewButton() {
   const btn = document.getElementById('tb-schema-view');
+  const prevBtn = document.getElementById('tb-schema-preview');
   if (!btn) return;
   const entry = (state.currentIndex >= 0 && state.currentIndex < state.entries.length)
     ? state.entries[state.currentIndex] : null;
   const applicable = _isSchemaViewApplicable(entry);
+  if (prevBtn) prevBtn.style.display = (applicable && _schemaViewCurrentlyUsed) ? '' : 'none';
   btn.style.display = applicable ? '' : 'none';
   btn.classList.toggle('active', _schemaViewCurrentlyUsed);
   btn.title = _schemaViewCurrentlyUsed

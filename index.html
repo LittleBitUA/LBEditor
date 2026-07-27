@@ -166,6 +166,7 @@
           <button class="tb-btn" id="tb-sync-scroll" title="Синхронна прокрутка з боковою панеллю" style="font-size:10px;padding:0 4px;display:none;">⇅</button>
           <button class="tb-btn" id="tb-table-view" title="Табличний вигляд" style="font-size:10px;padding:0 4px;">&#x2637;</button>
           <button class="tb-btn" id="tb-schema-view" title="Режим схеми" style="font-size:10px;padding:0 4px;display:none;">{T}</button>
+          <button class="tb-btn" id="tb-schema-preview" title="Показати, що саме зміниться у файлі" style="font-size:10px;padding:0 4px;display:none;">&#x1F441;</button>
         </div>
 
         <div id="tab-bar"></div>
@@ -273,6 +274,7 @@
       <span id="status-text">Готово. Ctrl+O відкрити · F1 клавіші</span>
       <span id="status-cursor" class="status-cursor"></span>
       <span id="status-encoding" class="status-encoding"></span>
+      <span id="status-srt" class="status-srt"></span>
       <span id="status-hint">F1 &mdash; клавіші</span>
     </div>
   </div>
@@ -989,6 +991,7 @@
       </div>
       <div class="modal-footer" style="gap:8px;">
         <button id="schema-save-btn" class="btn-primary">Зберегти</button>
+        <button id="schema-apply-all-btn" title="Застосувати цю схему до всіх завантажених файлів з такою ж структурою">До всіх схожих</button>
         <button id="schema-reset-btn">Скинути</button>
         <button id="schema-close-btn">Закрити</button>
       </div>

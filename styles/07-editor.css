@@ -204,6 +204,18 @@ textarea.editor-dirty {
   font-family: 'Consolas', monospace;
 }
 
+/* SRT cue indicator: timecode + reading speed for the cue under the cursor.
+   Empty (and so invisible) outside SRT schema view. */
+.status-srt {
+  color: var(--text-muted);
+  margin-left: 12px;
+  white-space: nowrap;
+  font-size: 10px;
+  font-family: 'Consolas', monospace;
+}
+.status-srt.srt-warn { color: #d7a53a; }
+.status-srt.srt-bad  { color: #e05561; font-weight: 600; }
+
 #status-hint {
   color: var(--text-muted);
   margin-left: 12px;

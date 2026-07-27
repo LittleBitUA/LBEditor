@@ -14,6 +14,7 @@ const libSrt = require('./lib/srt');
 const libCsv = require('./lib/csv');
 const libKv = require('./lib/keyvalue');
 const libPaths = require('./lib/schema-paths');
+const libJsonEdit = require('./lib/json-edit');
 
 /** Wrapper around child_process.fork() that mimics worker_threads.Worker API */
 function forkWorker(scriptPath) {
@@ -5303,23 +5304,39 @@ async function toggleSchemaView() {
   _schemaViewActive = !_schemaViewActive;
   loadEditor();
 
-  const btn = document.getElementById('tb-schema-view');
-  if (btn) {
-    btn.classList.toggle('active', _schemaViewCurrentlyUsed);
-    btn.title = _schemaViewCurrentlyUsed
-      ? 'Режим схеми (тільки текст для перекладу). Натисніть для повного файлу'
-      : 'Повний файл. Натисніть для режиму схеми';
-  }
+  updateSchemaViewButton();
 
   setStatus(_schemaViewCurrentlyUsed ? 'Режим схеми: тільки текст для перекладу' : 'Повний файл');
 }
 
+// What "Застосувати" would write to the file, as a diff against what's there
+// now. Schema write-back is the one operation that rewrites a file the user
+// can't see, so let them look before it happens.
+function showSchemaApplyPreview() {
+  if (state.currentIndex < 0 || state.currentIndex >= state.entries.length) return;
+  const entry = state.entries[state.currentIndex];
+  if (!_schemaViewCurrentlyUsed) return;
+
+  const { ok, before, after } = previewSchemaApply(entry, _monacoFlat.getValue().split('\n'));
+  if (!ok) {
+    showInfo('Прев\'ю змін',
+      'Схема не може застосувати ці правки — файл лишиться без змін.\n\n' +
+      (_detectEntryFormat(entry) === 'srt'
+        ? 'SRT: кількість блоків не збігається з кількістю субтитрів. Порожні рядки розділяють субтитри.'
+        : 'Перевірте, чи структура файлу відповідає схемі.'));
+    return;
+  }
+  showDiffModal(before, after, `Що зміниться у файлі: ${entry.file}`);
+}
+
 function updateSchemaViewButton() {
   const btn = document.getElementById('tb-schema-view');
+  const prevBtn = document.getElementById('tb-schema-preview');
   if (!btn) return;
   const entry = (state.currentIndex >= 0 && state.currentIndex < state.entries.length)
     ? state.entries[state.currentIndex] : null;
   const applicable = _isSchemaViewApplicable(entry);
+  if (prevBtn) prevBtn.style.display = (applicable && _schemaViewCurrentlyUsed) ? '' : 'none';
   btn.style.display = applicable ? '' : 'none';
   btn.classList.toggle('active', _schemaViewCurrentlyUsed);
   btn.title = _schemaViewCurrentlyUsed
@@ -8683,6 +8700,65 @@ function getActiveTextarea() {
   return null;
 }
 
+// Reading-speed limits used to colour the SRT indicator. Broadly the values
+// professional subtitling guidelines converge on.
+const SRT_CPS_WARN = 17;
+const SRT_CPS_BAD = 21;
+const SRT_LINE_LEN_WARN = 42;
+
+// In SRT schema view the timecodes aren't in the buffer, so the translator has
+// no idea how long the line they're writing stays on screen. Show the cue's
+// timecode plus its reading speed for whichever cue the cursor sits in.
+function updateSrtCueStatus(lineNumber) {
+  const el = document.getElementById('status-srt');
+  if (!el) return;
+  const entry = state.entries[state.currentIndex];
+  if (!entry || !_schemaViewCurrentlyUsed || _detectEntryFormat(entry) !== 'srt') {
+    el.textContent = '';
+    el.className = 'status-srt';
+    return;
+  }
+  const cues = _getSrtCues(entry);
+  if (!cues) { el.textContent = ''; return; }
+
+  // Editor line → cue index: cues are separated by exactly one blank line, so
+  // walking the same layout cuesToEditorLines produces keeps them in sync.
+  let line = 1, found = -1;
+  for (let i = 0; i < cues.length; i++) {
+    if (i > 0) line++; // blank separator
+    const span = cues[i].text.length;
+    if (lineNumber >= line && lineNumber < line + Math.max(span, 1)) { found = i; break; }
+    line += span;
+  }
+  if (found < 0) { el.textContent = ''; el.className = 'status-srt'; return; }
+
+  // Measure what's actually in the editor now, not the last-saved cue text.
+  const model = getActiveEditor().getModel();
+  let start = 1;
+  for (let i = 0; i < found; i++) start += cues[i].text.length + (i > 0 ? 1 : 0);
+  if (found > 0) start += 1;
+  const liveText = [];
+  for (let l = start; l <= model.getLineCount(); l++) {
+    const t = model.getLineContent(l);
+    if (!t.trim()) break;
+    liveText.push(t);
+  }
+
+  const m = libSrt.cueMetrics({ time: cues[found].time, text: liveText });
+  const tc = String(cues[found].time).trim();
+  const cps = m.cps === null ? '—' : m.cps.toFixed(1);
+  el.textContent = `Субтитр ${found + 1}/${cues.length} · ${tc} · ${cps} зн/с · ${m.maxLineLen} зн.`;
+
+  let cls = 'status-srt';
+  if (m.cps !== null && m.cps >= SRT_CPS_BAD) cls += ' srt-bad';
+  else if ((m.cps !== null && m.cps >= SRT_CPS_WARN) || m.maxLineLen > SRT_LINE_LEN_WARN) cls += ' srt-warn';
+  el.className = cls;
+  el.title = m.durationMs !== null
+    ? `Тривалість ${(m.durationMs / 1000).toFixed(2)} с · ${m.chars} символів · ${m.lineCount} ряд.\n` +
+      `Норма до ${SRT_CPS_WARN} зн/с, критично від ${SRT_CPS_BAD}. Рядок бажано до ${SRT_LINE_LEN_WARN} символів.`
+    : 'Тайм-код не розпізнано';
+}
+
 function updateCursorPosition() {
   if (!dom.statusCursor) return;
   if (!_monacoReady || state.currentIndex < 0) {
@@ -8696,6 +8772,8 @@ function updateCursorPosition() {
   if (!pos) { dom.statusCursor.textContent = ''; return; }
   const totalLines = editor.getModel().getLineCount();
   dom.statusCursor.textContent = `Рядок ${pos.lineNumber} / ${totalLines}, Стовп ${pos.column}`;
+
+  updateSrtCueStatus(pos.lineNumber);
 
   // Show file encoding
   const encEl = document.getElementById('status-encoding');
@@ -11018,6 +11096,48 @@ function saveFileSchema(textPaths, parseAs) {
   forceVirtualRender();
 }
 
+// Structure fingerprint of one entry, or null when it has no parseable data.
+function _entryStructureSig(entry) {
+  const parsed = _tryParseEntryData(entry);
+  if (!parsed || typeof parsed !== 'object') return null;
+  const sample = Array.isArray(parsed)
+    ? (parsed.length > 0 && typeof parsed[0] === 'object' ? parsed[0] : null)
+    : parsed;
+  if (!sample) return null;
+  return _computeStructureSignature(sample, 0) || null;
+}
+
+// Apply the current schema to every loaded file that has the same structure.
+// Matching on structure rather than "all files" keeps a schema built for one
+// layout from being stamped onto unrelated files in the same folder.
+// → { applied, skipped }
+function saveSchemaToMatchingFiles(textPaths, parseAs) {
+  const current = state.entries[state.currentIndex];
+  const sig = current ? _entryStructureSig(current) : null;
+  if (!sig) return { applied: 0, skipped: 0 };
+
+  let applied = 0, skipped = 0;
+  for (const entry of state.entries) {
+    if (!entry.filePath) { skipped++; continue; }
+    if (_entryStructureSig(entry) !== sig) { skipped++; continue; }
+    const schemaEntry = state.settings.file_schemas[entry.filePath] || {};
+    delete schemaEntry.noSchema;
+    schemaEntry.textPaths = textPaths || [];
+    if (parseAs && parseAs !== 'auto') schemaEntry.parseAs = parseAs;
+    else delete schemaEntry.parseAs;
+    schemaEntry.structureSig = sig;
+    state.settings.file_schemas[entry.filePath] = schemaEntry;
+    applied++;
+  }
+  saveSettings(state.settings);
+  bumpSchemaVersion();
+  for (const e of state.entries) e._progressCache = null;
+  updateProgress();
+  updateMeta();
+  forceVirtualRender();
+  return { applied, skipped };
+}
+
 function _getSchemaTargetKeys() {
   // If multi-selected, apply to all selected entries
   if (state.appMode === 'other' && _multiSelected.size > 1) {
@@ -11509,6 +11629,15 @@ function _applySchemaOther(entry, editedLines, schema) {
     }
   }
 
+  // JSON: splice the new values straight into the original text so every byte
+  // the translator didn't touch — escaping style, indentation, trailing
+  // newline, CRLF — survives. Falls through to the re-serialize path below if
+  // the text scan and the parsed view disagree.
+  if (fmt === 'json') {
+    const spliced = _applySchemaJsonInPlace(entry, editedLines, schema, origText);
+    if (spliced) return true;
+  }
+
   const data = _tryParseEntryData(entry);
   if (!data) return false;
 
@@ -11552,6 +11681,74 @@ function _applySchemaOther(entry, editedLines, schema) {
     entry.text = serialized.split('\n');
   }
   return true;
+}
+
+// Write edited schema lines back into the raw JSON text without re-serialising
+// the document. Returns true on success; false means "couldn't do it safely,
+// use the old path" — never a partial write.
+function _applySchemaJsonInPlace(entry, editedLines, schema, origText) {
+  try {
+    const data = _tryParseEntryData(entry);
+    if (!data) return false;
+
+    // Which paths the schema selected, as a set of path shapes the text
+    // scanner produces ("rows.*.text", "title").
+    const wanted = new Set(schema.textPaths);
+    const slots = libJsonEdit.scanStrings(origText).filter(s => wanted.has(s.path));
+
+    // The parsed view is the source of truth for how many values there are and
+    // in what order; if the text scan disagrees, bail out rather than guess.
+    const origVals = [];
+    const items = Array.isArray(data) ? data : [data];
+    for (const item of items) {
+      for (const pathStr of schema.textPaths) {
+        for (const v of extractByPath(item, pathStr)) origVals.push(v);
+      }
+    }
+    if (slots.length !== origVals.length) return false;
+    for (let i = 0; i < slots.length; i++) {
+      if (slots[i].value !== origVals[i]) return false; // order mismatch
+    }
+
+    // Map the flat editor lines onto the values, honouring multi-line values.
+    const newValues = [];
+    let lineIdx = 0;
+    for (const ov of origVals) {
+      const lc = ov.split('\n').length;
+      newValues.push(editedLines.slice(lineIdx, lineIdx + lc).join('\n'));
+      lineIdx += lc;
+    }
+
+    const out = libJsonEdit.spliceStrings(origText,
+      slots.map((s, i) => ({ start: s.start, end: s.end, value: newValues[i] })));
+
+    entry.text = (state.appMode === 'jojo') ? out : out.split('\n');
+    return true;
+  } catch (e) {
+    logError('applySchemaJsonInPlace', e);
+    return false;
+  }
+}
+
+// Dry-run of the schema write-back: returns { ok, before, after } without
+// leaving anything behind. Schema apply mutates entry.text (and the cached
+// parse), so snapshot and restore both around it.
+function previewSchemaApply(entry, editedLines) {
+  const before = Array.isArray(entry.text) ? entry.text.join('\n') : String(entry.text);
+  const snapshot = Array.isArray(entry.text) ? [...entry.text] : entry.text;
+  let ok = false;
+  let after = before;
+  try {
+    ok = applySchemaLinesToEntry(entry, editedLines);
+    if (ok) after = Array.isArray(entry.text) ? entry.text.join('\n') : String(entry.text);
+  } catch (e) {
+    logError('previewSchemaApply', e);
+    ok = false;
+  } finally {
+    entry.text = snapshot;
+    entry._invalidateCaches();
+  }
+  return { ok, before, after };
 }
 
 function _detectEntryFormat(entry) {
@@ -12047,6 +12244,29 @@ function setupSchemaModal() {
     const schemaKeys = _getSchemaTargetKeys();
     const bulkMsg = schemaKeys.length > 1 ? ` (${schemaKeys.length} файлів)` : '';
     setStatus(`Схему збережено: ${paths.length > 0 ? paths.join(', ') : 'стандартна'}${parseAs !== 'auto' ? ' (' + parseAs.toUpperCase() + ')' : ''}${bulkMsg}`);
+  });
+
+  document.getElementById('schema-apply-all-btn').addEventListener('click', async () => {
+    const paths = collectSchemaPaths();
+    const parseAs = document.getElementById('schema-parse-type').value;
+    const matching = state.entries.filter(e => e.filePath).length;
+    if (matching === 0) {
+      showInfo('Схема', 'Немає завантажених файлів, до яких можна застосувати схему.');
+      return;
+    }
+    const answer = await ask('Застосувати до всіх схожих',
+      'Схему буде записано для всіх завантажених файлів з такою ж структурою.\n\n' +
+      'Наявні схеми цих файлів буде перезаписано. Продовжити?', 'yn');
+    if (answer !== 'y') return;
+
+    const { applied, skipped } = saveSchemaToMatchingFiles(paths, parseAs);
+    hideSchemaModal();
+    if (paths.length > 0 || parseAs !== 'auto') _schemaViewActive = true;
+    loadEditor();
+    updateSchemaViewButton();
+    setStatus(applied > 0
+      ? `Схему застосовано до ${applied} файлів${skipped > 0 ? `, пропущено ${skipped} (інша структура)` : ''}`
+      : 'Не знайдено файлів з такою ж структурою');
   });
 
   document.getElementById('schema-reset-btn').addEventListener('click', () => {
@@ -14624,5 +14844,11 @@ function setupTableView() {
   document.getElementById('tb-schema-view').addEventListener('click', () => {
     toggleSchemaView();
   });
+
+  // Preview what "Застосувати" would write to the file
+  const schemaPreviewBtn = document.getElementById('tb-schema-preview');
+  if (schemaPreviewBtn) {
+    schemaPreviewBtn.addEventListener('click', () => showSchemaApplyPreview());
+  }
 }
 

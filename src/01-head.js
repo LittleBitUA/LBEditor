@@ -14,6 +14,7 @@ const libSrt = require('./lib/srt');
 const libCsv = require('./lib/csv');
 const libKv = require('./lib/keyvalue');
 const libPaths = require('./lib/schema-paths');
+const libJsonEdit = require('./lib/json-edit');
 
 /** Wrapper around child_process.fork() that mimics worker_threads.Worker API */
 function forkWorker(scriptPath) {

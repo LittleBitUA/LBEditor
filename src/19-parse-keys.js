@@ -410,4 +410,10 @@ function setupTableView() {
   document.getElementById('tb-schema-view').addEventListener('click', () => {
     toggleSchemaView();
   });
+
+  // Preview what "Застосувати" would write to the file
+  const schemaPreviewBtn = document.getElementById('tb-schema-preview');
+  if (schemaPreviewBtn) {
+    schemaPreviewBtn.addEventListener('click', () => showSchemaApplyPreview());
+  }
 }
