@@ -428,19 +428,7 @@ function downloadFile(url, destPath) {
   });
 }
 
-function semverNewer(latest, current) {
-  const norm = (s) => String(s || '').replace(/^v/i, '').split(/[.\-+]/).map(p => /^\d+$/.test(p) ? parseInt(p, 10) : p);
-  const a = norm(latest), b = norm(current);
-  const n = Math.max(a.length, b.length);
-  for (let i = 0; i < n; i++) {
-    const x = a[i] === undefined ? 0 : a[i];
-    const y = b[i] === undefined ? 0 : b[i];
-    if (x === y) continue;
-    if (typeof x === 'number' && typeof y === 'number') return x > y;
-    return String(x) > String(y);
-  }
-  return false;
-}
+const semverNewer = require('./lib/semver').isNewer;
 
 async function checkLatestRelease() {
   try {

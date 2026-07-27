@@ -1273,6 +1273,7 @@ async function saveFileAs() {
 }
 
 async function writeJson(filePath, silent = false) {
+  backupBeforeSave([filePath]);
   let data;
   try {
     data = state.entries.map(e => e.buildData());
@@ -1504,6 +1505,7 @@ async function saveTxtSingleEntry(entry) {
 }
 
 async function saveTxtFiles(silent = false) {
+  backupBeforeSave(state.entries.filter(e => e.dirty).map(e => e.filePath));
   let ok = 0;
   const errs = [];
 
@@ -1513,7 +1515,7 @@ async function saveTxtFiles(silent = false) {
       await saveTxtSingleEntry(entry);
       ok++;
     } catch (e) {
-      try { fs.unlinkSync(entry.filePath + '.tmp'); } catch (_) {}
+      try { fs.unlinkSync(entry.filePath + '.tmp'); } catch (e) { logError('saveTxtSingleEntry:tmpCleanup', e); }
       errs.push(`${entry.file}: ${e.message}`);
     }
   }
@@ -1592,6 +1594,7 @@ async function saveJoJoJson(silent = false) {
     if (!filePath) return;
     state.filePath = filePath;
   }
+  backupBeforeSave([state.filePath]);
 
   // Split single entry text back into array lines
   const text = state.entries.length > 0 ? state.entries[0].text : '';

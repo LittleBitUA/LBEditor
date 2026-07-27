@@ -588,17 +588,21 @@ function stopPeriodicBackup() {
 
 function onPeriodicBackupTick() {
   if (state.appMode === 'other') {
-    // Backup each dirty txt file
+    // Only files with unsaved edits — copying untouched files every tick just
+    // filled backup/ with identical duplicates.
     for (const entry of state.entries) {
-      if (entry.filePath && fs.existsSync(entry.filePath)) {
+      if (entry.dirty && entry.filePath && fs.existsSync(entry.filePath)) {
         backupFileTimestamped(entry.filePath);
       }
     }
-  } else if (state.filePath && fs.existsSync(state.filePath)) {
+  } else if (state.filePath && fs.existsSync(state.filePath) &&
+             state.entries.some(e => e.dirty)) {
     backupFileTimestamped(state.filePath);
   }
 }
 
+// Copy the on-disk file into ./backup before it gets overwritten. Called from
+// the periodic timer and, when backup_on_save is on, right before each save.
 function backupFileTimestamped(filePath) {
   try {
     const dir = nodePath.dirname(filePath);
@@ -609,12 +613,43 @@ function backupFileTimestamped(filePath) {
     const ext = nodePath.extname(filePath);
     const d = new Date();
     const pad = n => String(n).padStart(2, '0');
-    const stamp = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}-${pad(d.getHours())}-${pad(d.getMinutes())}`;
+    const stamp = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}-${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`;
     const backupName = `${base}-${stamp}${ext}`;
+    const target = nodePath.join(backupDir, backupName);
+    if (fs.existsSync(target)) return; // same second — nothing new to keep
 
-    fs.copyFileSync(filePath, nodePath.join(backupDir, backupName));
+    fs.copyFileSync(filePath, target);
+    pruneBackups(backupDir, base, ext);
   } catch (e) {
-    console.warn('Periodic backup failed:', e.message);
+    logError('backupFileTimestamped:' + filePath, e);
+  }
+}
+
+// Keep only the newest N copies of one file. Without this, backup/ grew for
+// the lifetime of the project next to the user's game files.
+function pruneBackups(backupDir, base, ext) {
+  try {
+    const keep = Math.max(1, parseInt(state.settings.backup_keep, 10) || DEFAULT_BACKUP_KEEP);
+    const prefix = base + '-';
+    const mine = fs.readdirSync(backupDir)
+      .filter(n => n.startsWith(prefix) && n.endsWith(ext))
+      // the timestamp is fixed-width, so a plain string sort is chronological
+      .sort();
+    for (let i = 0; i < mine.length - keep; i++) {
+      try { fs.unlinkSync(nodePath.join(backupDir, mine[i])); } catch (e) {
+        logError('pruneBackups:unlink', e);
+      }
+    }
+  } catch (e) {
+    logError('pruneBackups:' + backupDir, e);
+  }
+}
+
+// Pre-save backup of every file that is about to be rewritten.
+function backupBeforeSave(filePaths) {
+  if (!state.settings.backup_on_save) return;
+  for (const p of filePaths) {
+    if (p && fs.existsSync(p)) backupFileTimestamped(p);
   }
 }
 

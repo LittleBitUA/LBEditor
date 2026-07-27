@@ -8,6 +8,13 @@ const XLSX = require('xlsx');
 const { fork } = require('child_process');
 const { initMonaco } = require('./monaco-loader');
 
+// Pure format/schema logic lives in lib/ so it can be unit-tested outside
+// Electron (see test/). The renderer keeps only the entry-aware wrappers.
+const libSrt = require('./lib/srt');
+const libCsv = require('./lib/csv');
+const libKv = require('./lib/keyvalue');
+const libPaths = require('./lib/schema-paths');
+
 /** Wrapper around child_process.fork() that mimics worker_threads.Worker API */
 function forkWorker(scriptPath) {
   const child = fork(scriptPath, [], { stdio: 'ignore' });
@@ -270,4 +277,28 @@ const SETTINGS_FILE = nodePath.join(DATA_DIR, 'editor_settings.json');
 const GLOSSARY_FILE = nodePath.join(DATA_DIR, 'editor_glossary.json');
 const DICT_AFF = nodePath.join(RESOURCES_DIR, 'dicts', 'uk_UA.aff');
 const DICT_DIC = nodePath.join(RESOURCES_DIR, 'dicts', 'uk_UA.dic');
-const RECOVERY_FILE = nodePath.join(DATA_DIR, 'editor_recovery.json');
+const RECOVERY_FILE = nodePath.join(DATA_DIR, 'editor_recovery.json');
+const ERROR_LOG_FILE = nodePath.join(DATA_DIR, 'editor_errors.log');
+
+// Swallowed exceptions used to leave nothing behind, so "it just doesn't work"
+// reports were undiagnosable. logError keeps the non-fatal behaviour but leaves
+// a trail. It must never throw — it is called from inside catch blocks.
+const ERROR_LOG_MAX_BYTES = 512 * 1024;
+let _errorLogFailed = false;
+function logError(context, err) {
+  const msg = err && err.stack ? err.stack : String(err && err.message ? err.message : err);
+  try { console.warn(`[${context}]`, err); } catch (_) {}
+  if (_errorLogFailed) return;
+  try {
+    // Keep the file bounded: once it grows past the cap, start over rather
+    // than let a repeating error fill the user's disk.
+    try {
+      const st = fs.statSync(ERROR_LOG_FILE);
+      if (st.size > ERROR_LOG_MAX_BYTES) fs.writeFileSync(ERROR_LOG_FILE, '');
+    } catch (_) {}
+    fs.appendFileSync(ERROR_LOG_FILE, `${new Date().toISOString()} [${context}] ${msg}\n`);
+  } catch (_) {
+    // Data dir unwritable — stop trying so we don't burn IO on every catch.
+    _errorLogFailed = true;
+  }
+}

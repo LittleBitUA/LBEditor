@@ -744,6 +744,32 @@ function updateSchemaViewButton() {
     : 'Повний файл. Натисніть для режиму схеми';
 }
 
+// Monaco language for the flat editor. Only the full-file view gets syntax
+// colours — in schema view the buffer holds bare translated strings, where
+// JSON/XML colouring would be meaningless noise.
+function _editorLanguageFor(entry) {
+  if (!entry || _schemaViewCurrentlyUsed) return 'plaintext';
+  const fmt = _detectEntryFormat(entry);
+  switch (fmt) {
+    case 'json': return 'json';
+    case 'xml': return 'xml';
+    case 'keyvalue': return 'ini';
+    default: return 'plaintext'; // csv/srt have no useful built-in grammar
+  }
+}
+
+function applyEditorLanguage(entry) {
+  if (!_monaco || !_monacoFlat) return;
+  try {
+    const model = _monacoFlat.getModel();
+    if (!model) return;
+    const lang = _editorLanguageFor(entry);
+    if (model.getLanguageId() !== lang) _monaco.editor.setModelLanguage(model, lang);
+  } catch (e) {
+    logError('applyEditorLanguage', e);
+  }
+}
+
 function loadEditor(deferHeavy) {
   if (state.currentIndex < 0 || state.currentIndex >= state.entries.length) return;
   if (!_monacoReady) return;
@@ -818,6 +844,8 @@ function loadEditor(deferHeavy) {
     _monacoFlat.setValue(entry.toFlat(state.useSeparator));
   }
   _suppressMonacoChange = false;
+
+  applyEditorLanguage(entry);
 
   // Store original lines for change tracking decorations
   _originalEditorLines = getActiveEditor().getValue().split('\n');

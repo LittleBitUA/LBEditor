@@ -8,6 +8,13 @@ const XLSX = require('xlsx');
 const { fork } = require('child_process');
 const { initMonaco } = require('./monaco-loader');
 
+// Pure format/schema logic lives in lib/ so it can be unit-tested outside
+// Electron (see test/). The renderer keeps only the entry-aware wrappers.
+const libSrt = require('./lib/srt');
+const libCsv = require('./lib/csv');
+const libKv = require('./lib/keyvalue');
+const libPaths = require('./lib/schema-paths');
+
 /** Wrapper around child_process.fork() that mimics worker_threads.Worker API */
 function forkWorker(scriptPath) {
   const child = fork(scriptPath, [], { stdio: 'ignore' });
@@ -271,10 +278,38 @@ const GLOSSARY_FILE = nodePath.join(DATA_DIR, 'editor_glossary.json');
 const DICT_AFF = nodePath.join(RESOURCES_DIR, 'dicts', 'uk_UA.aff');
 const DICT_DIC = nodePath.join(RESOURCES_DIR, 'dicts', 'uk_UA.dic');
 const RECOVERY_FILE = nodePath.join(DATA_DIR, 'editor_recovery.json');
+const ERROR_LOG_FILE = nodePath.join(DATA_DIR, 'editor_errors.log');
+
+// Swallowed exceptions used to leave nothing behind, so "it just doesn't work"
+// reports were undiagnosable. logError keeps the non-fatal behaviour but leaves
+// a trail. It must never throw — it is called from inside catch blocks.
+const ERROR_LOG_MAX_BYTES = 512 * 1024;
+let _errorLogFailed = false;
+function logError(context, err) {
+  const msg = err && err.stack ? err.stack : String(err && err.message ? err.message : err);
+  try { console.warn(`[${context}]`, err); } catch (_) {}
+  if (_errorLogFailed) return;
+  try {
+    // Keep the file bounded: once it grows past the cap, start over rather
+    // than let a repeating error fill the user's disk.
+    try {
+      const st = fs.statSync(ERROR_LOG_FILE);
+      if (st.size > ERROR_LOG_MAX_BYTES) fs.writeFileSync(ERROR_LOG_FILE, '');
+    } catch (_) {}
+    fs.appendFileSync(ERROR_LOG_FILE, `${new Date().toISOString()} [${context}] ${msg}\n`);
+  } catch (_) {
+    // Data dir unwritable — stop trying so we don't burn IO on every catch.
+    _errorLogFailed = true;
+  }
+}
 const TAGS_FILE = nodePath.join(DATA_DIR, 'editor_tags.json');
 const BOOKMARKS_FILE = nodePath.join(DATA_DIR, 'editor_bookmarks.json');
 const HISTORY_FILE = nodePath.join(DATA_DIR, 'editor_history.json');
 const HISTORY_LIMIT = 50;
+
+// How many timestamped copies of one file backup/ keeps before the oldest are
+// pruned. Unbounded growth next to the user's game files was the old behaviour.
+const DEFAULT_BACKUP_KEEP = 10;
 
 const DEFAULT_SETTINGS = {
   theme: 'dark',
@@ -299,6 +334,7 @@ const DEFAULT_SETTINGS = {
   progress_game_id: '',
   progress_code_words: '',
   other_extensions: '.txt .int .json .csv .xlsx .xls .ods .tsv .srt',
+  backup_keep: DEFAULT_BACKUP_KEEP,
   csv_formats: {}, // { filePath_or_ext: { delimiter, quoting, hasHeaders, encoding } }
   power_warning_enabled: true,
   power_schedule: null, // { 0: Array(48), ..., 6: Array(48) } — per day, half-hour slots
@@ -1353,7 +1389,7 @@ function loadSettings() {
       const stored = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf-8'));
       if (stored && typeof stored === 'object') Object.assign(result, stored);
     }
-  } catch (_) {}
+  } catch (e) { logError('loadSettings', e); }
   // Migrate old reduce_blur → visual_effects
   if (result.reduce_blur !== undefined) {
     if (result.reduce_blur && !result.visual_effects) result.visual_effects = 'reduced';
@@ -1467,7 +1503,7 @@ function loadEntryTags() {
         if (imported > 0) saveEntryTags();
       }
     }
-  } catch (_) {}
+  } catch (e) { logError('loadEntryTags', e); }
 }
 
 function saveEntryTags() {
@@ -1485,7 +1521,7 @@ function loadEntryBookmarks() {
     const all = JSON.parse(fs.readFileSync(BOOKMARKS_FILE, 'utf-8'));
     const key = getTagsKey();
     if (key && all[key]) state.entryBookmarks = all[key];
-  } catch (_) {}
+  } catch (e) { logError('loadBookmarks', e); }
   invalidateBookmarkCache();
 }
 
@@ -1631,7 +1667,7 @@ function loadEntryHistory() {
     const all = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf-8'));
     const key = getTagsKey();
     if (key && all[key]) state.entryHistory = all[key];
-  } catch (_) {}
+  } catch (e) { logError('loadHistory', e); }
 }
 
 function saveEntryHistory() {
@@ -3140,6 +3176,8 @@ function showSettingsModal() {
   document.getElementById('set-visual-fx').value = s.visual_effects || 'full';
   document.getElementById('set-periodic-backup').checked = s.periodic_backup;
   document.getElementById('set-periodic-interval').value = s.periodic_backup_interval;
+  document.getElementById('set-backup-on-save').checked = s.backup_on_save === true;
+  document.getElementById('set-backup-keep').value = s.backup_keep || DEFAULT_BACKUP_KEEP;
   document.getElementById('set-code-words').value = s.progress_code_words || '';
   document.getElementById('set-progress-unit').value = s.progress_unit || 'lines';
   document.getElementById('set-other-ext').value = s.other_extensions || '.txt';
@@ -3327,7 +3365,8 @@ function saveSettingsFromModal() {
     font_size: parseInt(document.getElementById('set-font-size').value, 10) || 11,
     autosave_enabled: document.getElementById('set-autosave').checked,
     autosave_interval: interval,
-    backup_on_save: false,
+    backup_on_save: document.getElementById('set-backup-on-save').checked,
+    backup_keep: Math.min(500, Math.max(1, parseInt(document.getElementById('set-backup-keep').value, 10) || 10)),
     periodic_backup: document.getElementById('set-periodic-backup').checked,
     periodic_backup_interval: periodicInterval,
     confirm_on_switch: document.getElementById('set-confirm').checked,
@@ -5288,6 +5327,32 @@ function updateSchemaViewButton() {
     : 'Повний файл. Натисніть для режиму схеми';
 }
 
+// Monaco language for the flat editor. Only the full-file view gets syntax
+// colours — in schema view the buffer holds bare translated strings, where
+// JSON/XML colouring would be meaningless noise.
+function _editorLanguageFor(entry) {
+  if (!entry || _schemaViewCurrentlyUsed) return 'plaintext';
+  const fmt = _detectEntryFormat(entry);
+  switch (fmt) {
+    case 'json': return 'json';
+    case 'xml': return 'xml';
+    case 'keyvalue': return 'ini';
+    default: return 'plaintext'; // csv/srt have no useful built-in grammar
+  }
+}
+
+function applyEditorLanguage(entry) {
+  if (!_monaco || !_monacoFlat) return;
+  try {
+    const model = _monacoFlat.getModel();
+    if (!model) return;
+    const lang = _editorLanguageFor(entry);
+    if (model.getLanguageId() !== lang) _monaco.editor.setModelLanguage(model, lang);
+  } catch (e) {
+    logError('applyEditorLanguage', e);
+  }
+}
+
 function loadEditor(deferHeavy) {
   if (state.currentIndex < 0 || state.currentIndex >= state.entries.length) return;
   if (!_monacoReady) return;
@@ -5362,6 +5427,8 @@ function loadEditor(deferHeavy) {
     _monacoFlat.setValue(entry.toFlat(state.useSeparator));
   }
   _suppressMonacoChange = false;
+
+  applyEditorLanguage(entry);
 
   // Store original lines for change tracking decorations
   _originalEditorLines = getActiveEditor().getValue().split('\n');
@@ -7344,6 +7411,7 @@ async function saveFileAs() {
 }
 
 async function writeJson(filePath, silent = false) {
+  backupBeforeSave([filePath]);
   let data;
   try {
     data = state.entries.map(e => e.buildData());
@@ -7575,6 +7643,7 @@ async function saveTxtSingleEntry(entry) {
 }
 
 async function saveTxtFiles(silent = false) {
+  backupBeforeSave(state.entries.filter(e => e.dirty).map(e => e.filePath));
   let ok = 0;
   const errs = [];
 
@@ -7584,7 +7653,7 @@ async function saveTxtFiles(silent = false) {
       await saveTxtSingleEntry(entry);
       ok++;
     } catch (e) {
-      try { fs.unlinkSync(entry.filePath + '.tmp'); } catch (_) {}
+      try { fs.unlinkSync(entry.filePath + '.tmp'); } catch (e) { logError('saveTxtSingleEntry:tmpCleanup', e); }
       errs.push(`${entry.file}: ${e.message}`);
     }
   }
@@ -7663,6 +7732,7 @@ async function saveJoJoJson(silent = false) {
     if (!filePath) return;
     state.filePath = filePath;
   }
+  backupBeforeSave([state.filePath]);
 
   // Split single entry text back into array lines
   const text = state.entries.length > 0 ? state.entries[0].text : '';
@@ -9290,17 +9360,21 @@ function stopPeriodicBackup() {
 
 function onPeriodicBackupTick() {
   if (state.appMode === 'other') {
-    // Backup each dirty txt file
+    // Only files with unsaved edits — copying untouched files every tick just
+    // filled backup/ with identical duplicates.
     for (const entry of state.entries) {
-      if (entry.filePath && fs.existsSync(entry.filePath)) {
+      if (entry.dirty && entry.filePath && fs.existsSync(entry.filePath)) {
         backupFileTimestamped(entry.filePath);
       }
     }
-  } else if (state.filePath && fs.existsSync(state.filePath)) {
+  } else if (state.filePath && fs.existsSync(state.filePath) &&
+             state.entries.some(e => e.dirty)) {
     backupFileTimestamped(state.filePath);
   }
 }
 
+// Copy the on-disk file into ./backup before it gets overwritten. Called from
+// the periodic timer and, when backup_on_save is on, right before each save.
 function backupFileTimestamped(filePath) {
   try {
     const dir = nodePath.dirname(filePath);
@@ -9311,12 +9385,43 @@ function backupFileTimestamped(filePath) {
     const ext = nodePath.extname(filePath);
     const d = new Date();
     const pad = n => String(n).padStart(2, '0');
-    const stamp = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}-${pad(d.getHours())}-${pad(d.getMinutes())}`;
+    const stamp = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}-${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`;
     const backupName = `${base}-${stamp}${ext}`;
+    const target = nodePath.join(backupDir, backupName);
+    if (fs.existsSync(target)) return; // same second — nothing new to keep
 
-    fs.copyFileSync(filePath, nodePath.join(backupDir, backupName));
+    fs.copyFileSync(filePath, target);
+    pruneBackups(backupDir, base, ext);
   } catch (e) {
-    console.warn('Periodic backup failed:', e.message);
+    logError('backupFileTimestamped:' + filePath, e);
+  }
+}
+
+// Keep only the newest N copies of one file. Without this, backup/ grew for
+// the lifetime of the project next to the user's game files.
+function pruneBackups(backupDir, base, ext) {
+  try {
+    const keep = Math.max(1, parseInt(state.settings.backup_keep, 10) || DEFAULT_BACKUP_KEEP);
+    const prefix = base + '-';
+    const mine = fs.readdirSync(backupDir)
+      .filter(n => n.startsWith(prefix) && n.endsWith(ext))
+      // the timestamp is fixed-width, so a plain string sort is chronological
+      .sort();
+    for (let i = 0; i < mine.length - keep; i++) {
+      try { fs.unlinkSync(nodePath.join(backupDir, mine[i])); } catch (e) {
+        logError('pruneBackups:unlink', e);
+      }
+    }
+  } catch (e) {
+    logError('pruneBackups:' + backupDir, e);
+  }
+}
+
+// Pre-save backup of every file that is about to be rewritten.
+function backupBeforeSave(filePaths) {
+  if (!state.settings.backup_on_save) return;
+  for (const p of filePaths) {
+    if (p && fs.existsSync(p)) backupFileTimestamped(p);
   }
 }
 
@@ -10810,28 +10915,7 @@ function _applyStatsToModal(s) {
 //  Schema Selector (visual JSON field picker for progress)
 // ═══════════════════════════════════════════════════════════
 
-function _computeStructureSignature(obj, depth) {
-  if (!obj || typeof obj !== 'object' || depth > 2) return '';
-  const parts = [];
-  for (const key of Object.keys(obj).sort()) {
-    const val = obj[key];
-    let type;
-    if (val === null || val === undefined) type = 'null';
-    else if (typeof val === 'string') type = 'string';
-    else if (typeof val === 'number') type = 'number';
-    else if (typeof val === 'boolean') type = 'boolean';
-    else if (Array.isArray(val)) {
-      if (val.length > 0 && typeof val[0] === 'string') type = 'string[]';
-      else if (val.length > 0 && typeof val[0] === 'object' && val[0] !== null) {
-        type = 'object[]:{' + _computeStructureSignature(val[0], depth + 1) + '}';
-      } else type = 'array';
-    } else if (typeof val === 'object') {
-      type = 'object:{' + _computeStructureSignature(val, depth + 1) + '}';
-    } else type = typeof val;
-    parts.push(key + ':' + type);
-  }
-  return parts.join(',');
-}
+const _computeStructureSignature = libPaths.structureSignature;
 
 function _findSchemaByStructure(entry) {
   // If this file was explicitly cleared, don't auto-match
@@ -10967,32 +11051,7 @@ function getFileParseAs(entry) {
   return (s && s.parseAs) || 'auto';
 }
 
-function extractByPath(obj, pathStr) {
-  if (!obj || !pathStr) return [];
-  const parts = pathStr.split('.');
-  let current = [obj];
-  for (const part of parts) {
-    const next = [];
-    for (const item of current) {
-      if (item == null) continue;
-      if (part === '*') {
-        if (Array.isArray(item)) next.push(...item);
-      } else {
-        if (typeof item === 'object' && part in item) next.push(item[part]);
-      }
-    }
-    current = next;
-  }
-  // Flatten: if any result is an array of strings, expand
-  const result = [];
-  for (const v of current) {
-    if (typeof v === 'string') result.push(v);
-    else if (Array.isArray(v)) {
-      for (const s of v) { if (typeof s === 'string') result.push(s); }
-    }
-  }
-  return result;
-}
+const extractByPath = libPaths.extractByPath;
 
 function _tryParseEntryJson(entry) {
   // ishin mode — entry.data already has the parsed object
@@ -11056,127 +11115,15 @@ function _tryParseEntryXml(entry) {
 
 function _tryParseEntryKeyValue(entry) {
   const raw = Array.isArray(entry.text) ? entry.text.join('\n') : (entry.text || '');
-  const lines = raw.split('\n');
-
-  // Detect INI-style sections: [SectionName]
-  const sectionRe = /^\s*\[([^\]]+)\]\s*$/;
-  let hasSections = false;
-  for (const line of lines) {
-    if (sectionRe.test(line)) { hasSections = true; break; }
-  }
-
-  // A line is a continuation of the previous KV's value when it has content
-  // but no '=', is not a section header, and is not a comment. This keeps
-  // multi-line values intact so the schema view doesn't silently hide the
-  // tail of a value and write-back doesn't leave orphan lines behind. Blank
-  // and comment lines end the value.
-  const commentRe = /^\s*[;#]/;
-  const isContinuation = (line) => line.length > 0 && line.indexOf('=') < 0 && !sectionRe.test(line) && !commentRe.test(line);
-
-  if (hasSections) {
-    // Parse as array of section objects (for repeating blocks like .int files)
-    const sections = [];
-    let current = null;
-    let lastKey = null;
-    for (const line of lines) {
-      const sm = sectionRe.exec(line);
-      if (sm) {
-        current = { _section: sm[1] };
-        sections.push(current);
-        lastKey = null;
-        continue;
-      }
-      if (!current) continue;
-      const eqIdx = line.indexOf('=');
-      if (eqIdx > 0) {
-        const key = line.substring(0, eqIdx).trim();
-        const val = line.substring(eqIdx + 1);
-        if (key) { current[key] = val; lastKey = key; }
-        else lastKey = null;
-      } else if (lastKey != null && isContinuation(line)) {
-        current[lastKey] += '\n' + line;
-      }
-    }
-    return sections.length > 0 ? sections : null;
-  }
-
-  // Flat key=value (no sections)
-  const obj = {};
-  let hasKV = false;
-  let lastKey = null;
-  for (const line of lines) {
-    const eqIdx = line.indexOf('=');
-    if (eqIdx > 0) {
-      const key = line.substring(0, eqIdx).trim();
-      const val = line.substring(eqIdx + 1);
-      if (key) { obj[key] = val; hasKV = true; lastKey = key; }
-      else lastKey = null;
-    } else if (lastKey != null && isContinuation(line)) {
-      obj[lastKey] += '\n' + line;
-    }
-  }
-  return hasKV ? obj : null;
+  return libKv.parse(raw);
 }
 
-// ── CSV parser ───────────────────────────────────────────
+// ── CSV parser (pure parts live in lib/csv.js) ───────────
 
-function _detectCsvDelimiter(lines) {
-  const candidates = [',', ';', '\t'];
-  let best = ',', bestScore = -1;
-  for (const delim of candidates) {
-    const counts = lines.map(l => _splitCsvRow(l, delim).length);
-    if (counts[0] < 2) continue;
-    const allSame = counts.every(c => c === counts[0]);
-    const score = allSame ? counts[0] * 100 : counts[0];
-    if (score > bestScore) { bestScore = score; best = delim; }
-  }
-  return best;
-}
-
-function _splitCsvRow(line, delim) {
-  const fields = [];
-  let cur = '', inQuote = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (inQuote) {
-      if (ch === '"') {
-        if (i + 1 < line.length && line[i + 1] === '"') { cur += '"'; i++; }
-        else inQuote = false;
-      } else cur += ch;
-    } else {
-      if (ch === '"') inQuote = true;
-      else if (ch === delim) { fields.push(cur); cur = ''; }
-      else cur += ch;
-    }
-  }
-  fields.push(cur);
-  return fields;
-}
-
-function _parseCsvToObjects(lines, delim, hasHeaders) {
-  if (lines.length === 0) return [];
-  const headers = hasHeaders
-    ? _splitCsvRow(lines[0], delim)
-    : _splitCsvRow(lines[0], delim).map((_, i) => `col_${i}`);
-  const dataStart = hasHeaders ? 1 : 0;
-  const result = [];
-  for (let i = dataStart; i < lines.length; i++) {
-    if (!lines[i].trim()) continue;
-    const vals = _splitCsvRow(lines[i], delim);
-    const obj = {};
-    for (let c = 0; c < headers.length; c++) obj[headers[c]] = vals[c] || '';
-    result.push(obj);
-  }
-  return result;
-}
-
-function _detectCsvHeaders(firstRow, delim) {
-  const fields = _splitCsvRow(firstRow, delim);
-  if (fields.length < 2) return false;
-  const unique = new Set(fields.map(f => f.trim().toLowerCase()));
-  if (unique.size !== fields.length) return false;
-  return fields.every(f => f.trim() && isNaN(Number(f.trim())));
-}
+const _splitCsvRow = libCsv.splitRow;
+const _detectCsvDelimiter = libCsv.detectDelimiter;
+const _detectCsvHeaders = libCsv.detectHeaders;
+const _parseCsvToObjects = libCsv.rowsToObjects;
 
 function _tryParseEntryCsv(entry) {
   const raw = Array.isArray(entry.text) ? entry.text.join('\n') : (entry.text || '');
@@ -11192,117 +11139,29 @@ function _tryParseEntryCsv(entry) {
   return objects;
 }
 
-// ── SRT subtitles ────────────────────────────────────────────
+// ── SRT subtitles (pure logic lives in lib/srt.js) ───────────
 // Built-in schema: the editor shows only the spoken lines, one cue per block,
 // blocks separated by a blank line. Counter + timecode lines stay in the file
 // and are re-attached on write-back, so they can't be broken by a translator.
 
-const SRT_TIME_RE = /^\s*-?\d{1,4}:\d{1,2}:\d{1,2}[,.]\d{1,3}\s*-->\s*-?\d{1,4}:\d{1,2}:\d{1,2}[,.]\d{1,3}/;
+const _looksLikeSrt = libSrt.looksLikeSrt;
+const _srtCuesToLines = libSrt.cuesToEditorLines;
 
-function _srtStrip(line) {
-  return String(line == null ? '' : line).replace(/^\uFEFF/, '').trim();
-}
-
-// A counter line only counts as one when a timecode follows it
-function _isSrtCounter(lines, i) {
-  return /^\d+$/.test(_srtStrip(lines[i])) && i + 1 < lines.length && SRT_TIME_RE.test(lines[i + 1]);
-}
-
-// `raw` is either the full text or an already-split line array. Only the head
-// is scanned — a subtitle file shows its first timecode within a few lines.
-function _looksLikeSrt(raw) {
-  if (!raw) return false;
-  const head = Array.isArray(raw) ? raw.slice(0, 80) : raw.slice(0, 8000).split('\n');
-  for (const l of head) { if (SRT_TIME_RE.test(l)) return true; }
-  return false;
-}
-
-// → [{ num, time, text: [lines] }] or null when the content isn't SRT.
-// `num` is null for files that omit the counter line.
 function _tryParseEntrySrt(entry) {
-  const raw = _getRawTextLines(entry);
-  if (!_looksLikeSrt(raw)) return null;
-  const cues = [];
-  let i = 0;
-  while (i < raw.length) {
-    if (!_srtStrip(raw[i])) { i++; continue; }
-    let num = null;
-    if (_isSrtCounter(raw, i)) { num = raw[i]; i++; }
-    if (!SRT_TIME_RE.test(raw[i])) return null; // stray content — not a clean SRT
-    const time = raw[i];
-    i++;
-    const text = [];
-    while (i < raw.length && _srtStrip(raw[i])) {
-      if (SRT_TIME_RE.test(raw[i]) || _isSrtCounter(raw, i)) break; // next cue, blank line missing
-      text.push(raw[i]);
-      i++;
-    }
-    cues.push({ num, time, text });
-  }
-  return cues.length > 0 ? cues : null;
-}
-
-function _isSrtCueArray(v) {
-  return Array.isArray(v) && v.length > 0 && v[0] &&
-         typeof v[0].time === 'string' && Array.isArray(v[0].text);
+  return libSrt.parseCues(_getRawTextLines(entry));
 }
 
 // Cues of the current entry, or null if it isn't parseable as SRT.
 // Rides on _parsedCache so a big subtitle file is scanned once per edit.
 function _getSrtCues(entry) {
   const parsed = _tryParseEntryData(entry);
-  return _isSrtCueArray(parsed) ? parsed : null;
-}
-
-// Editor lines: cue texts, one blank line BETWEEN cues (no trailing blank —
-// that keeps the blank↔cue mapping unambiguous when the edits come back).
-function _srtCuesToLines(cues) {
-  const lines = [];
-  for (let i = 0; i < cues.length; i++) {
-    if (i > 0) lines.push('');
-    for (const t of cues[i].text) lines.push(t);
-  }
-  return lines;
-}
-
-function _srtCuesToFileLines(cues) {
-  const out = [];
-  for (let i = 0; i < cues.length; i++) {
-    if (i > 0) out.push('');
-    if (cues[i].num !== null) out.push(cues[i].num);
-    out.push(cues[i].time);
-    for (const t of cues[i].text) out.push(t);
-  }
-  return out;
+  return libSrt.isCueArray(parsed) ? parsed : null;
 }
 
 function _applySchemaSrt(entry, editedLines) {
-  const cues = _getSrtCues(entry);
-  if (!cues) return false;
-
-  // Split the edited text back into cues on blank lines
-  const groups = [];
-  let cur = [];
-  for (const line of editedLines) {
-    if (!_srtStrip(line)) { groups.push(cur); cur = []; }
-    else cur.push(line);
-  }
-  groups.push(cur);
-  // Trailing blank lines the user (or the editor) left behind aren't extra cues
-  while (groups.length > cues.length && groups[groups.length - 1].length === 0) groups.pop();
-
-  // Refuse rather than guess: a changed block count would shift every
-  // subtitle onto the wrong timecode.
-  if (groups.length !== cues.length) return false;
-
-  for (let i = 0; i < cues.length; i++) cues[i].text = groups[i];
-
-  const raw = _getRawTextLines(entry);
-  let trailing = 0;
-  while (trailing < raw.length && !_srtStrip(raw[raw.length - 1 - trailing])) trailing++;
-  const out = _srtCuesToFileLines(cues);
-  for (let i = 0; i < trailing; i++) out.push('');
-
+  if (!_getSrtCues(entry)) return false;
+  const out = libSrt.applyEditedLines(_getRawTextLines(entry), editedLines);
+  if (!out) return false;
   entry.text = (state.appMode === 'jojo') ? out.join('\n') : out;
   return true;
 }
@@ -11419,7 +11278,8 @@ function _applySchemaRegex(entry, editedLines, regexStr, group) {
     }
     entry.text = result;
     return true;
-  } catch (_) {
+  } catch (e) {
+    logError('applySchemaRegex:' + regexStr, e);
     return false;
   }
 }
@@ -11434,7 +11294,8 @@ function _extractByRegex(entry, regexStr, group) {
       if (m && m[group] !== undefined) lines.push(m[group]);
     }
     return lines.length > 0 ? lines : raw;
-  } catch (_) {
+  } catch (e) {
+    logError('extractByRegex:' + regexStr, e);
     return raw;
   }
 }
@@ -11537,42 +11398,7 @@ function getTextLinesForEntry(entry) {
 
 // ── Schema view: write-back helpers ─────────────────────────
 
-function _collectWritableSlots(obj, pathStr) {
-  const parts = pathStr.split('.');
-  let slots = [{ container: { _root: obj }, key: '_root' }];
-
-  for (const part of parts) {
-    const nextSlots = [];
-    for (const slot of slots) {
-      const val = slot.container[slot.key];
-      if (val == null) continue;
-      if (part === '*') {
-        if (Array.isArray(val)) {
-          for (let i = 0; i < val.length; i++) nextSlots.push({ container: val, key: i });
-        }
-      } else {
-        if (typeof val === 'object' && !Array.isArray(val) && part in val) {
-          nextSlots.push({ container: val, key: part });
-        }
-      }
-    }
-    slots = nextSlots;
-  }
-
-  // Expand: slots pointing to string arrays → individual elements
-  const result = [];
-  for (const slot of slots) {
-    const val = slot.container[slot.key];
-    if (typeof val === 'string') {
-      result.push(slot);
-    } else if (Array.isArray(val)) {
-      for (let i = 0; i < val.length; i++) {
-        if (typeof val[i] === 'string') result.push({ container: val, key: i });
-      }
-    }
-  }
-  return result;
-}
+const _collectWritableSlots = libPaths.collectWritableSlots;
 
 function _getSchemaOrigValues(entry) {
   const schema = getFileSchema(entry);
@@ -12186,20 +12012,8 @@ function collectSchemaPaths() {
   return Array.from(checks).map(c => c.dataset.path);
 }
 
-// Last real segment of a schema path — `rows.*.value` → `value`
-function _schemaPathLeaf(path) {
-  if (!path) return '';
-  const parts = String(path).split('.');
-  let i = parts.length - 1;
-  while (i > 0 && parts[i] === '*') i--;
-  return parts[i];
-}
-
-// Nesting level of a schema path, ignoring the `*` array markers
-function _schemaPathDepth(path) {
-  if (!path) return 0;
-  return String(path).split('.').filter(p => p !== '*').length;
-}
+const _schemaPathLeaf = libPaths.pathLeaf;
+const _schemaPathDepth = libPaths.pathDepth;
 
 // A checkbox joins a Shift range only while it is on screen: not filtered out
 // by the search box and not buried in a collapsed subtree.

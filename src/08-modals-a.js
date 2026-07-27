@@ -178,6 +178,8 @@ function showSettingsModal() {
   document.getElementById('set-visual-fx').value = s.visual_effects || 'full';
   document.getElementById('set-periodic-backup').checked = s.periodic_backup;
   document.getElementById('set-periodic-interval').value = s.periodic_backup_interval;
+  document.getElementById('set-backup-on-save').checked = s.backup_on_save === true;
+  document.getElementById('set-backup-keep').value = s.backup_keep || DEFAULT_BACKUP_KEEP;
   document.getElementById('set-code-words').value = s.progress_code_words || '';
   document.getElementById('set-progress-unit').value = s.progress_unit || 'lines';
   document.getElementById('set-other-ext').value = s.other_extensions || '.txt';
@@ -365,7 +367,8 @@ function saveSettingsFromModal() {
     font_size: parseInt(document.getElementById('set-font-size').value, 10) || 11,
     autosave_enabled: document.getElementById('set-autosave').checked,
     autosave_interval: interval,
-    backup_on_save: false,
+    backup_on_save: document.getElementById('set-backup-on-save').checked,
+    backup_keep: Math.min(500, Math.max(1, parseInt(document.getElementById('set-backup-keep').value, 10) || 10)),
     periodic_backup: document.getElementById('set-periodic-backup').checked,
     periodic_backup_interval: periodicInterval,
     confirm_on_switch: document.getElementById('set-confirm').checked,

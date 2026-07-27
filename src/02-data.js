@@ -3,6 +3,10 @@ const BOOKMARKS_FILE = nodePath.join(DATA_DIR, 'editor_bookmarks.json');
 const HISTORY_FILE = nodePath.join(DATA_DIR, 'editor_history.json');
 const HISTORY_LIMIT = 50;
 
+// How many timestamped copies of one file backup/ keeps before the oldest are
+// pruned. Unbounded growth next to the user's game files was the old behaviour.
+const DEFAULT_BACKUP_KEEP = 10;
+
 const DEFAULT_SETTINGS = {
   theme: 'dark',
   font_family: 'Consolas',
@@ -26,6 +30,7 @@ const DEFAULT_SETTINGS = {
   progress_game_id: '',
   progress_code_words: '',
   other_extensions: '.txt .int .json .csv .xlsx .xls .ods .tsv .srt',
+  backup_keep: DEFAULT_BACKUP_KEEP,
   csv_formats: {}, // { filePath_or_ext: { delimiter, quoting, hasHeaders, encoding } }
   power_warning_enabled: true,
   power_schedule: null, // { 0: Array(48), ..., 6: Array(48) } — per day, half-hour slots

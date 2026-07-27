@@ -9,7 +9,7 @@ function loadSettings() {
       const stored = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf-8'));
       if (stored && typeof stored === 'object') Object.assign(result, stored);
     }
-  } catch (_) {}
+  } catch (e) { logError('loadSettings', e); }
   // Migrate old reduce_blur → visual_effects
   if (result.reduce_blur !== undefined) {
     if (result.reduce_blur && !result.visual_effects) result.visual_effects = 'reduced';
@@ -123,7 +123,7 @@ function loadEntryTags() {
         if (imported > 0) saveEntryTags();
       }
     }
-  } catch (_) {}
+  } catch (e) { logError('loadEntryTags', e); }
 }
 
 function saveEntryTags() {
@@ -141,7 +141,7 @@ function loadEntryBookmarks() {
     const all = JSON.parse(fs.readFileSync(BOOKMARKS_FILE, 'utf-8'));
     const key = getTagsKey();
     if (key && all[key]) state.entryBookmarks = all[key];
-  } catch (_) {}
+  } catch (e) { logError('loadBookmarks', e); }
   invalidateBookmarkCache();
 }
 
@@ -287,7 +287,7 @@ function loadEntryHistory() {
     const all = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf-8'));
     const key = getTagsKey();
     if (key && all[key]) state.entryHistory = all[key];
-  } catch (_) {}
+  } catch (e) { logError('loadHistory', e); }
 }
 
 function saveEntryHistory() {
