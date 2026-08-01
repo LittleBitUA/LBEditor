@@ -1,0 +1,28 @@
+{
+  "E:\\Localization\\Ishin\\msg\\uid00xxxxxx\\all_messages.json": {
+    "index": 63,
+    "timestamp": "2026-08-01T19:11:17",
+    "mode": "ishin",
+    "progress": {
+      "pct": 2.5,
+      "files": 19,
+      "totalFiles": 542,
+      "units": 329,
+      "totalUnits": 13391,
+      "unit": "lines"
+    }
+  },
+  "txtdir:E:\\Localization\\Ishin\\ClaudeTool": {
+    "mode": "other",
+    "timestamp": "2026-08-01T19:37:57",
+    "progress": {
+      "pct": 100,
+      "files": 0,
+      "totalFiles": 1,
+      "units": 2852,
+      "totalUnits": 2853,
+      "unit": "lines"
+    },
+    "index": 0
+  }
+}

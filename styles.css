@@ -4633,16 +4633,17 @@ select option:checked {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  justify-content: center;
   overflow: hidden;
-  padding: 48px 0 28px;
+  padding: 40px 0 32px;
 }
 
 .welcome-inner {
   width: 100%;
-  max-width: 620px;
+  max-width: 760px;
   margin: 0 auto;
-  padding: 0 32px;
-  flex: 1;
+  padding: 0 40px;
+  flex: 0 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -4670,7 +4671,7 @@ select option:checked {
    "LB" leads. */
 .welcome-title {
   margin: 0;
-  font-size: 30px;
+  font-size: 38px;
   font-weight: 700;
   letter-spacing: -1px;
   line-height: 1;
@@ -4685,9 +4686,9 @@ select option:checked {
 .welcome-subtitle {
   margin: 8px 0 0;
   font-family: 'Consolas', monospace;
-  font-size: 10.5px;
+  font-size: 11.5px;
   text-transform: uppercase;
-  letter-spacing: 2.4px;
+  letter-spacing: 2.8px;
   color: var(--text-muted);
 }
 
@@ -4716,7 +4717,7 @@ select option:checked {
   /* Room inside the box so the focus ring never sits on top of the shortcut */
   padding: 2px 6px 4px;
   font-family: inherit;
-  font-size: 13.5px;
+  font-size: 15px;
   font-weight: 500;
   color: var(--text-primary);
   background: none;
@@ -4731,7 +4732,7 @@ select option:checked {
   outline-offset: 3px;
   border-radius: 2px;
 }
-.welcome-opener svg { width: 15px; height: 15px; flex-shrink: 0; }
+.welcome-opener svg { width: 17px; height: 17px; flex-shrink: 0; }
 
 .welcome-key {
   font-family: 'Consolas', monospace;
@@ -4751,7 +4752,7 @@ select option:checked {
 }
 .welcome-section-title {
   margin: 0;
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 1.8px;
@@ -4782,14 +4783,14 @@ input[type="text"].welcome-recent-filter::placeholder { color: var(--text-muted)
 input[type="text"].welcome-recent-filter:focus { border-bottom-color: var(--accent); box-shadow: none; }
 
 .welcome-recent-section {
-  flex: 1;
+  flex: 0 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
 }
 
 .welcome-recent-list {
-  flex: 1;
+  flex: 0 1 auto;
   min-height: 0;
   overflow-y: auto;
   padding-right: 22px;
@@ -4809,7 +4810,7 @@ input[type="text"].welcome-recent-filter:focus { border-bottom-color: var(--acce
   display: block;
   width: 100%;
   text-align: left;
-  padding: 12px 0 0;
+  padding: 15px 0 0;
   position: relative;
   background: none;
   border: none;
@@ -4829,7 +4830,7 @@ input[type="text"].welcome-recent-filter:focus { border-bottom-color: var(--acce
 }
 
 .welcome-proj-name {
-  font-size: 17px;
+  font-size: 21px;
   font-weight: 600;
   letter-spacing: -0.25px;
   color: var(--text-primary);
@@ -4843,7 +4844,7 @@ input[type="text"].welcome-recent-filter:focus { border-bottom-color: var(--acce
 
 .welcome-proj-mode {
   font-family: 'Consolas', monospace;
-  font-size: 10px;
+  font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.9px;
   color: var(--text-muted);
@@ -4854,7 +4855,7 @@ input[type="text"].welcome-recent-filter:focus { border-bottom-color: var(--acce
   margin-left: auto;
   flex-shrink: 0;
   font-family: 'Consolas', monospace;
-  font-size: 12px;
+  font-size: 13.5px;
   font-variant-numeric: tabular-nums;
   color: var(--text-secondary);
 }
@@ -4887,14 +4888,14 @@ input[type="text"].welcome-recent-filter:focus { border-bottom-color: var(--acce
   display: flex;
   align-items: baseline;
   gap: 10px;
-  margin-top: 5px;
-  padding-bottom: 11px;
+  margin-top: 7px;
+  padding-bottom: 14px;
   border-bottom: 1px solid var(--border-glass);
   min-width: 0;
 }
 .welcome-proj-path {
   font-family: 'Consolas', monospace;
-  font-size: 10.5px;
+  font-size: 11.5px;
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -4906,7 +4907,7 @@ input[type="text"].welcome-recent-filter:focus { border-bottom-color: var(--acce
 .welcome-proj-when {
   margin-left: auto;
   flex-shrink: 0;
-  font-size: 10.5px;
+  font-size: 11.5px;
   color: var(--text-muted);
 }
 
@@ -4943,10 +4944,10 @@ input[type="text"].welcome-recent-filter:focus { border-bottom-color: var(--acce
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 40px 0 0;
-  padding-top: 18px;
+  margin: 32px 0 0;
+  padding-top: 20px;
   border-top: 1px solid var(--border-glass);
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--text-muted);
 }
 .welcome-dnd-hint svg { width: 14px; height: 14px; flex-shrink: 0; }
