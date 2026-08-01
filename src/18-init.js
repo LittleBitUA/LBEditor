@@ -25,28 +25,62 @@ function setupDragDrop() {
   const welcomeEl = document.getElementById('welcome-screen');
   let _dragCounter = 0;
 
+  // Deliberately permissive: the only thing we must NOT touch is Monaco's own
+  // text drag, which always reports text/* types. Anything else — including a
+  // drag whose types we can't read — is treated as a file drop, because
+  // refusing it means Windows shows the "not allowed" cursor and the user
+  // simply can't open files by dragging.
+  let _dragTypesLogged = false;
+  const carriesFiles = (e) => {
+    const dt = e.dataTransfer;
+    if (!dt) return true;
+    let types;
+    try { types = Array.prototype.slice.call(dt.types || []); }
+    catch (_) { return true; }
+
+    if (!_dragTypesLogged) {
+      _dragTypesLogged = true;
+      logError('dragTypes', new Error('types=' + JSON.stringify(types) +
+        ' items=' + ((dt.items && dt.items.length) || 0)));
+    }
+
+    if (types.length === 0) return true;
+    if (types.indexOf('Files') !== -1) return true;
+    // Pure text payload ⇒ this is an in-editor drag, leave it be.
+    return !types.every(t => typeof t === 'string' && t.indexOf('text/') === 0);
+  };
+
+  // Capture phase on purpose: Monaco installs its own drag handlers and stops
+  // propagation inside the editor, so a bubbling listener never ran there and
+  // Windows showed the "not allowed" cursor over the editor area.
+  const CAPTURE = true;
+
   document.addEventListener('dragenter', (e) => {
+    if (!carriesFiles(e)) return;
     e.preventDefault();
     _dragCounter++;
     if (welcomeEl && !welcomeEl.classList.contains('hidden')) {
       welcomeEl.classList.add('welcome-drop-active');
     }
-  });
+  }, CAPTURE);
   document.addEventListener('dragleave', (e) => {
+    if (!carriesFiles(e)) return;
     e.preventDefault();
     _dragCounter--;
     if (_dragCounter <= 0) {
       _dragCounter = 0;
       if (welcomeEl) welcomeEl.classList.remove('welcome-drop-active');
     }
-  });
+  }, CAPTURE);
   document.addEventListener('dragover', (e) => {
+    if (!carriesFiles(e)) return;
     if (e.target.closest && e.target.closest('.migrate-slot')) return;
     e.preventDefault();
     e.stopPropagation();
-    e.dataTransfer.dropEffect = 'copy';
-  });
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  }, CAPTURE);
   document.addEventListener('drop', (e) => {
+    if (!carriesFiles(e)) return;
     e.preventDefault();
     e.stopPropagation();
     _dragCounter = 0;
@@ -107,7 +141,7 @@ function setupDragDrop() {
     } else {
       for (const f of txtFiles) openTxtFile(f.path);
     }
-  });
+  }, CAPTURE);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -438,8 +472,30 @@ function setupKeyboard() {
 // ═══════════════════════════════════════════════════════════
 
 function setupIPC() {
+  // File → Відкрити недавнє
+  ipcRenderer.on('menu:open-recent', async (_event, item) => {
+    if (!item || !item.path) return;
+    if (!fs.existsSync(item.path)) {
+      showInfo('Недавні', `Шлях більше не існує:\n${item.path}`);
+      refreshRecentMenu();
+      return;
+    }
+    if (isWelcomeVisible()) hideWelcomeScreen();
+    openRecentFile(item.path, item.mode);
+  });
+
   ipcRenderer.on('menu:action', async (_event, action) => {
     switch (action) {
+      case 'clear-recent': {
+        const answer = await ask('Недавні', 'Очистити список недавніх файлів?', 'yn');
+        if (answer === 'y') {
+          saveSessions({});
+          refreshRecentMenu();
+          if (isWelcomeVisible()) buildRecentFilesList();
+          setStatus('Список недавніх очищено');
+        }
+        break;
+      }
       case 'open-file':
         await openFile();
         break;

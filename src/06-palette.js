@@ -202,6 +202,13 @@ function saveSessions(data) {
   ioWriteJSON(SESSIONS_FILE, data);
 }
 
+// The File → Відкрити недавнє submenu is built in the main process from this
+// same file, so it has to be told when the list changed.
+function refreshRecentMenu() {
+  try { ipcRenderer.send('menu:refresh-recent'); }
+  catch (e) { logError('refreshRecentMenu', e); }
+}
+
 function currentSessionKey() {
   const key = state.appMode === 'other'
     ? ('txtdir:' + normPath(state.txtDirPath || ''))
@@ -222,6 +229,7 @@ function saveSession() {
     mode: state.appMode,
   };
   saveSessions(sessions);
+  refreshRecentMenu();
 }
 
 // Latest computed progress for the open project, stashed by _applyProgress.
@@ -543,37 +551,45 @@ function removeFromRecent(key) {
   const sessions = loadSessions();
   delete sessions[key];
   // Write synchronously so the next loadSessions() reads updated data
-  try { fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2), 'utf-8'); } catch (_) {}
+  try { fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2), 'utf-8'); }
+  catch (e) { logError('removeFromRecent', e); }
+  refreshRecentMenu();
 }
 
+// Route by what the path actually is, not by the mode stored in the session.
+// A single .txt opened on its own is recorded with appMode 'other' and a plain
+// file key, so trusting the mode sent it to loadTxtDirectory (a file, not a
+// dir) — and sessions written before `mode` existed fell through to loadJson,
+// which failed with "Не вдалося прочитати JSON" on ordinary text.
 function openRecentFile(filePath, mode) {
-  if (mode === 'other') {
-    loadTxtDirectory(filePath);
-  } else if (mode === 'jojo') {
-    loadJoJoJson(filePath);
-  } else {
-    loadJson(filePath);
+  let isDir = false;
+  try { isDir = fs.statSync(filePath).isDirectory(); }
+  catch (e) { logError('openRecentFile:stat', e); }
+
+  if (isDir) { loadTxtDirectory(filePath); return; }
+
+  const ext = nodePath.extname(filePath).toLowerCase();
+  if (typeof _SPREADSHEET_EXTS !== 'undefined' && _SPREADSHEET_EXTS.includes(ext)) {
+    openSpreadsheetFile(filePath).catch(e => logError('openRecentFile:spreadsheet', e));
+    return;
   }
+  if (ext === '.json') {
+    // loadJsonAuto figures out ishin vs jojo from the content itself
+    if (mode === 'jojo') loadJoJoJson(filePath);
+    else loadJsonAuto(filePath, true);
+    return;
+  }
+  openTxtFile(filePath);
 }
 
 function setupWelcomeListeners() {
-  document.getElementById('welcome-open-other').addEventListener('click', async () => {
-    if (_dialogBusy) return;
-    _dialogBusy = true;
-    try {
-      const folder = await ipcRenderer.invoke('dialog:open-folder');
-      if (folder) loadTxtDirectory(folder);
-    } finally { _dialogBusy = false; }
-  });
+  document.getElementById('welcome-open-other').addEventListener('click', () => openTxtDirectory());
 
-  document.getElementById('welcome-open-json').addEventListener('click', async () => {
-    if (_dialogBusy) return;
-    _dialogBusy = true;
-    try {
-      const filePath = await ipcRenderer.invoke('dialog:open-file');
-      if (filePath) loadJsonAuto(filePath);
-    } finally { _dialogBusy = false; }
-  });
+  // Delegate to openFile(), which routes by extension (spreadsheet / json /
+  // plain text). This button used to call loadJsonAuto() unconditionally, so
+  // picking a .txt threw "Не вдалося прочитати JSON" — it was labelled
+  // "Відкрити JSON" back then, which merely hid the problem.
+  document.getElementById('welcome-open-json').addEventListener('click', () => openFile());
 
   const filterEl = document.getElementById('welcome-recent-filter');
   if (filterEl) {

@@ -2015,32 +2015,20 @@ body {
   flex-shrink: 0;
 }
 
-/* Toolbar icons via CSS ::before */
-.tb-btn::before {
-  font-size: 13px;
-  line-height: 1;
+/* Toolbar icons are inline <svg> in index.html with stroke="currentColor",
+   so they inherit the button colour and stay sharp at any zoom. They used
+   to be emoji codepoints (content: "F4BE"), which Windows drew with the
+   colour emoji font — the reason the toolbar looked cheap. */
+.tb-btn svg {
+  width: 15px;
+  height: 15px;
+  display: block;
+  /* .tb-btn is a flex container and the svg carries no intrinsic size (only a
+     viewBox), so without this the flex algorithm collapsed it to zero width
+     and the toolbar rendered empty. */
+  flex: 0 0 15px;
+  pointer-events: none;
 }
-.tb-icon-save::before    { content: "\1F4BE"; }
-.tb-icon-save-as { position: relative; }
-.tb-icon-save-as::before { content: "\1F4BE"; }
-.tb-icon-save-as::after  {
-  content: "\270E";
-  position: absolute;
-  font-size: 9px;
-  bottom: 1px;
-  right: 1px;
-  line-height: 1;
-  filter: drop-shadow(0 0 1px var(--bg-app));
-}
-.tb-icon-find::before    { content: "\1F50D"; }
-.tb-icon-replace::before { content: "\1F504"; }
-.tb-icon-wrap::before    { content: "\21A9"; }
-.tb-icon-migrate::before { content: "\21C4"; }
-.tb-icon-show-all::before { content: "\00B6"; }
-.tb-icon-undo::before { content: "\21B6"; }
-.tb-icon-redo::before { content: "\21B7"; }
-.tb-icon-side-panel::before { content: "\25EB"; }
-
 /* ─── Side Panel (dual view) ─── */
 
 #side-panel-handle {
@@ -4635,13 +4623,27 @@ select option:checked {
 
 /* ─── Openers: text actions, not filled buttons ─── */
 
-.welcome-openers { display: flex; gap: 22px; margin-top: 26px; }
+.welcome-openers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 18px;
+  margin-top: 26px;
+  /* Cancels the buttons' own left padding so the labels still line up with
+     the masthead above them. */
+  margin-left: -6px;
+}
 
 .welcome-opener {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 0 0 3px;
+  /* Without this the flex row squeezes the button while its label keeps its
+     width, so the shortcut spilled outside the border box — and the focus
+     outline, which follows that box, cut straight through the text. */
+  flex-shrink: 0;
+  white-space: nowrap;
+  /* Room inside the box so the focus ring never sits on top of the shortcut */
+  padding: 2px 6px 4px;
   font-family: inherit;
   font-size: 13.5px;
   font-weight: 500;

@@ -101,6 +101,52 @@ function send(channel, ...args) {
   }
 }
 
+// ── Open Recent ──────────────────────────────────────────────
+// Sessions are owned by the renderer (editor_sessions.json). The menu is built
+// in the main process, so it reads the same file directly and asks the
+// renderer to do the actual opening.
+const RECENT_MENU_LIMIT = 12;
+
+function readRecentSessions() {
+  try {
+    const file = path.join(getDataDir(), 'editor_sessions.json');
+    if (!fs.existsSync(file)) return [];
+    const raw = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    if (!raw || typeof raw !== 'object') return [];
+    return Object.entries(raw)
+      .map(([key, data]) => {
+        const isDir = key.startsWith('txtdir:');
+        return {
+          key,
+          filePath: isDir ? key.slice(7) : key,
+          isDir,
+          mode: (data && data.mode) || (isDir ? 'other' : 'ishin'),
+          timestamp: (data && data.timestamp) || '',
+        };
+      })
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+      .slice(0, RECENT_MENU_LIMIT);
+  } catch (e) {
+    console.warn('Open Recent: cannot read sessions:', e.message);
+    return [];
+  }
+}
+
+function buildRecentSubmenu() {
+  const items = readRecentSessions();
+  if (items.length === 0) {
+    return [{ label: 'Порожньо', enabled: false }];
+  }
+  const submenu = items.map(it => ({
+    // Name first, folder after — the basename is what you actually recognise.
+    label: `${path.basename(it.filePath)}${it.isDir ? '\\' : ''}   ${path.dirname(it.filePath)}`,
+    click: () => send('menu:open-recent', { path: it.filePath, mode: it.mode }),
+  }));
+  submenu.push({ type: 'separator' });
+  submenu.push({ label: 'Очистити список', click: () => send('menu:action', 'clear-recent') });
+  return submenu;
+}
+
 function buildMenu() {
   const template = [
     {
@@ -108,6 +154,8 @@ function buildMenu() {
       submenu: [
         { label: 'Відкрити...', accelerator: 'CmdOrCtrl+O', registerAccelerator: false, click: () => send('menu:action', 'open-file') },
         { label: 'Відкрити теку...', accelerator: 'CmdOrCtrl+Shift+O', registerAccelerator: false, click: () => send('menu:action', 'open-folder') },
+        { label: 'Відкрити недавнє', submenu: buildRecentSubmenu() },
+        { type: 'separator' },
         { label: 'Зберегти', accelerator: 'CmdOrCtrl+S', registerAccelerator: false, click: () => send('menu:action', 'save-file') },
         { label: 'Зберегти як...', accelerator: 'CmdOrCtrl+Shift+S', registerAccelerator: false, click: () => send('menu:action', 'save-file-as') },
         { label: 'Зберегти все', accelerator: 'CmdOrCtrl+Alt+S', registerAccelerator: false, click: () => send('menu:action', 'save-all') },
@@ -216,6 +264,9 @@ function setupIpcHandlers() {
     const result = dialog.showOpenDialogSync(mainWindow, {
       title: 'Відкрити файл',
       filters: [
+        // First entry is what the dialog preselects. JSON used to sit here,
+        // which hid every other supported format behind a dropdown.
+        { name: 'Підтримувані', extensions: ['json', 'txt', 'int', 'csv', 'tsv', 'srt', 'xlsx', 'xls', 'ods'] },
         { name: 'JSON', extensions: ['json'] },
         { name: 'Text / CSV', extensions: ['txt', 'int', 'csv', 'tsv'] },
         { name: 'Субтитри', extensions: ['srt'] },
@@ -306,6 +357,12 @@ function setupIpcHandlers() {
 
   ipcMain.on('window:set-title', (_event, title) => {
     if (mainWindow) mainWindow.setTitle(title);
+  });
+
+  // The renderer owns the recents file; it tells us when it changed so the
+  // menu doesn't stay frozen at whatever it was on launch.
+  ipcMain.on('menu:refresh-recent', () => {
+    try { buildMenu(); } catch (e) { console.warn('menu refresh failed:', e.message); }
   });
 
   ipcMain.on('window:set-bg', (_event, color) => {

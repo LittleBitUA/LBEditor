@@ -2239,6 +2239,13 @@ function saveSessions(data) {
   ioWriteJSON(SESSIONS_FILE, data);
 }
 
+// The File → Відкрити недавнє submenu is built in the main process from this
+// same file, so it has to be told when the list changed.
+function refreshRecentMenu() {
+  try { ipcRenderer.send('menu:refresh-recent'); }
+  catch (e) { logError('refreshRecentMenu', e); }
+}
+
 function currentSessionKey() {
   const key = state.appMode === 'other'
     ? ('txtdir:' + normPath(state.txtDirPath || ''))
@@ -2259,6 +2266,7 @@ function saveSession() {
     mode: state.appMode,
   };
   saveSessions(sessions);
+  refreshRecentMenu();
 }
 
 // Latest computed progress for the open project, stashed by _applyProgress.
@@ -2580,37 +2588,45 @@ function removeFromRecent(key) {
   const sessions = loadSessions();
   delete sessions[key];
   // Write synchronously so the next loadSessions() reads updated data
-  try { fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2), 'utf-8'); } catch (_) {}
+  try { fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2), 'utf-8'); }
+  catch (e) { logError('removeFromRecent', e); }
+  refreshRecentMenu();
 }
 
+// Route by what the path actually is, not by the mode stored in the session.
+// A single .txt opened on its own is recorded with appMode 'other' and a plain
+// file key, so trusting the mode sent it to loadTxtDirectory (a file, not a
+// dir) — and sessions written before `mode` existed fell through to loadJson,
+// which failed with "Не вдалося прочитати JSON" on ordinary text.
 function openRecentFile(filePath, mode) {
-  if (mode === 'other') {
-    loadTxtDirectory(filePath);
-  } else if (mode === 'jojo') {
-    loadJoJoJson(filePath);
-  } else {
-    loadJson(filePath);
+  let isDir = false;
+  try { isDir = fs.statSync(filePath).isDirectory(); }
+  catch (e) { logError('openRecentFile:stat', e); }
+
+  if (isDir) { loadTxtDirectory(filePath); return; }
+
+  const ext = nodePath.extname(filePath).toLowerCase();
+  if (typeof _SPREADSHEET_EXTS !== 'undefined' && _SPREADSHEET_EXTS.includes(ext)) {
+    openSpreadsheetFile(filePath).catch(e => logError('openRecentFile:spreadsheet', e));
+    return;
   }
+  if (ext === '.json') {
+    // loadJsonAuto figures out ishin vs jojo from the content itself
+    if (mode === 'jojo') loadJoJoJson(filePath);
+    else loadJsonAuto(filePath, true);
+    return;
+  }
+  openTxtFile(filePath);
 }
 
 function setupWelcomeListeners() {
-  document.getElementById('welcome-open-other').addEventListener('click', async () => {
-    if (_dialogBusy) return;
-    _dialogBusy = true;
-    try {
-      const folder = await ipcRenderer.invoke('dialog:open-folder');
-      if (folder) loadTxtDirectory(folder);
-    } finally { _dialogBusy = false; }
-  });
+  document.getElementById('welcome-open-other').addEventListener('click', () => openTxtDirectory());
 
-  document.getElementById('welcome-open-json').addEventListener('click', async () => {
-    if (_dialogBusy) return;
-    _dialogBusy = true;
-    try {
-      const filePath = await ipcRenderer.invoke('dialog:open-file');
-      if (filePath) loadJsonAuto(filePath);
-    } finally { _dialogBusy = false; }
-  });
+  // Delegate to openFile(), which routes by extension (spreadsheet / json /
+  // plain text). This button used to call loadJsonAuto() unconditionally, so
+  // picking a .txt threw "Не вдалося прочитати JSON" — it was labelled
+  // "Відкрити JSON" back then, which merely hid the problem.
+  document.getElementById('welcome-open-json').addEventListener('click', () => openFile());
 
   const filterEl = document.getElementById('welcome-recent-filter');
   if (filterEl) {
@@ -4848,16 +4864,36 @@ function getEntryPreview(entry) {
   let speaker = '';
   let text = '';
   try {
-    const raw = Array.isArray(entry.text)
-      ? entry.text
-      : String(entry.text == null ? '' : entry.text).split('\n');
-
-    if (state.appMode === 'ishin' && typeof entry.visibleSpeakers === 'function') {
-      const sp = entry.visibleSpeakers();
-      if (sp.length) speaker = sp[0];
+    if (typeof entry.visibleSpeakers === 'function') {
+      const sp = entry.visibleSpeakers().filter(s => s && s.trim());
+      if (sp.length) {
+        // An entry can hold a whole conversation. Name the first speaker and
+        // say how many others are in there rather than silently hiding them.
+        const unique = [...new Set(sp)];
+        speaker = unique[0];
+        if (unique.length > 1) speaker += ` +${unique.length - 1}`;
+      }
     }
-    // Prefer a line that actually contains letters over "{", "[", "---"
-    text = raw.find(l => l && /\p{L}/u.test(l)) || raw.find(l => l && l.trim()) || '';
+
+    // When a schema is in play, the schema's own text is what the user
+    // translates — the raw first line would be JSON/XML scaffolding.
+    let lines = null;
+    if (getFileSchema(entry)) {
+      const schemaLines = getTextLinesForEntry(entry);
+      if (schemaLines && schemaLines.length) lines = schemaLines;
+    }
+    if (!lines) {
+      lines = Array.isArray(entry.text)
+        ? entry.text
+        : String(entry.text == null ? '' : entry.text).split('\n');
+    }
+
+    // Prefer a line with letters over structural noise ("{", "[", "---"), and
+    // skip bare JSON keys like `"id": 42` that carry nothing translatable.
+    text = lines.find(l => l && /\p{L}/u.test(l) && !/^\s*["'][^"']*["']\s*:\s*[\d[{,]*\s*,?\s*$/.test(l))
+        || lines.find(l => l && /\p{L}/u.test(l))
+        || lines.find(l => l && l.trim())
+        || '';
   } catch (e) {
     logError('getEntryPreview', e);
   }
@@ -5542,15 +5578,26 @@ function updateSchemaViewButton() {
 // Monaco language for the flat editor. Only the full-file view gets syntax
 // colours — in schema view the buffer holds bare translated strings, where
 // JSON/XML colouring would be meaningless noise.
+// Syntax colouring is chosen by file extension, deliberately NOT by
+// _detectEntryFormat(): that function falls back to 'json' for anything it
+// can't identify, which is fine for the schema system but disastrous here —
+// a plain .txt got the JSON language and Monaco's validator underlined the
+// prose as broken JSON.
+const EDITOR_LANGUAGE_BY_EXT = {
+  '.json': 'json',
+  '.xml': 'xml',
+  '.int': 'ini',
+  '.ini': 'ini',
+  '.properties': 'ini',
+};
+
 function _editorLanguageFor(entry) {
   if (!entry || _schemaViewCurrentlyUsed) return 'plaintext';
-  const fmt = _detectEntryFormat(entry);
-  switch (fmt) {
-    case 'json': return 'json';
-    case 'xml': return 'xml';
-    case 'keyvalue': return 'ini';
-    default: return 'plaintext'; // csv/srt have no useful built-in grammar
-  }
+  // ishin/jojo hold parsed JSON in the flat buffer regardless of the file name
+  if (state.appMode === 'ishin' || state.appMode === 'jojo') return 'plaintext';
+  const src = entry.filePath || entry.file || '';
+  const ext = nodePath.extname(String(src)).toLowerCase();
+  return EDITOR_LANGUAGE_BY_EXT[ext] || 'plaintext';
 }
 
 function applyEditorLanguage(entry) {
@@ -13681,28 +13728,62 @@ function setupDragDrop() {
   const welcomeEl = document.getElementById('welcome-screen');
   let _dragCounter = 0;
 
+  // Deliberately permissive: the only thing we must NOT touch is Monaco's own
+  // text drag, which always reports text/* types. Anything else — including a
+  // drag whose types we can't read — is treated as a file drop, because
+  // refusing it means Windows shows the "not allowed" cursor and the user
+  // simply can't open files by dragging.
+  let _dragTypesLogged = false;
+  const carriesFiles = (e) => {
+    const dt = e.dataTransfer;
+    if (!dt) return true;
+    let types;
+    try { types = Array.prototype.slice.call(dt.types || []); }
+    catch (_) { return true; }
+
+    if (!_dragTypesLogged) {
+      _dragTypesLogged = true;
+      logError('dragTypes', new Error('types=' + JSON.stringify(types) +
+        ' items=' + ((dt.items && dt.items.length) || 0)));
+    }
+
+    if (types.length === 0) return true;
+    if (types.indexOf('Files') !== -1) return true;
+    // Pure text payload ⇒ this is an in-editor drag, leave it be.
+    return !types.every(t => typeof t === 'string' && t.indexOf('text/') === 0);
+  };
+
+  // Capture phase on purpose: Monaco installs its own drag handlers and stops
+  // propagation inside the editor, so a bubbling listener never ran there and
+  // Windows showed the "not allowed" cursor over the editor area.
+  const CAPTURE = true;
+
   document.addEventListener('dragenter', (e) => {
+    if (!carriesFiles(e)) return;
     e.preventDefault();
     _dragCounter++;
     if (welcomeEl && !welcomeEl.classList.contains('hidden')) {
       welcomeEl.classList.add('welcome-drop-active');
     }
-  });
+  }, CAPTURE);
   document.addEventListener('dragleave', (e) => {
+    if (!carriesFiles(e)) return;
     e.preventDefault();
     _dragCounter--;
     if (_dragCounter <= 0) {
       _dragCounter = 0;
       if (welcomeEl) welcomeEl.classList.remove('welcome-drop-active');
     }
-  });
+  }, CAPTURE);
   document.addEventListener('dragover', (e) => {
+    if (!carriesFiles(e)) return;
     if (e.target.closest && e.target.closest('.migrate-slot')) return;
     e.preventDefault();
     e.stopPropagation();
-    e.dataTransfer.dropEffect = 'copy';
-  });
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  }, CAPTURE);
   document.addEventListener('drop', (e) => {
+    if (!carriesFiles(e)) return;
     e.preventDefault();
     e.stopPropagation();
     _dragCounter = 0;
@@ -13763,7 +13844,7 @@ function setupDragDrop() {
     } else {
       for (const f of txtFiles) openTxtFile(f.path);
     }
-  });
+  }, CAPTURE);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -14094,8 +14175,30 @@ function setupKeyboard() {
 // ═══════════════════════════════════════════════════════════
 
 function setupIPC() {
+  // File → Відкрити недавнє
+  ipcRenderer.on('menu:open-recent', async (_event, item) => {
+    if (!item || !item.path) return;
+    if (!fs.existsSync(item.path)) {
+      showInfo('Недавні', `Шлях більше не існує:\n${item.path}`);
+      refreshRecentMenu();
+      return;
+    }
+    if (isWelcomeVisible()) hideWelcomeScreen();
+    openRecentFile(item.path, item.mode);
+  });
+
   ipcRenderer.on('menu:action', async (_event, action) => {
     switch (action) {
+      case 'clear-recent': {
+        const answer = await ask('Недавні', 'Очистити список недавніх файлів?', 'yn');
+        if (answer === 'y') {
+          saveSessions({});
+          refreshRecentMenu();
+          if (isWelcomeVisible()) buildRecentFilesList();
+          setStatus('Список недавніх очищено');
+        }
+        break;
+      }
       case 'open-file':
         await openFile();
         break;

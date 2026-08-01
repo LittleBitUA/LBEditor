@@ -125,16 +125,36 @@ function getEntryPreview(entry) {
   let speaker = '';
   let text = '';
   try {
-    const raw = Array.isArray(entry.text)
-      ? entry.text
-      : String(entry.text == null ? '' : entry.text).split('\n');
-
-    if (state.appMode === 'ishin' && typeof entry.visibleSpeakers === 'function') {
-      const sp = entry.visibleSpeakers();
-      if (sp.length) speaker = sp[0];
+    if (typeof entry.visibleSpeakers === 'function') {
+      const sp = entry.visibleSpeakers().filter(s => s && s.trim());
+      if (sp.length) {
+        // An entry can hold a whole conversation. Name the first speaker and
+        // say how many others are in there rather than silently hiding them.
+        const unique = [...new Set(sp)];
+        speaker = unique[0];
+        if (unique.length > 1) speaker += ` +${unique.length - 1}`;
+      }
     }
-    // Prefer a line that actually contains letters over "{", "[", "---"
-    text = raw.find(l => l && /\p{L}/u.test(l)) || raw.find(l => l && l.trim()) || '';
+
+    // When a schema is in play, the schema's own text is what the user
+    // translates — the raw first line would be JSON/XML scaffolding.
+    let lines = null;
+    if (getFileSchema(entry)) {
+      const schemaLines = getTextLinesForEntry(entry);
+      if (schemaLines && schemaLines.length) lines = schemaLines;
+    }
+    if (!lines) {
+      lines = Array.isArray(entry.text)
+        ? entry.text
+        : String(entry.text == null ? '' : entry.text).split('\n');
+    }
+
+    // Prefer a line with letters over structural noise ("{", "[", "---"), and
+    // skip bare JSON keys like `"id": 42` that carry nothing translatable.
+    text = lines.find(l => l && /\p{L}/u.test(l) && !/^\s*["'][^"']*["']\s*:\s*[\d[{,]*\s*,?\s*$/.test(l))
+        || lines.find(l => l && /\p{L}/u.test(l))
+        || lines.find(l => l && l.trim())
+        || '';
   } catch (e) {
     logError('getEntryPreview', e);
   }
@@ -819,15 +839,26 @@ function updateSchemaViewButton() {
 // Monaco language for the flat editor. Only the full-file view gets syntax
 // colours — in schema view the buffer holds bare translated strings, where
 // JSON/XML colouring would be meaningless noise.
+// Syntax colouring is chosen by file extension, deliberately NOT by
+// _detectEntryFormat(): that function falls back to 'json' for anything it
+// can't identify, which is fine for the schema system but disastrous here —
+// a plain .txt got the JSON language and Monaco's validator underlined the
+// prose as broken JSON.
+const EDITOR_LANGUAGE_BY_EXT = {
+  '.json': 'json',
+  '.xml': 'xml',
+  '.int': 'ini',
+  '.ini': 'ini',
+  '.properties': 'ini',
+};
+
 function _editorLanguageFor(entry) {
   if (!entry || _schemaViewCurrentlyUsed) return 'plaintext';
-  const fmt = _detectEntryFormat(entry);
-  switch (fmt) {
-    case 'json': return 'json';
-    case 'xml': return 'xml';
-    case 'keyvalue': return 'ini';
-    default: return 'plaintext'; // csv/srt have no useful built-in grammar
-  }
+  // ishin/jojo hold parsed JSON in the flat buffer regardless of the file name
+  if (state.appMode === 'ishin' || state.appMode === 'jojo') return 'plaintext';
+  const src = entry.filePath || entry.file || '';
+  const ext = nodePath.extname(String(src)).toLowerCase();
+  return EDITOR_LANGUAGE_BY_EXT[ext] || 'plaintext';
 }
 
 function applyEditorLanguage(entry) {
