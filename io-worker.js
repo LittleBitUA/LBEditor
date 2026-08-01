@@ -6,6 +6,25 @@ const nodePath = require('path');
 
 // ── File I/O operations (offloaded from main thread) ──────
 
+// Writing straight into the destination means an interrupted write (crash,
+// kill, power loss) leaves a truncated — often zero-byte — file. That is how a
+// user's whole recent-projects history disappeared: editor_sessions.json ended
+// up 0 bytes and loadSessions() silently fell back to "no projects".
+// Write to a sibling temp file first, then rename: on the same volume the
+// rename is atomic, so the destination is either the old content or the new.
+function writeFileAtomic(targetPath, data) {
+  const tmp = targetPath + '.tmp';
+  fs.writeFileSync(tmp, data, 'utf-8');
+  try {
+    fs.renameSync(tmp, targetPath);
+  } catch (e) {
+    // Windows can refuse rename-over if the target is locked by a scanner;
+    // fall back to a direct write rather than losing the update entirely.
+    fs.writeFileSync(targetPath, data, 'utf-8');
+    try { fs.unlinkSync(tmp); } catch (_) {}
+  }
+}
+
 process.on('message', (msg) => {
   switch (msg.type) {
 
@@ -13,7 +32,7 @@ process.on('message', (msg) => {
     case 'write-json': {
       try {
         const data = typeof msg.data === 'string' ? msg.data : JSON.stringify(msg.data, null, 2);
-        fs.writeFileSync(msg.path, data, 'utf-8');
+        writeFileAtomic(msg.path, data);
         if (msg.requestId) {
           process.send({ type: 'write-json', requestId: msg.requestId, ok: true });
         }
@@ -28,7 +47,7 @@ process.on('message', (msg) => {
     // ── Write text (fire-and-forget) ────────────────────────
     case 'write-text': {
       try {
-        fs.writeFileSync(msg.path, msg.text, 'utf-8');
+        writeFileAtomic(msg.path, msg.text);
         if (msg.requestId) {
           process.send({ type: 'write-text', requestId: msg.requestId, ok: true });
         }
@@ -75,7 +94,7 @@ process.on('message', (msg) => {
           try { all = JSON.parse(fs.readFileSync(msg.path, 'utf-8')); } catch (_) {}
         }
         all[msg.key] = msg.value;
-        fs.writeFileSync(msg.path, JSON.stringify(all, null, 2), 'utf-8');
+        writeFileAtomic(msg.path, JSON.stringify(all, null, 2));
         if (msg.requestId) {
           process.send({ type: 'merge-write-json', requestId: msg.requestId, ok: true });
         }
@@ -91,7 +110,7 @@ process.on('message', (msg) => {
     case 'serialize-write-json': {
       try {
         const blob = JSON.stringify(msg.data, null, 2);
-        fs.writeFileSync(msg.path, blob + '\n', 'utf-8');
+        writeFileAtomic(msg.path, blob + '\n');
         process.send({ type: 'serialize-write-json', requestId: msg.requestId, ok: true });
       } catch (e) {
         process.send({ type: 'serialize-write-json', requestId: msg.requestId, ok: false, error: e.message });
@@ -119,7 +138,7 @@ process.on('message', (msg) => {
     case 'write-recovery': {
       try {
         const json = JSON.stringify(msg.snapshot);
-        fs.writeFileSync(msg.path, json, 'utf-8');
+        writeFileAtomic(msg.path, json);
         process.send({ type: 'write-recovery', requestId: msg.requestId, ok: true });
       } catch (e) {
         process.send({ type: 'write-recovery', requestId: msg.requestId, ok: false, error: e.message });

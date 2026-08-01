@@ -191,14 +191,46 @@ function setEntryNote(entryIndex, note) {
   updateVisibleEntry(entryIndex);
 }
 
+// Recent-projects history. A truncated or corrupt file used to be swallowed
+// here, so the list silently came back empty with no way to tell that anything
+// had been lost — which is exactly what happened when an interrupted write left
+// editor_sessions.json at zero bytes.
 function loadSessions() {
   try {
-    if (fs.existsSync(SESSIONS_FILE)) return JSON.parse(fs.readFileSync(SESSIONS_FILE, 'utf-8'));
-  } catch (_) {}
+    if (fs.existsSync(SESSIONS_FILE)) {
+      const raw = fs.readFileSync(SESSIONS_FILE, 'utf-8');
+      if (raw.trim()) return JSON.parse(raw);
+      logError('loadSessions', new Error('editor_sessions.json is empty'));
+    }
+  } catch (e) {
+    logError('loadSessions', e);
+  }
+  // Fall back to the last known-good copy rather than starting from nothing
+  try {
+    if (fs.existsSync(SESSIONS_BAK)) {
+      const raw = fs.readFileSync(SESSIONS_BAK, 'utf-8');
+      if (raw.trim()) {
+        const data = JSON.parse(raw);
+        logError('loadSessions', new Error('recovered history from .bak (' +
+          Object.keys(data).length + ' projects)'));
+        return data;
+      }
+    }
+  } catch (e) {
+    logError('loadSessions:bak', e);
+  }
   return {};
 }
 
 function saveSessions(data) {
+  // Keep one generation back, so a bad write can never be the only copy.
+  try {
+    if (fs.existsSync(SESSIONS_FILE) && fs.statSync(SESSIONS_FILE).size > 0) {
+      fs.copyFileSync(SESSIONS_FILE, SESSIONS_BAK);
+    }
+  } catch (e) {
+    logError('saveSessions:bak', e);
+  }
   ioWriteJSON(SESSIONS_FILE, data);
 }
 

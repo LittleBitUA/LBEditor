@@ -274,6 +274,7 @@ try {
 }
 
 const SESSIONS_FILE = nodePath.join(DATA_DIR, 'editor_sessions.json');
+const SESSIONS_BAK = nodePath.join(DATA_DIR, 'editor_sessions.bak.json');
 const SETTINGS_FILE = nodePath.join(DATA_DIR, 'editor_settings.json');
 const GLOSSARY_FILE = nodePath.join(DATA_DIR, 'editor_glossary.json');
 const DICT_AFF = nodePath.join(RESOURCES_DIR, 'dicts', 'uk_UA.aff');

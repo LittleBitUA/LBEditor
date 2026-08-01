@@ -800,4 +800,46 @@
   padding: 3px 10px; font-size: 11px; border-radius: 5px;
   white-space: nowrap;
 }
-
+
+/* ─── Release notes in the update dialog ───
+   Rendered from Markdown, so it needs real block styling — white-space:pre-wrap
+   was there for raw text and would now double every gap. */
+.update-notes {
+  max-height: 230px;
+  overflow: auto;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+.update-notes > *:first-child { margin-top: 0; }
+.update-notes > *:last-child { margin-bottom: 0; }
+
+.update-notes h3,
+.update-notes h4,
+.update-notes h5 {
+  margin: 14px 0 5px;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+.update-notes p { margin: 0 0 7px; }
+.update-notes ul { margin: 0 0 8px; padding-left: 18px; }
+.update-notes li { margin: 0 0 3px; }
+.update-notes strong { color: var(--text-primary); font-weight: 600; }
+.update-notes code {
+  font-family: 'Consolas', monospace;
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--bg-input);
+  color: var(--accent);
+}
+.update-notes a { color: var(--accent); }
+.update-notes hr {
+  margin: 12px 0;
+  border: none;
+  border-top: 1px solid var(--border-glass);
+}

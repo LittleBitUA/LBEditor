@@ -969,6 +969,57 @@ async function checkForUpdatesOnStartup() {
   } catch (_) {}
 }
 
+// GitHub hands us release notes as Markdown, and the modal used to print them
+// literally — "## Заголовок" and "**жирний**" as visible characters. This
+// renders the subset the notes actually use. Everything is HTML-escaped first,
+// so nothing in the release body can inject markup.
+function renderReleaseNotes(md) {
+  const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const inline = (s) => esc(s)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>');
+
+  const out = [];
+  let listDepth = -1; // -1 = no list open, 0 = top level, 1 = nested
+  const closeLists = (to) => { while (listDepth > to) { out.push('</ul>'); listDepth--; } };
+
+  for (const rawLine of String(md).replace(/\r\n/g, '\n').split('\n')) {
+    const line = rawLine.replace(/\s+$/, '');
+
+    const heading = /^(#{1,4})\s+(.*)$/.exec(line);
+    if (heading) {
+      closeLists(-1);
+      const level = Math.min(heading[1].length + 1, 5); // ## → h3, keeps modal type small
+      out.push(`<h${level}>${inline(heading[2])}</h${level}>`);
+      continue;
+    }
+
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(line.trim())) {
+      closeLists(-1);
+      out.push('<hr>');
+      continue;
+    }
+
+    const item = /^(\s*)[-*+]\s+(.*)$/.exec(line);
+    if (item) {
+      const depth = item[1].length >= 2 ? 1 : 0;
+      while (listDepth < depth) { out.push('<ul>'); listDepth++; }
+      closeLists(depth);
+      out.push(`<li>${inline(item[2])}</li>`);
+      continue;
+    }
+
+    if (!line.trim()) { closeLists(-1); continue; }
+
+    closeLists(-1);
+    out.push(`<p>${inline(line)}</p>`);
+  }
+  closeLists(-1);
+  return out.join('');
+}
+
 function showUpdateModal() {
   if (!_updateInfo) return;
   document.getElementById('update-current').textContent = _updateInfo.current || '—';
@@ -980,7 +1031,11 @@ function showUpdateModal() {
     sizeEl.textContent = '';
   }
   const notesEl = document.getElementById('update-notes');
-  notesEl.textContent = _updateInfo.releaseNotes || '(без приміток)';
+  if (_updateInfo.releaseNotes) {
+    notesEl.innerHTML = renderReleaseNotes(_updateInfo.releaseNotes);
+  } else {
+    notesEl.textContent = '(без приміток)';
+  }
   document.getElementById('update-progress').classList.add('hidden');
   document.getElementById('update-error').classList.add('hidden');
   const installBtn = document.getElementById('update-install');
