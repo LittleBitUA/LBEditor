@@ -401,12 +401,7 @@ async function onListItemClick(newIdx, matchOffset) {
   }
   updateSidePanelForEntry(newIdx);
   // Update left panel header if side panel is open
-  const mainTitle = document.getElementById('editor-main-title');
-  const mainHeader = document.getElementById('editor-main-header');
-  if (mainTitle && mainHeader && _sidePanelIdx >= 0) {
-    const curEntry = state.entries[newIdx];
-    mainTitle.textContent = curEntry ? `[${newIdx + 1}] ${curEntry.file || ''}` : '';
-  }
+  if (_sidePanelIdx >= 0) setTargetPaneTitle(newIdx, false);
 
   // If search filter is active, highlight the match in the editor
   const filt = dom.searchInput.value.trim();
@@ -988,6 +983,27 @@ function updateCharCount() {
   dom.metaChars.textContent = `${clean} / ${total} сим.`;
   dom.metaChars.title = `Чистих символів: ${clean} · Усього (з розміткою): ${total}`;
   if (metaWords) metaWords.textContent = `${wc} сл.`;
+  updateLongestLine(raw);
+}
+
+// Longest line in the entry. Game UIs and subtitles both break on over-long
+// lines, and you can't eyeball it while typing — so surface it next to the
+// other counters and flag it once it crosses the wrap width.
+function updateLongestLine(raw) {
+  const el = document.getElementById('meta-longest');
+  if (!el) return;
+  let longest = 0;
+  for (const line of String(raw || '').split('\n')) {
+    const len = line.replace(/<[^>]*>/g, '').trimEnd().length;
+    if (len > longest) longest = len;
+  }
+  const limit = parseInt(state.settings.wrap_line_width, 10) || 0;
+  el.textContent = longest ? `${longest} у рядку` : '';
+  const over = limit > 0 && longest > limit;
+  el.classList.toggle('over-limit', over);
+  el.title = limit > 0
+    ? `Найдовший рядок: ${longest} символів (ліміт переносу: ${limit})`
+    : `Найдовший рядок: ${longest} символів`;
 }
 
 function updateMeta() {

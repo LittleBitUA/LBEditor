@@ -122,35 +122,6 @@
 
         <div id="count-label">Записів: 0</div>
 
-        <div class="progress-compact">
-          <div class="progress-section" id="progress-section-trans" title="">
-            <div class="progress-bar-track">
-              <div class="progress-bar-fill" id="progress-bar"></div>
-              <div class="progress-milestone" style="left:25%"></div>
-              <div class="progress-milestone" style="left:50%"></div>
-              <div class="progress-milestone" style="left:75%"></div>
-            </div>
-            <div class="progress-labels">
-              <span id="prog-label-entries">&mdash;</span>
-              <span class="progress-pct" id="progress-pct">0%</span>
-              <span id="prog-label-lines">&mdash;</span>
-              <button class="schema-btn" id="schema-btn" title="Схема підрахунку"></button>
-            </div>
-          </div>
-          <div class="progress-section progress-section-edit" id="progress-section-edit" title="">
-            <div class="progress-bar-track">
-              <div class="progress-bar-fill progress-edit-fill" id="progress-edit-bar"></div>
-              <div class="progress-milestone progress-milestone-edit" style="left:25%"></div>
-              <div class="progress-milestone progress-milestone-edit" style="left:50%"></div>
-              <div class="progress-milestone progress-milestone-edit" style="left:75%"></div>
-            </div>
-            <div class="progress-labels">
-              <span id="prog-edit-files">&mdash;</span>
-              <span class="progress-edit-pct" id="progress-edit-pct">0%</span>
-              <span id="prog-edit-lines">&mdash;</span>
-            </div>
-          </div>
-        </div>
       </div>
 
       <!-- ═══ SPLIT HANDLE ═══ -->
@@ -158,17 +129,33 @@
 
       <!-- ═══ RIGHT PANEL ═══ -->
       <div id="right-panel">
-        <div class="meta-line">
+        <!-- Header: what you're working on and how far along it is. Both used
+             to be hard to read — the name buried in a dot-separated strip, the
+             progress squeezed into the bottom-left corner. -->
+        <div class="editor-header">
           <span class="meta-file" id="meta-file">&mdash;</span>
-          <span class="meta-sep">&middot;</span>
-          <span id="meta-text-n">text: &mdash;</span>
-          <span class="meta-sep">&middot;</span>
-          <span id="meta-sp-n">sp: &mdash;</span>
-          <span class="meta-sep meta-chars-sep">&middot;</span>
-          <span id="meta-words" class="meta-chars"></span>
-          <span class="meta-sep meta-chars-sep">&middot;</span>
-          <span id="meta-chars" class="meta-chars" title="Символи: усього / без розмітки"></span>
           <span id="meta-dirty"></span>
+
+          <div class="hdr-progress" id="progress-section-trans" title="">
+            <div class="progress-bar-track">
+              <div class="progress-bar-fill" id="progress-bar"></div>
+            </div>
+            <span class="progress-pct" id="progress-pct">0%</span>
+            <span class="hdr-progress-rest" id="prog-label-entries">&mdash;</span>
+            <span class="hdr-progress-rest hdr-hide-narrow" id="prog-label-lines">&mdash;</span>
+          </div>
+
+          <div class="hdr-progress hdr-progress-edit" id="progress-section-edit" title="">
+            <span class="hdr-progress-cap">ред.</span>
+            <div class="progress-bar-track">
+              <div class="progress-bar-fill progress-edit-fill" id="progress-edit-bar"></div>
+            </div>
+            <span class="progress-edit-pct" id="progress-edit-pct">0%</span>
+            <span class="hdr-progress-rest hdr-hide-narrow" id="prog-edit-files">&mdash;</span>
+            <span class="hdr-progress-rest hdr-hide-narrow" id="prog-edit-lines">&mdash;</span>
+          </div>
+
+          <button class="schema-btn" id="schema-btn" title="Схема підрахунку"></button>
           <span class="meta-shortcut-hint" id="meta-hint"></span>
         </div>
 
@@ -299,6 +286,15 @@
     <!-- Status Bar -->
     <div id="status-bar" class="hidden">
       <span id="status-text">Готово. Ctrl+O відкрити · F1 клавіші</span>
+      <!-- Per-entry counters: they belong with the other counters down here,
+           not competing with the file name in the header. -->
+      <span class="status-counts">
+        <span id="meta-text-n">text: &mdash;</span>
+        <span id="meta-sp-n">sp: &mdash;</span>
+        <span id="meta-words" class="meta-chars"></span>
+        <span id="meta-chars" class="meta-chars" title="Символи: усього / без розмітки"></span>
+        <span id="meta-longest" class="meta-longest"></span>
+      </span>
       <span id="status-cursor" class="status-cursor"></span>
       <span id="status-encoding" class="status-encoding"></span>
       <span id="status-srt" class="status-srt"></span>

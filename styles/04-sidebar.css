@@ -162,15 +162,7 @@
 
 /* ─── Progress (compact) ─── */
 
-.progress-compact {
-  background: var(--bg-glass);
-  backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
-  border: 1px solid var(--border-glass);
-  border-radius: 8px;
-  padding: 7px 10px;
-  flex-shrink: 0;
-}
+
 
 .progress-section {
   position: relative;
@@ -267,12 +259,7 @@
   z-index: 1;
 }
 
-.progress-labels {
-  display: flex;
-  justify-content: space-between;
-  font-size: 10px;
-  color: var(--text-muted);
-}
+
 
 .progress-pct {
   color: var(--accent);

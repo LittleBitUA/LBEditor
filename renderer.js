@@ -5124,12 +5124,7 @@ async function onListItemClick(newIdx, matchOffset) {
   }
   updateSidePanelForEntry(newIdx);
   // Update left panel header if side panel is open
-  const mainTitle = document.getElementById('editor-main-title');
-  const mainHeader = document.getElementById('editor-main-header');
-  if (mainTitle && mainHeader && _sidePanelIdx >= 0) {
-    const curEntry = state.entries[newIdx];
-    mainTitle.textContent = curEntry ? `[${newIdx + 1}] ${curEntry.file || ''}` : '';
-  }
+  if (_sidePanelIdx >= 0) setTargetPaneTitle(newIdx, false);
 
   // If search filter is active, highlight the match in the editor
   const filt = dom.searchInput.value.trim();
@@ -5711,6 +5706,27 @@ function updateCharCount() {
   dom.metaChars.textContent = `${clean} / ${total} сим.`;
   dom.metaChars.title = `Чистих символів: ${clean} · Усього (з розміткою): ${total}`;
   if (metaWords) metaWords.textContent = `${wc} сл.`;
+  updateLongestLine(raw);
+}
+
+// Longest line in the entry. Game UIs and subtitles both break on over-long
+// lines, and you can't eyeball it while typing — so surface it next to the
+// other counters and flag it once it crosses the wrap width.
+function updateLongestLine(raw) {
+  const el = document.getElementById('meta-longest');
+  if (!el) return;
+  let longest = 0;
+  for (const line of String(raw || '').split('\n')) {
+    const len = line.replace(/<[^>]*>/g, '').trimEnd().length;
+    if (len > longest) longest = len;
+  }
+  const limit = parseInt(state.settings.wrap_line_width, 10) || 0;
+  el.textContent = longest ? `${longest} у рядку` : '';
+  const over = limit > 0 && longest > limit;
+  el.classList.toggle('over-limit', over);
+  el.title = limit > 0
+    ? `Найдовший рядок: ${longest} символів (ліміт переносу: ${limit})`
+    : `Найдовший рядок: ${longest} символів`;
 }
 
 function updateMeta() {
@@ -10695,18 +10711,14 @@ function showSidePanel(entryIdx, originalMode) {
   const handle = document.getElementById('side-panel-handle');
   const titleEl = document.getElementById('side-panel-title');
 
-  titleEl.textContent = isOrig
-    ? `Оригінал: [${entryIdx + 1}] ${entry.file || ''}`
-    : `[${entryIdx + 1}] ${entry.file || ''}`;
+  // Name the pane by its role first — when two editors sit side by side, which
+  // one is the source and which one you're typing into has to be unmissable.
+  titleEl.innerHTML = isOrig
+    ? `<span class="pane-role">Оригінал</span><span class="pane-ref">[${entryIdx + 1}] ${escHtml(entry.file || '')}</span>`
+    : `<span class="pane-ref">[${entryIdx + 1}] ${escHtml(entry.file || '')}</span>`;
 
   // Show left panel header with current entry name when side panel is open
-  const mainHeader = document.getElementById('editor-main-header');
-  const mainTitle = document.getElementById('editor-main-title');
-  if (mainHeader && mainTitle) {
-    const curEntry = state.entries[state.currentIndex];
-    mainTitle.textContent = curEntry ? `[${state.currentIndex + 1}] ${curEntry.file || ''}` : '';
-    mainHeader.classList.remove('hidden');
-  }
+  setTargetPaneTitle(state.currentIndex, true);
 
   // Get entry text for display
   let text;
@@ -10866,6 +10878,21 @@ function hideSidePanel() {
     if (_monacoText) _monacoText.layout();
     if (_monacoSp) _monacoSp.layout();
   }, 50);
+}
+
+// Single writer for the main (translation) pane header. Two call sites used to
+// set it independently and only one of them added the role label, so the chip
+// vanished as soon as you moved to another entry.
+function setTargetPaneTitle(idx, reveal) {
+  const header = document.getElementById('editor-main-header');
+  const title = document.getElementById('editor-main-title');
+  if (!header || !title) return;
+  const entry = state.entries[idx];
+  title.innerHTML = entry
+    ? '<span class="pane-role pane-role-target">Переклад</span>' +
+      `<span class="pane-ref">[${idx + 1}] ${escHtml(entry.file || '')}</span>`
+    : '';
+  if (reveal) header.classList.remove('hidden');
 }
 
 function toggleSidePanel() {

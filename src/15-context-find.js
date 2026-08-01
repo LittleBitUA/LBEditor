@@ -1640,18 +1640,14 @@ function showSidePanel(entryIdx, originalMode) {
   const handle = document.getElementById('side-panel-handle');
   const titleEl = document.getElementById('side-panel-title');
 
-  titleEl.textContent = isOrig
-    ? `Оригінал: [${entryIdx + 1}] ${entry.file || ''}`
-    : `[${entryIdx + 1}] ${entry.file || ''}`;
+  // Name the pane by its role first — when two editors sit side by side, which
+  // one is the source and which one you're typing into has to be unmissable.
+  titleEl.innerHTML = isOrig
+    ? `<span class="pane-role">Оригінал</span><span class="pane-ref">[${entryIdx + 1}] ${escHtml(entry.file || '')}</span>`
+    : `<span class="pane-ref">[${entryIdx + 1}] ${escHtml(entry.file || '')}</span>`;
 
   // Show left panel header with current entry name when side panel is open
-  const mainHeader = document.getElementById('editor-main-header');
-  const mainTitle = document.getElementById('editor-main-title');
-  if (mainHeader && mainTitle) {
-    const curEntry = state.entries[state.currentIndex];
-    mainTitle.textContent = curEntry ? `[${state.currentIndex + 1}] ${curEntry.file || ''}` : '';
-    mainHeader.classList.remove('hidden');
-  }
+  setTargetPaneTitle(state.currentIndex, true);
 
   // Get entry text for display
   let text;
@@ -1811,6 +1807,21 @@ function hideSidePanel() {
     if (_monacoText) _monacoText.layout();
     if (_monacoSp) _monacoSp.layout();
   }, 50);
+}
+
+// Single writer for the main (translation) pane header. Two call sites used to
+// set it independently and only one of them added the role label, so the chip
+// vanished as soon as you moved to another entry.
+function setTargetPaneTitle(idx, reveal) {
+  const header = document.getElementById('editor-main-header');
+  const title = document.getElementById('editor-main-title');
+  if (!header || !title) return;
+  const entry = state.entries[idx];
+  title.innerHTML = entry
+    ? '<span class="pane-role pane-role-target">Переклад</span>' +
+      `<span class="pane-ref">[${idx + 1}] ${escHtml(entry.file || '')}</span>`
+    : '';
+  if (reveal) header.classList.remove('hidden');
 }
 
 function toggleSidePanel() {
