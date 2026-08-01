@@ -222,23 +222,44 @@ function loadSessions() {
   return {};
 }
 
-function saveSessions(data) {
-  // Keep one generation back, so a bad write can never be the only copy.
-  try {
-    if (fs.existsSync(SESSIONS_FILE) && fs.statSync(SESSIONS_FILE).size > 0) {
-      fs.copyFileSync(SESSIONS_FILE, SESSIONS_BAK);
+// `backup` is opt-in: the .bak copy is synchronous disk I/O, and saveSessions
+// runs on every entry switch. Only worth doing when the project list itself
+// changes — an index/timestamp bump has nothing new to protect.
+function saveSessions(data, opts) {
+  if (opts && opts.backup) {
+    try {
+      if (fs.existsSync(SESSIONS_FILE) && fs.statSync(SESSIONS_FILE).size > 0) {
+        fs.copyFileSync(SESSIONS_FILE, SESSIONS_BAK);
+      }
+    } catch (e) {
+      logError('saveSessions:bak', e);
     }
-  } catch (e) {
-    logError('saveSessions:bak', e);
   }
   ioWriteJSON(SESSIONS_FILE, data);
 }
 
-// The File → Відкрити недавнє submenu is built in the main process from this
-// same file, so it has to be told when the list changed.
-function refreshRecentMenu() {
-  try { ipcRenderer.send('menu:refresh-recent'); }
-  catch (e) { logError('refreshRecentMenu', e); }
+// The File → Відкрити недавнє submenu is built in the main process, and
+// rebuilding it means re-reading the sessions file and calling
+// Menu.setApplicationMenu — a native menu-bar rebuild. saveSession() runs on
+// every entry switch, so firing this each time made switching visibly stutter.
+// Only the SET of projects matters to the menu; index/timestamp bumps don't.
+let _recentMenuSig = null;
+let _recentMenuTimer = null;
+
+function refreshRecentMenu(keys) {
+  if (Array.isArray(keys)) {
+    const sig = keys.join(' ');
+    if (sig === _recentMenuSig) return; // same projects — menu is still correct
+    _recentMenuSig = sig;
+  } else {
+    _recentMenuSig = null; // forced (list cleared / entry removed)
+  }
+  if (_recentMenuTimer) clearTimeout(_recentMenuTimer);
+  _recentMenuTimer = setTimeout(() => {
+    _recentMenuTimer = null;
+    try { ipcRenderer.send('menu:refresh-recent'); }
+    catch (e) { logError('refreshRecentMenu', e); }
+  }, 400);
 }
 
 function currentSessionKey() {
@@ -253,6 +274,7 @@ function saveSession() {
   const key = currentSessionKey();
   if (!key) return;
   const sessions = loadSessions();
+  const isNewProject = !sessions[key];
   const prev = sessions[key] || {};
   sessions[key] = {
     ...prev,
@@ -260,8 +282,9 @@ function saveSession() {
     timestamp: new Date().toISOString().slice(0, 19),
     mode: state.appMode,
   };
-  saveSessions(sessions);
-  refreshRecentMenu();
+  // A first-time project is worth backing up; a cursor-position bump is not.
+  saveSessions(sessions, { backup: isNewProject });
+  refreshRecentMenu(Object.keys(sessions));
 }
 
 // Latest computed progress for the open project, stashed by _applyProgress.

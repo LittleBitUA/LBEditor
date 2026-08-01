@@ -11,3 +11,8 @@ editor_sessions.json
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# local app data
+editor_sessions.json
+editor_sessions.bak.json
+editor_errors.log
