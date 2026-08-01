@@ -30,19 +30,12 @@ function setupDragDrop() {
   // drag whose types we can't read — is treated as a file drop, because
   // refusing it means Windows shows the "not allowed" cursor and the user
   // simply can't open files by dragging.
-  let _dragTypesLogged = false;
   const carriesFiles = (e) => {
     const dt = e.dataTransfer;
     if (!dt) return true;
     let types;
     try { types = Array.prototype.slice.call(dt.types || []); }
     catch (_) { return true; }
-
-    if (!_dragTypesLogged) {
-      _dragTypesLogged = true;
-      logError('dragTypes', new Error('types=' + JSON.stringify(types) +
-        ' items=' + ((dt.items && dt.items.length) || 0)));
-    }
 
     if (types.length === 0) return true;
     if (types.indexOf('Files') !== -1) return true;

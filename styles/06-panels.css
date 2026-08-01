@@ -74,8 +74,12 @@
   flex-shrink: 0;
   white-space: nowrap;
 }
-/* The translation chip is the headline number, so it gets the space */
-.editor-header > .hdr-progress:first-of-type { margin-left: auto; }
+/* Progress belongs to the file, so it sits next to its name. Pushing it to the
+   far right left a void hundreds of pixels wide on a big monitor. */
+.editor-header .meta-file { flex: 0 1 auto; }
+.editor-header > .hdr-progress:first-of-type { margin-left: 6px; }
+/* Only the trailing controls hug the right edge */
+.editor-header .schema-btn { margin-left: auto; }
 
 .hdr-progress .progress-bar-track {
   width: 110px;
