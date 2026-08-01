@@ -1,0 +1,610 @@
+<meta charset="utf-8">
+<title>LB Editor — прототип редизайну</title>
+<style>
+/* ═══════════════════════════════════════════════════════════
+   Prototype only — not wired into the app.
+   Tokens are copied from styles/01-themes.css on purpose: the
+   redesign changes structure and information design, not the
+   colour system, so this can be ported back as-is.
+   ═══════════════════════════════════════════════════════════ */
+
+:root {
+  --bg-deep: #1b1b1b;
+  --bg-sunken: #161616;
+  --bg-raised: #212124;
+  --bg-glass: rgba(255,255,255,0.05);
+  --bg-glass-hover: rgba(255,255,255,0.08);
+  --bg-glass-active: rgba(255,255,255,0.12);
+  --bg-input: rgba(0,0,0,0.30);
+
+  --text-primary: #e8e8e8;
+  --text-secondary: rgba(232,232,232,0.62);
+  --text-muted: rgba(232,232,232,0.32);
+  --text-placeholder: rgba(232,232,232,0.20);
+
+  --border: rgba(255,255,255,0.08);
+  --border-strong: rgba(255,255,255,0.14);
+  --border-focus: rgba(160,180,220,0.50);
+
+  --accent: #7eb8e0;
+  --accent-subtle: rgba(126,184,224,0.12);
+
+  --untranslated: rgba(232,232,232,0.22);
+  --translated: #5ab87a;
+  --edited: #e88a3a;
+  --error: #d45050;
+
+  --mono: 'Consolas', 'Cascadia Mono', monospace;
+  --sans: 'Segoe UI', system-ui, sans-serif;
+}
+
+/* Prototype-only: follow the OS theme when opened in a browser. The real app
+   reads the theme from settings, so this block is dropped when porting back. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg-deep: #f2f2f3;
+    --bg-sunken: #e9e9eb;
+    --bg-raised: #ffffff;
+    --bg-glass: rgba(255,255,255,0.70);
+    --bg-glass-hover: rgba(0,0,0,0.04);
+    --bg-glass-active: rgba(0,0,0,0.07);
+    --bg-input: rgba(0,0,0,0.04);
+    --text-primary: #1a1a1a;
+    --text-secondary: rgba(26,26,26,0.66);
+    --text-muted: rgba(26,26,26,0.40);
+    --text-placeholder: rgba(26,26,26,0.28);
+    --border: rgba(0,0,0,0.10);
+    --border-strong: rgba(0,0,0,0.16);
+    --border-focus: rgba(70,110,160,0.55);
+    --accent: #2f7fb8;
+    --accent-subtle: rgba(47,127,184,0.12);
+    --untranslated: rgba(26,26,26,0.22);
+    --translated: #2f8f52;
+    --edited: #c26a12;
+  }
+}
+
+:root[data-theme="light"] {
+  --bg-deep: #f2f2f3;
+  --bg-sunken: #e9e9eb;
+  --bg-raised: #ffffff;
+  --bg-glass: rgba(255,255,255,0.70);
+  --bg-glass-hover: rgba(0,0,0,0.04);
+  --bg-glass-active: rgba(0,0,0,0.07);
+  --bg-input: rgba(0,0,0,0.04);
+
+  --text-primary: #1a1a1a;
+  --text-secondary: rgba(26,26,26,0.66);
+  --text-muted: rgba(26,26,26,0.40);
+  --text-placeholder: rgba(26,26,26,0.28);
+
+  --border: rgba(0,0,0,0.10);
+  --border-strong: rgba(0,0,0,0.16);
+  --border-focus: rgba(70,110,160,0.55);
+
+  --accent: #2f7fb8;
+  --accent-subtle: rgba(47,127,184,0.12);
+
+  --untranslated: rgba(26,26,26,0.22);
+  --translated: #2f8f52;
+  --edited: #c26a12;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  font: 13px/1.45 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+button { font: inherit; color: inherit; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
+
+/* ─────────────────────────────────────────────
+   HEADER — identity, progress, global actions.
+   Replaces both the old meta strip and the
+   cramped progress block in the bottom corner.
+   ───────────────────────────────────────────── */
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 0 14px;
+  height: 46px;
+  flex-shrink: 0;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+}
+
+.file-id { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
+.file-name { font-size: 13.5px; font-weight: 600; white-space: nowrap; }
+.file-dir {
+  font: 10.5px var(--mono);
+  color: var(--text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 260px; direction: rtl; text-align: left;
+}
+.unsaved-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--edited); flex-shrink: 0;
+  align-self: center;
+}
+
+/* Progress reads at a glance: bar + number + what's left */
+.progress-chip {
+  display: flex; align-items: center; gap: 10px;
+  margin-left: auto;
+  padding: 5px 11px;
+  background: var(--bg-glass);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.prog-track {
+  width: 120px; height: 5px; border-radius: 3px;
+  background: var(--bg-input); overflow: hidden;
+}
+.prog-fill { height: 100%; background: var(--translated); border-radius: 3px; }
+.prog-pct {
+  font: 600 12px var(--mono);
+  font-variant-numeric: tabular-nums;
+  min-width: 44px;
+}
+.prog-rest { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+
+.header-actions { display: flex; gap: 4px; }
+
+.hbtn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 10px;
+  background: transparent; border: 1px solid transparent;
+  border-radius: 7px; color: var(--text-secondary);
+  font-size: 12px;
+}
+.hbtn:hover { background: var(--bg-glass-hover); color: var(--text-primary); }
+.hbtn svg { width: 15px; height: 15px; }
+.hbtn.primary {
+  background: var(--accent-subtle); color: var(--accent);
+  border-color: var(--accent-subtle); font-weight: 600;
+}
+.hbtn.primary:hover { border-color: var(--accent); }
+.hbtn.icon-only { padding: 0 7px; }
+
+/* ─────────────────────────────────────────────
+   BODY — segment list + work surface
+   ───────────────────────────────────────────── */
+
+.app-body { flex: 1; display: flex; min-height: 0; }
+
+/* ── Segment list ── */
+
+.seg-panel {
+  width: 340px; flex-shrink: 0;
+  display: flex; flex-direction: column;
+  background: var(--bg-sunken);
+  border-right: 1px solid var(--border);
+}
+
+.seg-tools { padding: 9px 10px 7px; display: flex; flex-direction: column; gap: 8px; }
+
+.seg-search {
+  display: flex; align-items: center; gap: 7px;
+  padding: 0 9px; height: 30px;
+  background: var(--bg-input);
+  border: 1px solid transparent; border-radius: 7px;
+}
+.seg-search:focus-within { border-color: var(--border-focus); }
+.seg-search svg { width: 14px; height: 14px; color: var(--text-muted); flex-shrink: 0; }
+.seg-search input {
+  flex: 1; min-width: 0; background: none; border: none; outline: none;
+  color: var(--text-primary); font: inherit;
+}
+.seg-search input::placeholder { color: var(--text-placeholder); }
+
+.seg-filters { display: flex; gap: 4px; }
+.chip {
+  flex: 1;
+  padding: 4px 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11px; color: var(--text-secondary);
+  display: flex; align-items: center; justify-content: center; gap: 5px;
+}
+.chip:hover { background: var(--bg-glass-hover); }
+.chip[aria-pressed="true"] {
+  background: var(--bg-glass-active);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+.chip .n { font: 10px var(--mono); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.chip[aria-pressed="true"] .n { color: var(--text-secondary); }
+
+.seg-list { flex: 1; overflow-y: auto; padding: 2px 0 8px; }
+
+/* One row = one segment. Content first, status encoded as a
+   left stripe so it reads without parsing any text. */
+.seg {
+  position: relative;
+  display: block; width: 100%; text-align: left;
+  padding: 8px 12px 9px 15px;
+  background: none; border: none;
+  border-bottom: 1px solid var(--border);
+}
+.seg::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+  width: 3px; background: var(--untranslated);
+}
+.seg[data-state="translated"]::before { background: var(--translated); }
+.seg[data-state="edited"]::before { background: var(--edited); }
+.seg:hover { background: var(--bg-glass-hover); }
+.seg[aria-current="true"] { background: var(--bg-glass-active); }
+.seg[aria-current="true"]::before { width: 3px; }
+
+.seg-head {
+  display: flex; align-items: baseline; gap: 7px; margin-bottom: 3px;
+}
+.seg-id {
+  font: 10px var(--mono); color: var(--text-muted);
+  font-variant-numeric: tabular-nums; flex-shrink: 0;
+}
+.seg-speaker {
+  font-size: 11px; font-weight: 600; color: var(--accent);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.seg-flag { margin-left: auto; font-size: 10px; flex-shrink: 0; color: var(--text-muted); }
+.seg-flag.warn { color: var(--edited); }
+
+.seg-src {
+  font-size: 12px; color: var(--text-secondary);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.seg[data-state="untranslated"] .seg-src { color: var(--text-muted); }
+
+.seg-count {
+  padding: 7px 12px; font-size: 11px; color: var(--text-muted);
+  border-top: 1px solid var(--border);
+  display: flex; justify-content: space-between;
+}
+
+/* ── Work surface ── */
+
+.work { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--bg-deep); }
+
+.work-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 14px; height: 38px; flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+.work-id { font: 11px var(--mono); color: var(--text-muted); }
+.work-speaker { font-size: 13px; font-weight: 600; }
+
+.state-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 9px; border-radius: 20px;
+  font-size: 10.5px; font-weight: 600;
+  border: 1px solid transparent;
+}
+.state-pill::before { content: ''; width: 6px; height: 6px; border-radius: 50%; }
+.state-pill[data-state="untranslated"] { color: var(--text-muted); border-color: var(--border); }
+.state-pill[data-state="untranslated"]::before { background: var(--untranslated); }
+.state-pill[data-state="translated"] { color: var(--translated); border-color: rgba(90,184,122,0.30); background: rgba(90,184,122,0.10); }
+.state-pill[data-state="translated"]::before { background: var(--translated); }
+.state-pill[data-state="edited"] { color: var(--edited); border-color: rgba(232,138,58,0.30); background: rgba(232,138,58,0.10); }
+.state-pill[data-state="edited"]::before { background: var(--edited); }
+
+.work-nav { margin-left: auto; display: flex; align-items: center; gap: 2px; }
+.navbtn {
+  width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
+  background: none; border: none; border-radius: 6px; color: var(--text-secondary);
+}
+.navbtn:hover { background: var(--bg-glass-hover); color: var(--text-primary); }
+.navbtn svg { width: 14px; height: 14px; }
+.work-pos { font: 11px var(--mono); color: var(--text-muted); margin: 0 6px; font-variant-numeric: tabular-nums; }
+
+/* Source above target — the axis the work actually runs on */
+.panes { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
+.pane { display: flex; flex-direction: column; min-height: 0; }
+.pane.source { flex: 0 0 auto; max-height: 38%; background: var(--bg-sunken); border-bottom: 1px solid var(--border); }
+.pane.target { flex: 1; }
+
+.pane-label {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 16px 5px;
+  font-size: 10px; font-weight: 600; letter-spacing: 1.2px;
+  text-transform: uppercase; color: var(--text-muted);
+  flex-shrink: 0;
+}
+.pane-label .lang {
+  font: 10px var(--mono); letter-spacing: 0;
+  padding: 1px 6px; border-radius: 4px;
+  background: var(--bg-glass); color: var(--text-secondary);
+}
+.pane-label .hint { margin-left: auto; letter-spacing: 0; text-transform: none; font-weight: 400; font-size: 11px; }
+
+.pane-text {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: 2px 16px 14px;
+  font-size: 14px; line-height: 1.65;
+  white-space: pre-wrap;
+}
+.pane.source .pane-text { color: var(--text-secondary); }
+.pane.target .pane-text { outline: none; }
+.pane.target .pane-text:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-placeholder);
+}
+
+/* Inline QA rail — the numbers a translator actually watches */
+.qa-rail {
+  display: flex; align-items: center; gap: 16px;
+  padding: 0 16px; height: 32px; flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  font-size: 11px; color: var(--text-muted);
+}
+.qa { display: flex; align-items: center; gap: 5px; }
+.qa b { font: 600 11px var(--mono); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.qa.over b { color: var(--edited); }
+.qa-hint { margin-left: auto; font-size: 11px; }
+kbd {
+  font: 10px var(--mono); padding: 1px 5px;
+  border: 1px solid var(--border-strong); border-radius: 4px;
+  background: var(--bg-glass); color: var(--text-secondary);
+}
+
+/* ── Status bar ── */
+
+.status-bar {
+  display: flex; align-items: center; gap: 14px;
+  padding: 0 12px; height: 24px; flex-shrink: 0;
+  background: var(--bg-raised);
+  border-top: 1px solid var(--border);
+  font-size: 10.5px; color: var(--text-muted);
+}
+.status-bar .right { margin-left: auto; display: flex; gap: 14px; }
+.status-bar .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+/* Prototype marker — sits in the status bar, so it can't cover the QA rail */
+.proto-tag {
+  padding: 1px 7px; border-radius: 4px;
+  background: var(--accent-subtle); color: var(--accent);
+  font-weight: 600; letter-spacing: 0.4px;
+}
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<header class="app-header">
+  <div class="file-id">
+    <span class="file-name">all_messages.json</span>
+    <span class="file-dir">E:\Localization\Ishin\msg\uid00001042</span>
+    <span class="unsaved-dot" title="Є незбережені зміни"></span>
+  </div>
+
+  <div class="progress-chip" title="Перекладено 412 з 602 записів">
+    <div class="prog-track"><div class="prog-fill" style="width:68.4%"></div></div>
+    <span class="prog-pct">68.4%</span>
+    <span class="prog-rest">лишилось 190</span>
+  </div>
+
+  <div class="header-actions">
+    <button class="hbtn primary">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
+      Зберегти
+    </button>
+    <button class="hbtn icon-only" title="Знайти і замінити (Ctrl+F)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+    </button>
+    <button class="hbtn icon-only" title="Схема файлу">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h7"/></svg>
+    </button>
+    <button class="hbtn icon-only" id="themeBtn" title="Перемкнути тему">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+    </button>
+    <button class="hbtn icon-only" title="Більше дій">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+    </button>
+  </div>
+</header>
+
+<div class="app-body">
+  <aside class="seg-panel">
+    <div class="seg-tools">
+      <div class="seg-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+        <input id="filter" type="text" placeholder="Пошук по оригіналу й перекладу…" spellcheck="false">
+      </div>
+      <div class="seg-filters" id="chips">
+        <button class="chip" data-f="all" aria-pressed="true">Усі <span class="n">8</span></button>
+        <button class="chip" data-f="untranslated" aria-pressed="false">Нові <span class="n">3</span></button>
+        <button class="chip" data-f="translated" aria-pressed="false">Готові <span class="n">4</span></button>
+        <button class="chip" data-f="edited" aria-pressed="false">Змінені <span class="n">1</span></button>
+      </div>
+    </div>
+    <div class="seg-list" id="list" role="listbox" aria-label="Записи"></div>
+    <div class="seg-count"><span id="shown">8 записів</span><span id="sel">4 з 8</span></div>
+  </aside>
+
+  <main class="work">
+    <div class="work-bar">
+      <span class="work-id" id="wId">#1003</span>
+      <span class="work-speaker" id="wSpeaker">Окіта</span>
+      <span class="state-pill" id="wState" data-state="edited">Змінено</span>
+      <div class="work-nav">
+        <span class="work-pos" id="wPos">4 / 8</span>
+        <button class="navbtn" id="prev" title="Попередній (Ctrl+↑)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 15l-6-6-6 6"/></svg>
+        </button>
+        <button class="navbtn" id="next" title="Наступний (Ctrl+↓)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="panes">
+      <section class="pane source">
+        <div class="pane-label">
+          Оригінал <span class="lang">JA→EN</span>
+          <span class="hint">Ctrl+C — скопіювати в переклад</span>
+        </div>
+        <div class="pane-text" id="srcText"></div>
+      </section>
+
+      <section class="pane target">
+        <div class="pane-label">
+          Переклад <span class="lang">UK</span>
+        </div>
+        <div class="pane-text" id="tgtText" contenteditable="true" spellcheck="false"
+             data-placeholder="Почніть перекладати…"></div>
+        <div class="qa-rail">
+          <span class="qa">символів <b id="qaChars">0</b></span>
+          <span class="qa" id="qaLenWrap">довжина рядка <b id="qaLen">0</b></span>
+          <span class="qa">слів <b id="qaWords">0</b></span>
+          <span class="qa-hint"><kbd>Ctrl</kbd>+<kbd>Enter</kbd> — застосувати й далі</span>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<footer class="status-bar">
+  <span class="proto-tag">Прототип</span>
+  <span id="sbFile">8 записів завантажено</span>
+  <span class="right">
+    <span class="mono" id="sbPos">Рядок 1, Стовп 1</span>
+    <span class="mono">UTF-8</span>
+    <span>LaD: Ishin</span>
+  </span>
+</footer>
+
+<script>
+// Sample content — real Ukrainian localisation lines, not lorem.
+const SEGMENTS = [
+  { id: 1000, speaker: 'Сакамото', state: 'translated',
+    src: "I didn't come back to Tosa\nto watch it all burn.",
+    tgt: 'Я не для того повернувся до Тоси,\nщоб дивитись, як усе згорить.' },
+  { id: 1001, speaker: 'Такечі', state: 'translated',
+    src: "You're late. The council has already decided.",
+    tgt: 'Ти запізнився. Рада вже ухвалила рішення.' },
+  { id: 1002, speaker: 'Сакамото', state: 'translated',
+    src: "Then I'll undo it.",
+    tgt: 'Тоді я його скасую.' },
+  { id: 1003, speaker: 'Окіта', state: 'edited',
+    src: "You're funny. I like that.\nBut the sword is still faster.",
+    tgt: 'Смішний ти. Мені це подобається.\nАле меч усе одно швидший.' },
+  { id: 1004, speaker: '', state: 'translated',
+    src: 'The crowd falls silent.',
+    tgt: 'Натовп затихає.' },
+  { id: 1005, speaker: 'Хіджіката', state: 'untranslated',
+    src: 'Hold the line. Break it and you die.', tgt: '' },
+  { id: 1006, speaker: 'Сакамото', state: 'untranslated',
+    src: "I hear you're the law around here.\nStrange, you don't look like lawmen.", tgt: '' },
+  { id: 1007, speaker: 'Кондо', state: 'untranslated',
+    src: "The law is what's left\nwhen everyone else has run.", tgt: '' },
+];
+
+const STATE_LABEL = { untranslated: 'Не перекладено', translated: 'Перекладено', edited: 'Змінено' };
+const LINE_LIMIT = 42; // flag over-long lines, same idea as the SRT check
+
+let current = 3;
+let filter = 'all';
+let query = '';
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+function visible() {
+  const q = query.trim().toLowerCase();
+  return SEGMENTS.filter(s =>
+    (filter === 'all' || s.state === filter) &&
+    (!q || (s.src + ' ' + s.tgt + ' ' + s.speaker).toLowerCase().includes(q)));
+}
+
+function renderList() {
+  const rows = visible();
+  $('list').innerHTML = rows.map(s => {
+    const i = SEGMENTS.indexOf(s);
+    const longLine = s.tgt.split('\n').some(l => l.length > LINE_LIMIT);
+    return `<button class="seg" data-i="${i}" data-state="${s.state}"
+              role="option" aria-current="${i === current}">
+      <span class="seg-head">
+        <span class="seg-id">#${s.id}</span>
+        ${s.speaker ? `<span class="seg-speaker">${esc(s.speaker)}</span>` : '<span class="seg-speaker" style="color:var(--text-muted)">— опис —</span>'}
+        ${longLine ? '<span class="seg-flag warn" title="Задовгий рядок">довгий рядок</span>'
+                   : (s.state === 'untranslated' ? '<span class="seg-flag">новий</span>' : '')}
+      </span>
+      <span class="seg-src">${esc(s.tgt || s.src)}</span>
+    </button>`;
+  }).join('');
+  $('shown').textContent = rows.length === SEGMENTS.length
+    ? `${SEGMENTS.length} записів` : `${rows.length} з ${SEGMENTS.length}`;
+  $('sel').textContent = `${current + 1} з ${SEGMENTS.length}`;
+}
+
+function renderEditor() {
+  const s = SEGMENTS[current];
+  $('wId').textContent = '#' + s.id;
+  $('wSpeaker').textContent = s.speaker || '— опис сцени —';
+  $('wState').dataset.state = s.state;
+  $('wState').textContent = STATE_LABEL[s.state];
+  $('wPos').textContent = `${current + 1} / ${SEGMENTS.length}`;
+  $('srcText').textContent = s.src;
+  $('tgtText').textContent = s.tgt;
+  updateQA();
+}
+
+function updateQA() {
+  const t = $('tgtText').innerText.replace(/\n$/, '');
+  const longest = Math.max(0, ...t.split('\n').map(l => l.length));
+  $('qaChars').textContent = t.length;
+  $('qaLen').textContent = longest;
+  $('qaWords').textContent = t.trim() ? t.trim().split(/\s+/).length : 0;
+  $('qaLenWrap').classList.toggle('over', longest > LINE_LIMIT);
+}
+
+function select(i) {
+  SEGMENTS[current].tgt = $('tgtText').innerText.replace(/\n$/, '');
+  current = Math.max(0, Math.min(SEGMENTS.length - 1, i));
+  renderList(); renderEditor();
+}
+
+$('list').addEventListener('click', e => {
+  const b = e.target.closest('.seg');
+  if (b) select(+b.dataset.i);
+});
+$('prev').addEventListener('click', () => select(current - 1));
+$('next').addEventListener('click', () => select(current + 1));
+$('tgtText').addEventListener('input', () => {
+  updateQA();
+  const s = SEGMENTS[current];
+  if (s.state !== 'edited') { s.state = 'edited'; $('wState').dataset.state = 'edited'; $('wState').textContent = STATE_LABEL.edited; }
+});
+$('filter').addEventListener('input', e => { query = e.target.value; renderList(); });
+$('chips').addEventListener('click', e => {
+  const c = e.target.closest('.chip');
+  if (!c) return;
+  filter = c.dataset.f;
+  [...$('chips').children].forEach(x => x.setAttribute('aria-pressed', String(x === c)));
+  renderList();
+});
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); select(current + 1); $('tgtText').focus(); }
+  if (e.ctrlKey && e.key === 'ArrowDown') { e.preventDefault(); select(current + 1); }
+  if (e.ctrlKey && e.key === 'ArrowUp') { e.preventDefault(); select(current - 1); }
+});
+$('themeBtn').addEventListener('click', () => {
+  const light = document.documentElement.getAttribute('data-theme') === 'light';
+  document.documentElement.setAttribute('data-theme', light ? 'dark' : 'light');
+});
+
+renderList(); renderEditor();
+</script>

@@ -208,6 +208,7 @@ class Entry {
     this._schemaCache = undefined;
     this._schemaCacheVer = undefined;
     this._searchCache = undefined;
+    this._previewCache = undefined;
   }
 
   visibleSpeakers() { return this.speakers.filter(s => !isSystemSpeaker(s)); }
@@ -355,6 +356,7 @@ class TxtEntry {
     this._schemaCache = undefined;
     this._schemaCacheVer = undefined;
     this._searchCache = undefined;
+    this._previewCache = undefined;
   }
 
   toFlat() {
@@ -421,6 +423,7 @@ class JoJoEntry {
     this._schemaCache = undefined;
     this._schemaCacheVer = undefined;
     this._searchCache = undefined;
+    this._previewCache = undefined;
   }
 
   toFlat() {

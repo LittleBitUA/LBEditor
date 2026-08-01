@@ -513,6 +513,7 @@ class Entry {
     this._schemaCache = undefined;
     this._schemaCacheVer = undefined;
     this._searchCache = undefined;
+    this._previewCache = undefined;
   }
 
   visibleSpeakers() { return this.speakers.filter(s => !isSystemSpeaker(s)); }
@@ -660,6 +661,7 @@ class TxtEntry {
     this._schemaCache = undefined;
     this._schemaCacheVer = undefined;
     this._searchCache = undefined;
+    this._previewCache = undefined;
   }
 
   toFlat() {
@@ -726,6 +728,7 @@ class JoJoEntry {
     this._schemaCache = undefined;
     this._schemaCacheVer = undefined;
     this._searchCache = undefined;
+    this._previewCache = undefined;
   }
 
   toFlat() {
@@ -2371,38 +2374,16 @@ function setupProjectDict(name) {
 //  Welcome Screen
 // ═══════════════════════════════════════════════════════════
 
-// Inline SVG beats emoji here: it inherits the theme colour, renders the same
-// on every machine, and stays crisp at any zoom.
-const WELCOME_ICON_FOLDER =
-  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" ' +
-  'stroke-linecap="round" stroke-linejoin="round">' +
-  '<path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
-const WELCOME_ICON_FILE =
-  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" ' +
-  'stroke-linecap="round" stroke-linejoin="round">' +
-  '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>';
-
-// Progress strip for a project card. Sessions saved before progress was
-// recorded simply have no bar — better than showing a fake 0%.
-function _welcomeProgressHtml(p) {
+// Right-hand figures for a project row. Sessions saved before progress was
+// recorded show "не відкривався" rather than a fake 0%.
+function _welcomeNumbersHtml(p) {
   if (!p || typeof p.pct !== 'number') {
-    return '<div class="welcome-card-progress is-unknown">' +
-             '<div class="welcome-progress-track"><div class="welcome-progress-bar" style="width:0%"></div></div>' +
-             '<span class="welcome-progress-label">—</span>' +
-           '</div>';
+    return '<span class="welcome-proj-sub">не відкривався</span>';
   }
   const pct = Math.max(0, Math.min(100, p.pct));
-  const tier = pct >= 100 ? 'done' : pct >= 66 ? 'high' : pct >= 33 ? 'mid' : 'low';
-  const unit = p.unit === 'words' ? 'слів' : 'рядків';
-  const detail = (typeof p.units === 'number' && typeof p.totalUnits === 'number')
-    ? `${p.units} / ${p.totalUnits} ${unit}` : '';
-  const files = (typeof p.files === 'number' && typeof p.totalFiles === 'number')
-    ? `${p.files} / ${p.totalFiles} файлів` : '';
-  const title = [detail, files].filter(Boolean).join(' · ');
-  return `<div class="welcome-card-progress" data-tier="${tier}"${title ? ` title="${escHtml(title)}"` : ''}>` +
-           `<div class="welcome-progress-track"><div class="welcome-progress-bar" style="width:${pct}%"></div></div>` +
-           `<span class="welcome-progress-label">${pct.toFixed(pct % 1 === 0 ? 0 : 1)}%</span>` +
-         `</div>`;
+  const counts = (typeof p.files === 'number' && typeof p.totalFiles === 'number')
+    ? ` <span class="welcome-proj-sub">· ${p.files}/${p.totalFiles}</span>` : '';
+  return `<span class="welcome-proj-pct">${pct.toFixed(pct % 1 === 0 ? 0 : 1)}%</span>${counts}`;
 }
 
 function showWelcomeScreen() {
@@ -2434,7 +2415,7 @@ function _filterWelcomeRecent(query) {
   const list = document.getElementById('welcome-recent-list');
   if (!list) return;
   let shown = 0;
-  for (const item of list.querySelectorAll('.welcome-card')) {
+  for (const item of list.querySelectorAll('.welcome-proj')) {
     const hay = (item.dataset.search || '').toLowerCase();
     const match = !q || hay.includes(q);
     item.style.display = match ? '' : 'none';
@@ -2517,7 +2498,6 @@ async function _buildRecentFilesListAsync(container) {
     const parentPath = nodePath.dirname(rawPath);
 
     // Badge
-    const badgeClass = mode === 'jojo' ? 'badge-jojo' : mode === 'other' ? 'badge-other' : 'badge-ishin';
     const badgeLabel = mode === 'jojo' ? 'JoJo' : mode === 'other' ? 'Звич.' : 'LaD: Ishin';
 
     // Date
@@ -2540,28 +2520,39 @@ async function _buildRecentFilesListAsync(container) {
       }
     }
 
-    const item = document.createElement('div');
-    item.className = 'welcome-card' + (exists ? '' : ' missing');
+    const prog = data.progress;
+    const pct = (prog && typeof prog.pct === 'number') ? Math.max(0, Math.min(100, prog.pct)) : 0;
+    const unknown = !prog || typeof prog.pct !== 'number';
+    // A folder keeps its trailing slash as a muted glyph rather than an icon —
+    // the name itself says what kind of thing this is.
+    const nameHtml = isTxtDir
+      ? `${escHtml(displayName.replace(/\/$/, ''))}<span class="welcome-proj-slash">/</span>`
+      : escHtml(displayName);
+
+    const item = document.createElement('button');
+    item.className = 'welcome-proj' + (exists ? '' : ' missing');
     item.dataset.search = displayName + ' ' + parentPath;
+    item.dataset.done = String(pct >= 100 && !unknown);
+    item.dataset.unknown = String(unknown);
     item.title = exists ? rawPath : `Не знайдено: ${rawPath}`;
     item.innerHTML =
-      `<div class="welcome-card-top">` +
-        `<span class="welcome-file-icon">${isTxtDir ? WELCOME_ICON_FOLDER : WELCOME_ICON_FILE}</span>` +
-        `<div class="welcome-file-info">` +
-          `<div class="welcome-file-name">${escHtml(displayName)}</div>` +
-          `<div class="welcome-file-path">${escHtml(parentPath)}</div>` +
-        `</div>` +
-        `<button class="welcome-file-remove" title="Видалити зі списку">&times;</button>` +
-      `</div>` +
-      _welcomeProgressHtml(data.progress) +
-      `<div class="welcome-card-foot">` +
-        `<span class="welcome-file-badge ${badgeClass}">${badgeLabel}</span>` +
-        `<span class="welcome-file-date">${escHtml(dateLabel)}</span>` +
-      `</div>`;
+      `<span class="welcome-proj-top">` +
+        `<span class="welcome-proj-name">${nameHtml}</span>` +
+        `<span class="welcome-proj-mode">${badgeLabel}</span>` +
+        `<span class="welcome-proj-num">${_welcomeNumbersHtml(prog)}</span>` +
+      `</span>` +
+      `<span class="welcome-proj-rule">` +
+        `<span class="welcome-proj-fill" style="width:${unknown ? 0 : pct}%"></span>` +
+      `</span>` +
+      `<span class="welcome-proj-foot">` +
+        `<span class="welcome-proj-path">${escHtml(parentPath)}</span>` +
+        `<span class="welcome-proj-when">${escHtml(dateLabel)}</span>` +
+      `</span>` +
+      `<span class="welcome-proj-remove" role="button" title="Прибрати зі списку">&times;</span>`;
 
     // Click to open
     item.addEventListener('click', (e) => {
-      if (e.target.closest('.welcome-file-remove')) return;
+      if (e.target.closest('.welcome-proj-remove')) return;
       if (!exists) {
         setStatus(`Файл не знайдено: ${rawPath}`);
         return;
@@ -2571,7 +2562,7 @@ async function _buildRecentFilesListAsync(container) {
     });
 
     // Remove button
-    item.querySelector('.welcome-file-remove').addEventListener('click', (e) => {
+    item.querySelector('.welcome-proj-remove').addEventListener('click', (e) => {
       e.stopPropagation();
       removeFromRecent(key);
       buildRecentFilesList();
@@ -2628,7 +2619,7 @@ function setupWelcomeListeners() {
       if (e.key === 'Escape') { filterEl.value = ''; _filterWelcomeRecent(''); }
       // Enter opens the only remaining match — fast keyboard path into a project
       if (e.key === 'Enter') {
-        const visible = [...document.querySelectorAll('#welcome-recent-list .welcome-card')]
+        const visible = [...document.querySelectorAll('#welcome-recent-list .welcome-proj')]
           .filter(el => el.style.display !== 'none');
         if (visible.length === 1) visible[0].click();
       }
@@ -4733,7 +4724,10 @@ function getEntryAllMatchLines(entry, filt) {
 }
 
 // ── Virtual scroll state ──────────────────────────────────
-const ITEM_HEIGHT_NORMAL = 22;
+// Rows carry an identity line plus a content preview, so both variants are
+// two lines tall. These MUST match the CSS height of .entry-item exactly —
+// the virtual scroller positions spacers from them.
+const ITEM_HEIGHT_NORMAL = 40;
 const ITEM_HEIGHT_SNIPPET = 40;
 const VIRTUAL_OVERSCAN = 10;
 
@@ -4846,6 +4840,33 @@ function getMultiSelectedIndices() {
   return Array.from(_multiSelected).sort((a, b) => a - b);
 }
 
+// First meaningful line of an entry, for the list preview. Structural lines
+// ("{", "[") are skipped — they say nothing about the content. Cached because
+// the virtual scroller rebuilds every visible row on each scroll tick.
+function getEntryPreview(entry) {
+  if (entry._previewCache !== undefined) return entry._previewCache;
+  let speaker = '';
+  let text = '';
+  try {
+    const raw = Array.isArray(entry.text)
+      ? entry.text
+      : String(entry.text == null ? '' : entry.text).split('\n');
+
+    if (state.appMode === 'ishin' && typeof entry.visibleSpeakers === 'function') {
+      const sp = entry.visibleSpeakers();
+      if (sp.length) speaker = sp[0];
+    }
+    // Prefer a line that actually contains letters over "{", "[", "---"
+    text = raw.find(l => l && /\p{L}/u.test(l)) || raw.find(l => l && l.trim()) || '';
+  } catch (e) {
+    logError('getEntryPreview', e);
+  }
+  text = text.replace(/\s+/g, ' ').trim();
+  if (text.length > 140) text = text.slice(0, 139) + '…';
+  entry._previewCache = { speaker, text };
+  return entry._previewCache;
+}
+
 // ── Create a single entry DOM element ─────────────────────
 function createEntryElement(entry, filtIdx) {
   const el = document.createElement('div');
@@ -4909,20 +4930,51 @@ function createEntryElement(entry, filtIdx) {
     }
     el.appendChild(snippetEl);
   } else {
-    const textNode = document.createTextNode(`${prefix}[${entry.index + 1}] ${entry.file}`);
-    el.appendChild(textNode);
+    // Two lines: identity on top, a preview of the content below. Reading
+    // "[12] file.json" alone never told you what was inside.
+    const head = document.createElement('div');
+    head.className = 'entry-item-head';
+
+    const idxEl = document.createElement('span');
+    idxEl.className = 'entry-item-idx';
+    idxEl.textContent = `${prefix}[${entry.index + 1}]`;
+    head.appendChild(idxEl);
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'entry-item-file';
+    nameEl.textContent = entry.file || '';
+    head.appendChild(nameEl);
+
     if (entry.external && entry.externalDir) {
       const badge = document.createElement('span');
       badge.className = 'entry-external-badge';
       badge.textContent = entry.externalDir;
-      el.appendChild(badge);
+      head.appendChild(badge);
     }
     if (noteText) {
       const noteEl = document.createElement('span');
       noteEl.className = 'entry-item-note';
       noteEl.textContent = noteText;
-      el.appendChild(noteEl);
+      head.appendChild(noteEl);
     }
+    el.appendChild(head);
+
+    // Always rendered, even when empty — the virtual scroller needs every row
+    // to be exactly _getItemHeight() tall or the spacer maths drifts.
+    const prev = getEntryPreview(entry);
+    const previewEl = document.createElement('div');
+    previewEl.className = 'entry-item-preview';
+    if (prev.speaker) {
+      const spEl = document.createElement('span');
+      spEl.className = 'entry-item-speaker';
+      spEl.textContent = prev.speaker;
+      previewEl.appendChild(spEl);
+    }
+    const txtEl = document.createElement('span');
+    txtEl.className = 'entry-item-preview-text';
+    txtEl.textContent = prev.text;
+    previewEl.appendChild(txtEl);
+    el.appendChild(previewEl);
   }
 
   return el;

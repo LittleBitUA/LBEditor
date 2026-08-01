@@ -29,48 +29,37 @@
     <div id="welcome-screen" class="welcome-screen">
       <div class="welcome-inner">
 
-        <!-- ─── Top bar: brand + open actions ─── -->
-        <header class="welcome-topbar">
-          <div class="welcome-brand">
-            <div class="welcome-mark" aria-hidden="true">
-              <svg viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="2.6"
-                   stroke-linecap="round" stroke-linejoin="round">
-                <path d="M10 8v24h10"/>
-                <path d="M23 8h6.5a5.5 5.5 0 0 1 0 11H23z"/>
-                <path d="M23 19h7.5a6.5 6.5 0 0 1 0 13H23z"/>
-              </svg>
-            </div>
-            <div class="welcome-brand-text">
-              <h1 class="welcome-title">LB Editor</h1>
-              <p class="welcome-subtitle">Редактор локалізацій <span id="welcome-version"></span></p>
-            </div>
-          </div>
-
-          <div class="welcome-open-buttons">
-            <button class="welcome-btn welcome-btn-primary" id="welcome-open-other">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
-                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
-              </svg>
-              Відкрити теку
-            </button>
-            <button class="welcome-btn" id="welcome-open-json">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
-                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/>
-                <path d="M14 3v5h5"/>
-              </svg>
-              Відкрити файл
-            </button>
+        <header class="welcome-mast">
+          <div>
+            <h1 class="welcome-title">LB Editor</h1>
+            <p class="welcome-subtitle">редактор локалізацій</p>
           </div>
         </header>
 
-        <!-- ─── Recent projects as cards ─── -->
+        <nav class="welcome-openers">
+          <button class="welcome-opener" id="welcome-open-other">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+            </svg>
+            Відкрити теку <span class="welcome-key">Ctrl+Shift+O</span>
+          </button>
+          <button class="welcome-opener" id="welcome-open-json">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/>
+              <path d="M14 3v5h5"/>
+            </svg>
+            Відкрити файл <span class="welcome-key">Ctrl+O</span>
+          </button>
+        </nav>
+
         <section class="welcome-recent-section">
           <div class="welcome-recent-head">
             <h2 class="welcome-section-title">Продовжити</h2>
+            <span class="welcome-head-rule"></span>
             <input type="text" id="welcome-recent-filter" class="welcome-recent-filter"
-                   placeholder="Фільтр…" spellcheck="false">
+                   placeholder="фільтр…" spellcheck="false">
           </div>
           <div class="welcome-recent-list" id="welcome-recent-list">
             <div class="welcome-empty">Немає останніх файлів</div>
@@ -83,6 +72,7 @@
             <path d="M12 4v11"/><path d="M8 11l4 4 4-4"/><path d="M5 19h14"/>
           </svg>
           або перетягніть файл чи теку у вікно
+          <span class="welcome-version" id="welcome-version"></span>
         </p>
 
       </div>

@@ -1,7 +1,10 @@
 }
 
 // ── Virtual scroll state ──────────────────────────────────
-const ITEM_HEIGHT_NORMAL = 22;
+// Rows carry an identity line plus a content preview, so both variants are
+// two lines tall. These MUST match the CSS height of .entry-item exactly —
+// the virtual scroller positions spacers from them.
+const ITEM_HEIGHT_NORMAL = 40;
 const ITEM_HEIGHT_SNIPPET = 40;
 const VIRTUAL_OVERSCAN = 10;
 
@@ -114,6 +117,33 @@ function getMultiSelectedIndices() {
   return Array.from(_multiSelected).sort((a, b) => a - b);
 }
 
+// First meaningful line of an entry, for the list preview. Structural lines
+// ("{", "[") are skipped — they say nothing about the content. Cached because
+// the virtual scroller rebuilds every visible row on each scroll tick.
+function getEntryPreview(entry) {
+  if (entry._previewCache !== undefined) return entry._previewCache;
+  let speaker = '';
+  let text = '';
+  try {
+    const raw = Array.isArray(entry.text)
+      ? entry.text
+      : String(entry.text == null ? '' : entry.text).split('\n');
+
+    if (state.appMode === 'ishin' && typeof entry.visibleSpeakers === 'function') {
+      const sp = entry.visibleSpeakers();
+      if (sp.length) speaker = sp[0];
+    }
+    // Prefer a line that actually contains letters over "{", "[", "---"
+    text = raw.find(l => l && /\p{L}/u.test(l)) || raw.find(l => l && l.trim()) || '';
+  } catch (e) {
+    logError('getEntryPreview', e);
+  }
+  text = text.replace(/\s+/g, ' ').trim();
+  if (text.length > 140) text = text.slice(0, 139) + '…';
+  entry._previewCache = { speaker, text };
+  return entry._previewCache;
+}
+
 // ── Create a single entry DOM element ─────────────────────
 function createEntryElement(entry, filtIdx) {
   const el = document.createElement('div');
@@ -177,20 +207,51 @@ function createEntryElement(entry, filtIdx) {
     }
     el.appendChild(snippetEl);
   } else {
-    const textNode = document.createTextNode(`${prefix}[${entry.index + 1}] ${entry.file}`);
-    el.appendChild(textNode);
+    // Two lines: identity on top, a preview of the content below. Reading
+    // "[12] file.json" alone never told you what was inside.
+    const head = document.createElement('div');
+    head.className = 'entry-item-head';
+
+    const idxEl = document.createElement('span');
+    idxEl.className = 'entry-item-idx';
+    idxEl.textContent = `${prefix}[${entry.index + 1}]`;
+    head.appendChild(idxEl);
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'entry-item-file';
+    nameEl.textContent = entry.file || '';
+    head.appendChild(nameEl);
+
     if (entry.external && entry.externalDir) {
       const badge = document.createElement('span');
       badge.className = 'entry-external-badge';
       badge.textContent = entry.externalDir;
-      el.appendChild(badge);
+      head.appendChild(badge);
     }
     if (noteText) {
       const noteEl = document.createElement('span');
       noteEl.className = 'entry-item-note';
       noteEl.textContent = noteText;
-      el.appendChild(noteEl);
+      head.appendChild(noteEl);
     }
+    el.appendChild(head);
+
+    // Always rendered, even when empty — the virtual scroller needs every row
+    // to be exactly _getItemHeight() tall or the spacer maths drifts.
+    const prev = getEntryPreview(entry);
+    const previewEl = document.createElement('div');
+    previewEl.className = 'entry-item-preview';
+    if (prev.speaker) {
+      const spEl = document.createElement('span');
+      spEl.className = 'entry-item-speaker';
+      spEl.textContent = prev.speaker;
+      previewEl.appendChild(spEl);
+    }
+    const txtEl = document.createElement('span');
+    txtEl.className = 'entry-item-preview-text';
+    txtEl.textContent = prev.text;
+    previewEl.appendChild(txtEl);
+    el.appendChild(previewEl);
   }
 
   return el;

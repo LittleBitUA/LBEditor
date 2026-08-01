@@ -1,0 +1,278 @@
+<meta charset="utf-8">
+<title>LB Editor — вітальний екран, варіант Б</title>
+<style>
+/* ═══════════════════════════════════════════════════════════
+   Variant B — typographic, no cards.
+   The premise: this tool is about text, so let text carry the
+   screen. No card backgrounds, no pill badges, no boxes. The
+   only structural device is a hairline rule under each project
+   — and that rule IS the progress bar. Nothing is decorative.
+   ═══════════════════════════════════════════════════════════ */
+
+:root {
+  --bg: #191919;
+  --bg-raised: #1f1f21;
+  --ink: #ececec;
+  --ink-2: rgba(236,236,236,0.58);
+  --ink-3: rgba(236,236,236,0.30);
+  --ink-4: rgba(236,236,236,0.13);
+  --rule: rgba(236,236,236,0.10);
+  --accent: #7eb8e0;
+  --accent-soft: rgba(126,184,224,0.13);
+  --done: #5ab87a;
+  --mono: 'Consolas', 'Cascadia Mono', monospace;
+  --sans: 'Segoe UI', system-ui, sans-serif;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f4f4f3; --bg-raised: #fff;
+    --ink: #1a1a1a; --ink-2: rgba(26,26,26,0.62); --ink-3: rgba(26,26,26,0.36);
+    --ink-4: rgba(26,26,26,0.13); --rule: rgba(26,26,26,0.12);
+    --accent: #2f7fb8; --accent-soft: rgba(47,127,184,0.12); --done: #2f8f52;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #f4f4f3; --bg-raised: #fff;
+  --ink: #1a1a1a; --ink-2: rgba(26,26,26,0.62); --ink-3: rgba(26,26,26,0.36);
+  --ink-4: rgba(26,26,26,0.13); --rule: rgba(26,26,26,0.12);
+  --accent: #2f7fb8; --accent-soft: rgba(47,127,184,0.12); --done: #2f8f52;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; height: 100vh; overflow: hidden;
+  background: var(--bg); color: var(--ink);
+  font: 13px/1.5 var(--sans);
+  display: flex; flex-direction: column;
+  -webkit-font-smoothing: antialiased;
+}
+button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+
+.wrap {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: 56px 0 36px;
+}
+.col { width: 100%; max-width: 620px; margin: 0 auto; padding: 0 32px; }
+
+/* ─── Masthead ─── */
+
+.mast { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; }
+.mast h1 {
+  margin: 0;
+  font-size: 15px; font-weight: 600; letter-spacing: -0.1px;
+}
+.mast .sub {
+  margin: 3px 0 0;
+  font: 11px var(--mono); color: var(--ink-3); letter-spacing: 0.2px;
+}
+.mast .theme { color: var(--ink-3); font-size: 11px; padding: 4px; }
+.mast .theme:hover { color: var(--ink); }
+
+/* ─── Openers: plain text actions, not buttons in boxes ─── */
+
+.openers { display: flex; gap: 22px; margin: 26px 0 0; }
+.opener {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 0; font-size: 13.5px; font-weight: 500;
+  color: var(--ink);
+  border-bottom: 1px solid var(--ink-4);
+  padding-bottom: 3px;
+}
+.opener:hover { border-bottom-color: var(--accent); color: var(--accent); }
+.opener svg { width: 15px; height: 15px; }
+.opener .k { font: 10px var(--mono); color: var(--ink-3); }
+.opener:hover .k { color: var(--accent); }
+
+/* ─── Section label ─── */
+
+.sec {
+  display: flex; align-items: baseline; gap: 12px;
+  margin: 42px 0 2px;
+}
+.sec h2 {
+  margin: 0; font: 600 10.5px var(--sans);
+  text-transform: uppercase; letter-spacing: 1.8px; color: var(--ink-3);
+}
+.sec .rule { flex: 1; height: 1px; background: var(--rule); }
+.sec .n { font: 10.5px var(--mono); color: var(--ink-3); }
+
+/* ─── Project rows ─── */
+
+.proj {
+  display: block; width: 100%; text-align: left;
+  padding: 12px 0 0;
+  position: relative;
+}
+.proj + .proj { margin-top: 2px; }
+
+.proj-top {
+  display: flex; align-items: baseline; gap: 12px;
+  margin-bottom: 7px;
+}
+.proj-name {
+  font-size: 17px; font-weight: 600; letter-spacing: -0.25px;
+  color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.proj:hover .proj-name { color: var(--accent); }
+
+.proj-mode {
+  font: 10px var(--mono); text-transform: uppercase; letter-spacing: 0.9px;
+  color: var(--ink-3); flex-shrink: 0;
+}
+
+.proj-num {
+  margin-left: auto; flex-shrink: 0;
+  font: 12px var(--mono); font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+.proj-num .pct { color: var(--ink); font-weight: 600; }
+.proj[data-done="true"] .proj-num .pct { color: var(--done); }
+
+/* The rule under the title IS the progress bar — so it has to carry real
+   contrast, not read as a hairline divider. */
+.proj-rule {
+  display: block; /* span defaults to inline, which drops the height entirely */
+  height: 3px; background: var(--ink-4); position: relative; overflow: hidden;
+  border-radius: 2px;
+}
+.proj-fill { position: absolute; inset: 0 auto 0 0; background: var(--accent); }
+.proj[data-done="true"] .proj-fill { background: var(--done); }
+.proj[data-unknown="true"] .proj-fill { display: none; }
+
+.proj-foot {
+  display: flex; align-items: baseline; gap: 10px;
+  margin-top: 5px; padding-bottom: 11px;
+  border-bottom: 1px solid var(--rule);
+}
+.proj-path {
+  font: 10.5px var(--mono); color: var(--ink-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  direction: rtl; text-align: left; min-width: 0;
+}
+.proj-when { margin-left: auto; flex-shrink: 0; font-size: 10.5px; color: var(--ink-3); }
+
+.proj:hover .proj-rule { background: var(--accent-soft); }
+
+/* Remove button appears only on hover, never occupying layout */
+.proj-x {
+  position: absolute; top: 14px; right: -22px;
+  width: 18px; height: 18px; line-height: 1;
+  color: var(--ink-4); font-size: 15px;
+  opacity: 0; transition: opacity .12s, color .12s;
+}
+.proj:hover .proj-x { opacity: 1; }
+.proj-x:hover { color: var(--ink); }
+
+.missing .proj-name { color: var(--ink-3); text-decoration: line-through; }
+.missing { opacity: 0.55; }
+
+/* ─── Footer hint ─── */
+
+.dnd {
+  margin: 40px 0 0; padding-top: 18px;
+  border-top: 1px solid var(--rule);
+  font-size: 11.5px; color: var(--ink-3);
+  display: flex; align-items: center; gap: 8px;
+}
+.dnd svg { width: 14px; height: 14px; }
+.dnd .ver { margin-left: auto; font: 10.5px var(--mono); }
+
+.tag {
+  position: fixed; left: 12px; bottom: 10px;
+  font: 10px var(--mono); letter-spacing: 0.5px;
+  color: var(--accent); background: var(--accent-soft);
+  padding: 2px 7px; border-radius: 3px;
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <div class="col">
+
+    <header class="mast">
+      <div>
+        <h1>LB Editor</h1>
+        <p class="sub">редактор локалізацій</p>
+      </div>
+      <button class="theme" id="themeBtn" title="Перемкнути тему">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      </button>
+    </header>
+
+    <nav class="openers">
+      <button class="opener">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        Відкрити теку <span class="k">Ctrl+Shift+O</span>
+      </button>
+      <button class="opener">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>
+        Відкрити файл <span class="k">Ctrl+O</span>
+      </button>
+    </nav>
+
+    <div class="sec">
+      <h2>Продовжити</h2>
+      <span class="rule"></span>
+      <span class="n" id="count"></span>
+    </div>
+
+    <div id="list"></div>
+
+    <p class="dnd">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="M8 11l4 4 4-4"/><path d="M5 19h14"/></svg>
+      або перетягніть файл чи теку у вікно
+      <span class="ver">v1.6.0</span>
+    </p>
+  </div>
+</div>
+
+<span class="tag">варіант Б</span>
+
+<script>
+const PROJECTS = [
+  { name: 'all_messages.json', mode: 'LaD: Ishin', path: 'E:\\Localization\\Ishin\\msg\\uid00001042',
+    when: 'сьогодні 20:35', pct: 68.4, done: 412, total: 602 },
+  { name: 'text', mode: 'звичайний', path: 'E:\\Localization\\Yakuza0\\text',
+    when: 'сьогодні 19:10', pct: 21.3, done: 38, total: 178, dir: true },
+  { name: 'ep01.srt', mode: 'субтитри', path: 'E:\\Subs\\Ishin\\ep01',
+    when: 'учора 18:40', pct: 100, done: 842, total: 842 },
+  { name: 'script.json', mode: 'JoJo', path: 'E:\\Localization\\JoJo',
+    when: '25.07.2026', pct: 4.2, done: 3, total: 71 },
+  { name: 'battle.json', mode: 'LaD: Ishin', path: 'E:\\Localization\\Ishin\\msg\\uid00000042',
+    when: '22.07.2026', pct: 45.9, done: 88, total: 192 },
+  { name: 'menu.int', mode: 'звичайний', path: 'E:\\Localization\\Ishin\\ui',
+    when: '19.07.2026', unknown: true, missing: true },
+];
+
+const esc = s => s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+document.getElementById('list').innerHTML = PROJECTS.map(p => {
+  const done = p.pct === 100;
+  const num = p.unknown
+    ? '<span style="color:var(--ink-3)">не відкривався</span>'
+    : `<span class="pct">${p.pct % 1 === 0 ? p.pct : p.pct.toFixed(1)}%</span>` +
+      `<span style="color:var(--ink-3)"> · ${p.done}/${p.total}</span>`;
+  return `<button class="proj${p.missing ? ' missing' : ''}"
+            data-done="${done}" data-unknown="${!!p.unknown}">
+    <span class="proj-top">
+      <span class="proj-name">${esc(p.name)}${p.dir ? '<span style="color:var(--ink-3)">/</span>' : ''}</span>
+      <span class="proj-mode">${esc(p.mode)}</span>
+      <span class="proj-num">${num}</span>
+    </span>
+    <span class="proj-rule"><span class="proj-fill" style="width:${p.unknown ? 0 : p.pct}%"></span></span>
+    <span class="proj-foot">
+      <span class="proj-path">${esc(p.path)}</span>
+      <span class="proj-when">${esc(p.when)}</span>
+    </span>
+    <span class="proj-x" title="Прибрати зі списку">×</span>
+  </button>`;
+}).join('');
+
+document.getElementById('count').textContent = PROJECTS.length;
+document.getElementById('themeBtn').addEventListener('click', () => {
+  const light = document.documentElement.getAttribute('data-theme') === 'light';
+  document.documentElement.setAttribute('data-theme', light ? 'dark' : 'light');
+});
+</script>

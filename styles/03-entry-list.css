@@ -14,72 +14,109 @@
   box-sizing: border-box;
 }
 
+/* Two lines: identity, then a preview of the actual content. Height is fixed
+   and must equal ITEM_HEIGHT_NORMAL in src/11-entry-list.js — the virtual
+   scroller sizes its spacers from that constant. */
 .entry-item {
-  padding: 4px 8px;
+  height: 40px;
+  padding: 4px 8px 4px 11px;
   cursor: pointer;
-  white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
   font-family: 'Consolas', 'Cascadia Code', monospace;
   font-size: 11px;
   color: var(--text-secondary);
   border-bottom: 1px solid rgba(128,128,128,0.06);
   position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
 }
 
-.entry-item:hover {
-  background: var(--bg-glass-hover);
-  color: var(--text-primary);
+/* Status stripe. Every row has one, so state reads down the column without
+   having to tint the text itself. */
+.entry-item::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: transparent;
 }
 
-.entry-item.active {
-  background: var(--accent-subtle);
-  color: var(--text-primary);
-  border-left: 2px solid var(--accent);
+.entry-item:hover { background: var(--bg-glass-hover); }
+.entry-item:hover .entry-item-file { color: var(--text-primary); }
+
+.entry-item.active { background: var(--accent-subtle); }
+.entry-item.active::before { background: var(--accent); }
+.entry-item.active .entry-item-file { color: var(--text-primary); }
+
+.entry-item.active-file { background: var(--bg-glass-hover); opacity: 0.6; }
+.entry-item.active-file::before { background: var(--accent); }
+
+.entry-item.multi-selected { background: var(--accent-subtle); opacity: 0.9; }
+.entry-item.multi-selected::before { background: var(--accent); }
+
+.entry-item.dirty .entry-item-idx { color: var(--dirty); }
+
+.entry-item.tag-translated::before { background: #4ade80; }
+.entry-item.tag-edited::before { background: #fb923c; }
+/* Selection wins over tag colour so the cursor is never ambiguous */
+.entry-item.tag-translated.active::before,
+.entry-item.tag-edited.active::before { background: var(--accent); }
+
+/* ── Row internals ── */
+
+.entry-item-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
 }
 
-.entry-item.active-file {
-  background: var(--bg-glass-hover);
+.entry-item-idx {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.entry-item-file {
   color: var(--text-secondary);
-  border-left: 2px solid var(--accent);
-  opacity: 0.6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
-.entry-item.multi-selected {
-  background: var(--accent-subtle);
-  color: var(--text-primary);
-  border-left: 2px solid var(--accent);
-  opacity: 0.85;
+.entry-item-preview {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-family: var(--ui-font, 'Segoe UI', system-ui, sans-serif);
+  font-size: 11.5px;
 }
 
-.entry-item.dirty { color: var(--dirty); }
-.entry-item.dirty.active { color: var(--text-primary); }
+.entry-item-speaker {
+  color: var(--accent);
+  font-weight: 600;
+  flex-shrink: 0;
+  max-width: 40%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
-.entry-item.tag-translated { color: #4ade80; }
-.entry-item.tag-translated::before {
-  content: '';
-  position: absolute;
-  left: 0; top: 0; bottom: 0;
-  width: 3px;
-  background: #4ade80;
-  border-radius: 0 2px 2px 0;
+.entry-item-preview-text {
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
-.entry-item.tag-edited { color: #fb923c; }
-.entry-item.tag-edited::before {
-  content: '';
-  position: absolute;
-  left: 0; top: 0; bottom: 0;
-  width: 3px;
-  background: #fb923c;
-  border-radius: 0 2px 2px 0;
-}
-.entry-item.tag-translated.active,
-.entry-item.tag-edited.active { color: var(--text-primary); }
+.entry-item:hover .entry-item-preview-text,
+.entry-item.active .entry-item-preview-text { color: var(--text-secondary); }
 
-.entry-item.entry-external {
-  border-left: 2px solid #60a5fa;
-  padding-left: 6px;
-}
+.entry-item.entry-external::before { background: #60a5fa; }
 .entry-external-badge {
   font-size: 9px;
   color: #60a5fa;

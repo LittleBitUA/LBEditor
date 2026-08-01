@@ -657,72 +657,109 @@ body {
   box-sizing: border-box;
 }
 
+/* Two lines: identity, then a preview of the actual content. Height is fixed
+   and must equal ITEM_HEIGHT_NORMAL in src/11-entry-list.js — the virtual
+   scroller sizes its spacers from that constant. */
 .entry-item {
-  padding: 4px 8px;
+  height: 40px;
+  padding: 4px 8px 4px 11px;
   cursor: pointer;
-  white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
   font-family: 'Consolas', 'Cascadia Code', monospace;
   font-size: 11px;
   color: var(--text-secondary);
   border-bottom: 1px solid rgba(128,128,128,0.06);
   position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
 }
 
-.entry-item:hover {
-  background: var(--bg-glass-hover);
-  color: var(--text-primary);
+/* Status stripe. Every row has one, so state reads down the column without
+   having to tint the text itself. */
+.entry-item::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: transparent;
 }
 
-.entry-item.active {
-  background: var(--accent-subtle);
-  color: var(--text-primary);
-  border-left: 2px solid var(--accent);
+.entry-item:hover { background: var(--bg-glass-hover); }
+.entry-item:hover .entry-item-file { color: var(--text-primary); }
+
+.entry-item.active { background: var(--accent-subtle); }
+.entry-item.active::before { background: var(--accent); }
+.entry-item.active .entry-item-file { color: var(--text-primary); }
+
+.entry-item.active-file { background: var(--bg-glass-hover); opacity: 0.6; }
+.entry-item.active-file::before { background: var(--accent); }
+
+.entry-item.multi-selected { background: var(--accent-subtle); opacity: 0.9; }
+.entry-item.multi-selected::before { background: var(--accent); }
+
+.entry-item.dirty .entry-item-idx { color: var(--dirty); }
+
+.entry-item.tag-translated::before { background: #4ade80; }
+.entry-item.tag-edited::before { background: #fb923c; }
+/* Selection wins over tag colour so the cursor is never ambiguous */
+.entry-item.tag-translated.active::before,
+.entry-item.tag-edited.active::before { background: var(--accent); }
+
+/* ── Row internals ── */
+
+.entry-item-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
 }
 
-.entry-item.active-file {
-  background: var(--bg-glass-hover);
+.entry-item-idx {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.entry-item-file {
   color: var(--text-secondary);
-  border-left: 2px solid var(--accent);
-  opacity: 0.6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
-.entry-item.multi-selected {
-  background: var(--accent-subtle);
-  color: var(--text-primary);
-  border-left: 2px solid var(--accent);
-  opacity: 0.85;
+.entry-item-preview {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-family: var(--ui-font, 'Segoe UI', system-ui, sans-serif);
+  font-size: 11.5px;
 }
 
-.entry-item.dirty { color: var(--dirty); }
-.entry-item.dirty.active { color: var(--text-primary); }
+.entry-item-speaker {
+  color: var(--accent);
+  font-weight: 600;
+  flex-shrink: 0;
+  max-width: 40%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
-.entry-item.tag-translated { color: #4ade80; }
-.entry-item.tag-translated::before {
-  content: '';
-  position: absolute;
-  left: 0; top: 0; bottom: 0;
-  width: 3px;
-  background: #4ade80;
-  border-radius: 0 2px 2px 0;
+.entry-item-preview-text {
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
-.entry-item.tag-edited { color: #fb923c; }
-.entry-item.tag-edited::before {
-  content: '';
-  position: absolute;
-  left: 0; top: 0; bottom: 0;
-  width: 3px;
-  background: #fb923c;
-  border-radius: 0 2px 2px 0;
-}
-.entry-item.tag-translated.active,
-.entry-item.tag-edited.active { color: var(--text-primary); }
+.entry-item:hover .entry-item-preview-text,
+.entry-item.active .entry-item-preview-text { color: var(--text-secondary); }
 
-.entry-item.entry-external {
-  border-left: 2px solid #60a5fa;
-  padding-left: 6px;
-}
+.entry-item.entry-external::before { background: #60a5fa; }
 .entry-external-badge {
   font-size: 9px;
   color: #60a5fa;
@@ -4463,31 +4500,29 @@ select option:checked {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   Welcome Screen
-   Top bar with brand + open actions, then recent projects as
-   cards with a translation-progress strip. Theme variables only —
-   no hard-coded brand colours, so custom/light themes hold up.
+   Welcome Screen — typographic, no cards.
+   The tool is about text, so text carries the screen: no card
+   backgrounds, no pill badges, no rounded boxes. The one
+   structural device is the rule under each project name, and
+   that rule IS the progress bar. Nothing here is decorative.
+   All colour comes from the theme tokens, so light and custom
+   themes work unchanged.
    ═══════════════════════════════════════════════════════════ */
 
 .welcome-screen {
   position: relative;
   flex: 1;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
   overflow-y: auto;
-  padding: 56px 40px 40px;
+  padding: 56px 0 36px;
 }
 
 .welcome-inner {
-  position: relative;
   width: 100%;
-  max-width: 880px;
-  display: flex;
-  flex-direction: column;
-  animation: welcomeFadeIn 0.38s cubic-bezier(0.22, 0.61, 0.36, 1);
+  max-width: 620px;
+  margin: 0 auto;
+  padding: 0 32px;
+  animation: welcomeFadeIn 0.36s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
-
 @keyframes welcomeFadeIn {
   0%   { opacity: 0; transform: translateY(8px); }
   100% { opacity: 1; transform: translateY(0); }
@@ -4495,359 +4530,268 @@ select option:checked {
 .reduced-fx .welcome-inner,
 .minimal-fx .welcome-inner { animation: none; }
 
-/* ─── Top bar ─── */
+/* ─── Masthead ─── */
 
-.welcome-topbar {
+.welcome-mast {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
-  gap: 24px;
-  flex-wrap: wrap;
-  padding-bottom: 22px;
-  margin-bottom: 26px;
-  border-bottom: 1px solid var(--border-glass);
+  gap: 20px;
 }
-
-.welcome-brand {
-  display: flex;
-  align-items: center;
-  gap: 13px;
-  min-width: 0;
-}
-
-.welcome-mark {
-  width: 40px;
-  height: 40px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--accent);
-  border: 1px solid var(--border-glass);
-  border-radius: 11px;
-  background: var(--bg-glass);
-}
-.welcome-mark svg { width: 23px; height: 23px; }
-
-.welcome-brand-text { min-width: 0; }
-
 .welcome-title {
-  font-size: 18px;
-  font-weight: 650;
-  color: var(--text-primary);
-  letter-spacing: -0.2px;
-  line-height: 1.25;
   margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.1px;
+  color: var(--text-primary);
 }
-
 .welcome-subtitle {
-  font-size: 11.5px;
+  margin: 3px 0 0;
+  font-family: 'Consolas', monospace;
+  font-size: 11px;
+  letter-spacing: 0.2px;
   color: var(--text-muted);
-  margin: 1px 0 0;
-}
-.welcome-subtitle #welcome-version { opacity: 0.75; }
-
-.welcome-open-buttons {
-  display: flex;
-  gap: 8px;
-  flex-shrink: 0;
 }
 
-.welcome-btn {
+/* ─── Openers: text actions, not filled buttons ─── */
+
+.welcome-openers { display: flex; gap: 22px; margin-top: 26px; }
+
+.welcome-opener {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  padding: 8px 14px;
-  font-size: 12.5px;
-  font-weight: 550;
+  gap: 8px;
+  padding: 0 0 3px;
   font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
   color: var(--text-primary);
-  background: var(--bg-glass);
-  border: 1px solid var(--border-glass);
-  border-radius: 9px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border-glass);
   cursor: pointer;
-  white-space: nowrap;
-  transition: background 0.15s, border-color 0.15s;
+  transition: color 0.14s, border-color 0.14s;
 }
-.welcome-btn svg { width: 15px; height: 15px; flex-shrink: 0; }
-.welcome-btn:hover { background: var(--bg-glass-hover); border-color: var(--border-focus); }
-.welcome-btn:active { background: var(--bg-glass-active); }
-.welcome-btn:focus-visible {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-subtle);
+.welcome-opener:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.welcome-opener:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 2px;
 }
+.welcome-opener svg { width: 15px; height: 15px; flex-shrink: 0; }
 
-.welcome-btn-primary {
-  color: var(--accent);
-  background: var(--accent-subtle);
-  border-color: var(--accent-subtle);
+.welcome-key {
+  font-family: 'Consolas', monospace;
+  font-size: 10px;
+  color: var(--text-muted);
 }
-.welcome-btn-primary:hover {
-  background: var(--accent-subtle);
-  border-color: var(--accent);
-}
+.welcome-opener:hover .welcome-key { color: var(--accent); }
 
-/* ─── Recent section ─── */
-
-.welcome-recent-section {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
+/* ─── Section head ─── */
 
 .welcome-recent-head {
   display: flex;
-  align-items: center;
-  gap: 14px;
-  margin-bottom: 12px;
+  align-items: baseline;
+  gap: 12px;
+  margin: 42px 0 2px;
 }
-
 .welcome-section-title {
-  font-size: 11px;
+  margin: 0;
+  font-size: 10.5px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 1.4px;
+  letter-spacing: 1.8px;
   color: var(--text-muted);
-  margin: 0;
   flex-shrink: 0;
 }
+.welcome-head-rule { flex: 1; height: 1px; background: var(--border-glass); }
 
-.welcome-recent-filter {
-  width: 190px;
-  margin-left: auto;
-  padding: 5px 9px;
-  font-size: 11.5px;
-  font-family: inherit;
+/* Overrides the global input[type=text] chrome from 08-components.css —
+   this field should read as a line of type, not a control in a box. */
+input[type="text"].welcome-recent-filter {
+  width: 130px;
+  flex-shrink: 0;
+  padding: 2px 0;
+  font-family: 'Consolas', monospace;
+  font-size: 11px;
+  text-align: right;
   color: var(--text-primary);
-  background: var(--bg-input);
-  border: 1px solid transparent;
-  border-radius: 7px;
+  background: none;
+  border: none;
+  border-radius: 0;
+  border-bottom: 1px solid transparent;
   outline: none;
-  transition: border-color 0.15s, background 0.15s, width 0.15s;
+  box-shadow: none;
+  transition: border-color 0.14s;
 }
-.welcome-recent-filter::placeholder { color: var(--text-placeholder); }
-.welcome-recent-filter:focus {
-  border-color: var(--border-focus);
-  background: var(--bg-glass);
-}
+input[type="text"].welcome-recent-filter::placeholder { color: var(--text-muted); }
+input[type="text"].welcome-recent-filter:focus { border-bottom-color: var(--accent); box-shadow: none; }
 
-/* Card grid — two up on wide windows, one on narrow */
-.welcome-recent-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  max-height: 460px;
-  overflow-y: auto;
-  padding: 2px 4px 2px 2px;
-  margin: -2px -4px -2px -2px;
-}
+.welcome-recent-list { display: block; }
 
 .welcome-empty {
-  grid-column: 1 / -1;
   font-size: 12px;
   color: var(--text-muted);
   text-align: center;
   padding: 40px 0;
 }
 
-/* ─── Project card ─── */
+/* ─── Project rows ─── */
 
-.welcome-card {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 13px 14px 12px;
-  border-radius: 12px;
+.welcome-proj {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 12px 0 0;
+  position: relative;
+  background: none;
+  border: none;
   cursor: pointer;
-  background: var(--bg-glass);
-  border: 1px solid var(--border-glass);
-  transition: background 0.15s, border-color 0.15s;
+  font-family: inherit;
+  color: inherit;
 }
+.welcome-proj + .welcome-proj { margin-top: 2px; }
+.welcome-proj:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 
-.welcome-card:hover {
-  background: var(--bg-glass-hover);
-  border-color: var(--border-focus);
-}
-.welcome-card:hover .welcome-file-name { color: var(--accent); }
-.welcome-card:hover .welcome-file-icon { color: var(--accent); }
-.welcome-card:active { background: var(--bg-glass-active); }
-
-.welcome-card.loading { opacity: 0.5; pointer-events: none; }
-
-/* Path no longer on disk */
-.welcome-card.missing { opacity: 0.5; }
-.welcome-card.missing .welcome-file-name { text-decoration: line-through; }
-
-.welcome-card-top {
+.welcome-proj-top {
   display: flex;
-  align-items: flex-start;
-  gap: 9px;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 7px;
   min-width: 0;
 }
 
-.welcome-file-icon {
-  width: 22px;
-  height: 22px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
-  transition: color 0.12s;
-}
-.welcome-file-icon svg { width: 16px; height: 16px; }
-
-.welcome-file-info {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.welcome-file-name {
-  font-size: 13px;
+.welcome-proj-name {
+  font-size: 17px;
   font-weight: 600;
+  letter-spacing: -0.25px;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  transition: color 0.12s;
+  transition: color 0.14s;
+}
+.welcome-proj:hover .welcome-proj-name { color: var(--accent); }
+.welcome-proj-slash { color: var(--text-muted); }
+
+.welcome-proj-mode {
+  font-family: 'Consolas', monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.9px;
+  color: var(--text-muted);
+  flex-shrink: 0;
 }
 
-.welcome-file-path {
-  font-size: 10px;
+.welcome-proj-num {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-family: 'Consolas', monospace;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+.welcome-proj-pct { color: var(--text-primary); font-weight: 600; }
+.welcome-proj[data-done="true"] .welcome-proj-pct { color: var(--success); }
+.welcome-proj-sub { color: var(--text-muted); }
+
+/* The rule under the name is the progress bar. `display:block` matters —
+   these are spans, and an inline element drops the height entirely. */
+.welcome-proj-rule {
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--bg-input);
+  position: relative;
+  overflow: hidden;
+  transition: background 0.14s;
+}
+.welcome-proj-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--accent);
+  border-radius: 2px;
+}
+.welcome-proj[data-done="true"] .welcome-proj-fill { background: var(--success); }
+.welcome-proj[data-unknown="true"] .welcome-proj-fill { display: none; }
+.welcome-proj:hover .welcome-proj-rule { background: var(--accent-subtle); }
+
+.welcome-proj-foot {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-top: 5px;
+  padding-bottom: 11px;
+  border-bottom: 1px solid var(--border-glass);
+  min-width: 0;
+}
+.welcome-proj-path {
+  font-family: 'Consolas', monospace;
+  font-size: 10.5px;
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   direction: rtl;
   text-align: left;
-}
-
-.welcome-file-remove {
-  width: 20px;
-  height: 20px;
-  flex-shrink: 0;
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
-  border-radius: 5px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  transition: opacity 0.12s, background 0.12s, color 0.12s;
-  padding: 0;
-}
-.welcome-card:hover .welcome-file-remove { opacity: 1; }
-.welcome-file-remove:hover { color: var(--error); background: var(--bg-glass-hover); }
-
-/* ─── Progress strip ─── */
-
-.welcome-card-progress {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-}
-
-.welcome-progress-track {
-  flex: 1;
   min-width: 0;
-  height: 4px;
-  border-radius: 3px;
-  background: var(--bg-input);
-  overflow: hidden;
 }
-
-.welcome-progress-bar {
-  height: 100%;
-  border-radius: 3px;
-  background: var(--text-muted);
-  transition: width 0.3s ease-out;
-}
-
-/* Same blue → purple → green ramp the sidebar progress bar uses, flattened
-   (no gradients or glow). A low percentage is early progress, not an error,
-   so nothing here is red. */
-.welcome-card-progress[data-tier="low"]  .welcome-progress-bar { background: #5b7fff; }
-.welcome-card-progress[data-tier="mid"]  .welcome-progress-bar { background: #a855f7; }
-.welcome-card-progress[data-tier="high"] .welcome-progress-bar { background: #4ade80; }
-.welcome-card-progress[data-tier="done"] .welcome-progress-bar { background: #22c55e; }
-
-.welcome-progress-label {
-  font-size: 10.5px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
-  min-width: 34px;
-  text-align: right;
+.welcome-proj-when {
+  margin-left: auto;
   flex-shrink: 0;
-}
-.welcome-card-progress[data-tier="done"] .welcome-progress-label { color: var(--success); }
-.welcome-card-progress.is-unknown .welcome-progress-label { color: var(--text-muted); }
-
-/* ─── Card footer ─── */
-
-.welcome-card-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.welcome-file-badge {
-  font-size: 9px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  padding: 2px 7px;
-  border-radius: 5px;
-  white-space: nowrap;
-  border: 1px solid transparent;
-}
-
-.welcome-file-badge.badge-ishin {
-  background: var(--accent-subtle);
-  color: var(--accent);
-  border-color: var(--accent-subtle);
-}
-.welcome-file-badge.badge-other {
-  background: rgba(92, 184, 112, 0.12);
-  color: var(--success);
-  border-color: rgba(92, 184, 112, 0.28);
-}
-.welcome-file-badge.badge-jojo {
-  background: rgba(216, 120, 160, 0.12);
-  color: #d878a0;
-  border-color: rgba(216, 120, 160, 0.28);
-}
-
-.welcome-file-date {
-  font-size: 10px;
+  font-size: 10.5px;
   color: var(--text-muted);
-  white-space: nowrap;
 }
 
-/* ─── Drag & drop ─── */
+/* Sits in the margin so it never occupies layout */
+.welcome-proj-remove {
+  position: absolute;
+  top: 12px;
+  right: -22px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  line-height: 1;
+  font-size: 15px;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, color 0.12s;
+}
+.welcome-proj:hover .welcome-proj-remove { opacity: 1; }
+.welcome-proj-remove:hover { color: var(--error); }
+
+.welcome-proj.missing { opacity: 0.55; }
+.welcome-proj.missing .welcome-proj-name { text-decoration: line-through; }
+
+.welcome-proj.loading { opacity: 0.45; pointer-events: none; }
+
+/* ─── Footer ─── */
 
 .welcome-dnd-hint {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 7px;
-  margin: 22px 0 0;
+  gap: 8px;
+  margin: 40px 0 0;
+  padding-top: 18px;
+  border-top: 1px solid var(--border-glass);
   font-size: 11.5px;
   color: var(--text-muted);
 }
 .welcome-dnd-hint svg { width: 14px; height: 14px; flex-shrink: 0; }
+.welcome-version {
+  margin-left: auto;
+  font-family: 'Consolas', monospace;
+  font-size: 10.5px;
+}
+
+/* ─── Drop overlay (only while dragging) ─── */
 
 .welcome-drop-overlay {
-  position: absolute;
+  position: fixed;
   inset: 0;
   z-index: 5;
   display: flex;
@@ -4869,30 +4813,15 @@ select option:checked {
   border: 2px dashed var(--accent);
   border-radius: 16px;
   color: var(--accent);
-  transform: scale(0.97);
-  transition: transform 0.16s;
 }
-.welcome-drop-active .welcome-drop-card { transform: scale(1); }
 .welcome-drop-card svg { width: 30px; height: 30px; }
+.welcome-drop-text { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.welcome-drop-hint { font-size: 10.5px; color: var(--text-muted); }
 
-.welcome-drop-text {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-.welcome-drop-hint {
-  font-size: 10.5px;
-  color: var(--text-muted);
-}
-
-/* ─── Narrow windows ─── */
-
-@media (max-width: 720px) {
-  .welcome-screen { padding: 32px 20px; }
-  .welcome-topbar { gap: 16px; }
-  .welcome-open-buttons { width: 100%; }
-  .welcome-btn { flex: 1; justify-content: center; }
-  .welcome-recent-list { grid-template-columns: minmax(0, 1fr); max-height: 340px; }
-  .welcome-recent-filter { width: 150px; }
+@media (max-width: 620px) {
+  .welcome-screen { padding: 32px 0 24px; }
+  .welcome-inner { padding: 0 20px; }
+  .welcome-openers { flex-direction: column; align-items: flex-start; gap: 12px; }
+  .welcome-proj-remove { right: 0; top: 10px; }
 }
 
